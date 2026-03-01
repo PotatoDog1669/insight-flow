@@ -1,0 +1,48 @@
+{
+    "name": "LexDeepResearch",
+    "logo": {
+        "dark": "/logo/dark.svg",
+        "light": "/logo/light.svg"
+    },
+    "favicon": "/favicon.svg",
+    "colors": {
+        "primary": "#6366F1",
+        "light": "#818CF8",
+        "dark": "#4F46E5"
+    },
+    "navigation": [
+        {
+            "group": "开始",
+            "pages": [
+                "introduction",
+                "quickstart"
+            ]
+        },
+        {
+            "group": "API 参考",
+            "pages": [
+                "api-reference/sources",
+                "api-reference/articles",
+                "api-reference/tasks",
+                "api-reference/reports"
+            ]
+        },
+        {
+            "group": "用户指南",
+            "pages": [
+                "guides/add-source",
+                "guides/configure-sink",
+                "guides/custom-template"
+            ]
+        },
+        {
+            "group": "开发者",
+            "pages": [
+                "development/architecture",
+                "development/collector-plugin",
+                "development/deployment"
+            ]
+        }
+    ],
+    "openapi": "http://localhost:8000/openapi.json"
+}

@@ -1,0 +1,18 @@
+site_key: xai
+profile_version: v1
+start_urls:
+  - https://x.ai/news
+list_page:
+  item_selector: "a[href*='/news/']"
+  url_selector: ""
+  url_attr: href
+  title_selector: ""
+detail_page:
+  content_selector: "article, main"
+  remove_selectors:
+    - script
+    - style
+    - nav
+normalization:
+  url_prefix: "https://x.ai"
+  min_content_chars: 300

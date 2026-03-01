@@ -1,0 +1,1 @@
+"""LexDeepResearch Backend Application."""

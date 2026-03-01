@@ -1,0 +1,49 @@
+# LexDeepResearch 配置文件
+# 优先级: 环境变量 (.env) > 此文件 > 代码默认值
+
+app:
+  name: LexDeepResearch
+  debug: false
+  log_level: INFO
+
+database:
+  url: postgresql+asyncpg://lex:password@localhost:5432/lexdeepresearch
+  pool_size: 10
+
+redis:
+  url: redis://localhost:6379/0
+
+llm:
+  primary_model: gpt-4o-mini
+  fallback_model: deepseek-chat
+  max_tokens: 2048
+  temperature: 0.3
+
+scheduler:
+  daily_collect_time: "06:30"
+  weekly_report_day: "sunday"
+  weekly_report_time: "20:00"
+
+collector:
+  max_concurrency: 5
+  deepbrowse_concurrency: 2
+  timeout_seconds: 60
+  retry_max_attempts: 3
+
+browser:
+  provider: local  # local | cloud
+  local:
+    headless: true
+  cloud:
+    cdp_endpoint: ws://cloud-browser:3000
+
+processor:
+  score_threshold: 0.4
+  dedup_window_hours: 72
+
+sink:
+  default: notion
+  notion:
+    database_id: ""
+  obsidian:
+    vault_path: ""

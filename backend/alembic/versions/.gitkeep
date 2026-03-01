@@ -1,0 +1,2 @@
+# Alembic 迁移版本目录
+# 使用 `alembic revision --autogenerate -m "message"` 生成迁移文件

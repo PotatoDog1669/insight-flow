@@ -1,0 +1,423 @@
+version: 1
+updated_at: 2026-03-01
+owner: lexdeepresearch
+
+groups:
+  - id: intl_vendors
+    name: "国际厂商"
+  - id: cn_vendors
+    name: "国内大厂"
+  - id: unicorns
+    name: "创新/独角兽"
+  - id: agent_infra
+    name: "Agent / 推理服务"
+
+sources:
+  - key: openai
+    group: intl_vendors
+    company: OpenAI
+    urls: ["https://openai.com/blog"]
+    rss_url: "https://openai.com/news/rss.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    priority: p0
+    enabled: true
+
+  - key: google_deepmind
+    group: intl_vendors
+    company: Google DeepMind
+    urls: ["https://deepmind.google/discover/blog/"]
+    rss_url: "https://deepmind.google/blog/rss.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    priority: p0
+    enabled: true
+
+  - key: anthropic
+    group: intl_vendors
+    company: Anthropic
+    urls: ["https://anthropic.com/news"]
+    rss_url: null
+    rss_status: invalid_proxy
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+    notes: "用户确认 43.160.197.144:1200/anthropic/news 无效"
+
+  - key: xai
+    group: intl_vendors
+    company: xAI
+    urls: ["https://x.ai/news"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: meta_ai
+    group: intl_vendors
+    company: Meta AI
+    urls: ["https://ai.meta.com/blog/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+    notes: "2026-03-01 验证未发现公开 RSS/Atom feed"
+
+  - key: microsoft_research
+    group: intl_vendors
+    company: Microsoft Research
+    urls: ["https://www.microsoft.com/en-us/research/blog/"]
+    rss_url: "https://www.microsoft.com/en-us/research/blog/feed/"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    priority: p0
+    enabled: true
+    notes: "2026-03-01 验证可用；部分 Browser UA 403，bot UA 正常返回 RSS"
+
+  - key: nvidia
+    group: intl_vendors
+    company: NVIDIA
+    urls: ["https://blogs.nvidia.com/blog/category/deep-learning/"]
+    rss_url: "https://blogs.nvidia.com/blog/category/enterprise/deep-learning/feed/"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    priority: p0
+    enabled: true
+    notes: "2026-03-01 从页面 link rel=alternate 验证 feed 可用"
+
+  - key: apple_ml
+    group: intl_vendors
+    company: Apple ML
+    urls: ["https://machinelearning.apple.com/research"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: amazon_science
+    group: intl_vendors
+    company: Amazon Science
+    urls: ["https://www.amazon.science/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+    notes: "2026-03-01 验证常见 /rss /feed 路径均未命中"
+
+  - key: mistral_ai
+    group: intl_vendors
+    company: Mistral AI
+    urls: ["https://www.mistral.ai/news/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: cohere
+    group: intl_vendors
+    company: Cohere
+    urls: ["https://cohere.com/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: ai21_labs
+    group: intl_vendors
+    company: AI21 Labs
+    urls: ["https://www.ai21.com/blog/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: stability_ai
+    group: intl_vendors
+    company: Stability AI
+    urls: ["https://stability.ai/news", "https://stability.ai/research"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: alibaba_qwen
+    group: cn_vendors
+    company: 阿里 Qwen
+    urls: ["https://qwen.ai/blog", "https://qwenlm.github.io/blog/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: tencent_hunyuan
+    group: cn_vendors
+    company: 腾讯 Hunyuan
+    urls: ["https://hunyuan.tencent.com/tech-blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: bytedance_seed
+    group: cn_vendors
+    company: 字节跳动 Seed
+    urls: ["https://seed.bytedance.com/zh/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p0
+    enabled: true
+
+  - key: meituan_longcat
+    group: cn_vendors
+    company: 美团 LongCat
+    urls: ["https://tech.meituan.com/tags/longcat.html", "https://tech.meituan.com"]
+    rss_url: "https://tech.meituan.com/feed/"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    priority: p1
+    enabled: true
+    notes: "2026-03-01 标签页 link rel=alternate 指向全站 feed"
+
+  - key: kwai_kwai_kat
+    group: cn_vendors
+    company: 快手 KwaiKAT
+    urls: []
+    rss_url: null
+    rss_status: n_a
+    strategy: github_only
+    priority: p2
+    enabled: false
+    notes: "无独立博客，通过 GitHub/论文发布"
+
+  - key: xiaomi_mimo
+    group: cn_vendors
+    company: 小米 MiMo
+    urls: ["https://github.com/XiaomiMiMo"]
+    rss_url: null
+    rss_status: n_a
+    strategy: github_only
+    priority: p2
+    enabled: false
+
+  - key: xiaohongshu
+    group: cn_vendors
+    company: 小红书
+    urls: []
+    rss_url: null
+    rss_status: n_a
+    strategy: manual_research
+    priority: p3
+    enabled: false
+
+  - key: baidu_ernie
+    group: cn_vendors
+    company: 百度 ERNIE
+    urls: ["https://ernie.baidu.com/blog/zh/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: huawei_pangu
+    group: cn_vendors
+    company: 华为盘古
+    urls: ["https://developer.huawei.com"]
+    rss_url: null
+    rss_status: n_a
+    strategy: manual_research
+    priority: p3
+    enabled: false
+
+  - key: sensenova
+    group: cn_vendors
+    company: 商汤 SenseNova
+    urls: []
+    rss_url: null
+    rss_status: n_a
+    strategy: github_paper_only
+    priority: p3
+    enabled: false
+
+  - key: xfyun_spark
+    group: cn_vendors
+    company: 科大讯飞星火
+    urls: ["https://xinghuo.xfyun.cn"]
+    rss_url: null
+    rss_status: n_a
+    strategy: manual_research
+    priority: p3
+    enabled: false
+
+  - key: deepseek
+    group: unicorns
+    company: DeepSeek
+    urls: ["https://api-docs.deepseek.com", "https://github.com/deepseek-ai"]
+    rss_url: null
+    rss_status: none
+    strategy: github_plus_docs
+    priority: p0
+    enabled: true
+
+  - key: zhipu
+    group: unicorns
+    company: 智谱 Z.ai
+    urls: ["https://zhipuai.cn/zh/news", "https://z.ai/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: moonshot_kimi
+    group: unicorns
+    company: Kimi / Moonshot
+    urls: ["https://moonshot.cn"]
+    rss_url: null
+    rss_status: n_a
+    strategy: manual_research
+    priority: p3
+    enabled: false
+
+  - key: minimax
+    group: unicorns
+    company: MiniMax
+    urls: ["https://minimax.io/news"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+    notes: "2026-03-01 验证 /news/rss.xml /news/feed.xml /rss.xml 均未发现 RSS"
+
+  - key: stepfun
+    group: unicorns
+    company: 阶跃 StepFun
+    urls: ["https://platform.stepfun.com"]
+    rss_url: null
+    rss_status: n_a
+    strategy: manual_research
+    priority: p3
+    enabled: false
+
+  - key: baichuan
+    group: unicorns
+    company: 百川智能
+    urls: ["https://baichuan-ai.com/blog/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: lingyiwanwu
+    group: unicorns
+    company: 零一万物 01.AI
+    urls: ["https://lingyiwanwu.com/blog/", "https://01-ai.github.io"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: minicpm_openbmb
+    group: unicorns
+    company: 面壁智能 MiniCPM
+    urls: ["https://modelbest.cn", "https://github.com/OpenBMB"]
+    rss_url: null
+    rss_status: none
+    strategy: github_plus_site_scraper
+    priority: p1
+    enabled: true
+
+  - key: perplexity
+    group: unicorns
+    company: Perplexity
+    urls: ["https://www.perplexity.ai/hub"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: nous_research
+    group: unicorns
+    company: Nous Research
+    urls: ["https://nousresearch.com/blog/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: cursor
+    group: agent_infra
+    company: Cursor
+    urls: ["https://cursor.com/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: cognition
+    group: agent_infra
+    company: Cognition (Devin)
+    urls: ["https://cognition.ai/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: huggingface_blog
+    group: agent_infra
+    company: Hugging Face
+    urls: ["https://huggingface.co/blog"]
+    rss_url: "https://huggingface.co/blog/feed.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    priority: p0
+    enabled: true
+    notes: "2026-03-01 页面 rel=alternate 可解析，feed 可用"
+
+  - key: together_ai
+    group: agent_infra
+    company: Together AI
+    urls: ["https://www.together.ai/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: fireworks_ai
+    group: agent_infra
+    company: Fireworks AI
+    urls: ["https://fireworks.ai/blog"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
+
+  - key: groq
+    group: agent_infra
+    company: Groq
+    urls: ["https://groq.com/blog/"]
+    rss_url: null
+    rss_status: none
+    strategy: site_profile_scraper
+    priority: p1
+    enabled: true
