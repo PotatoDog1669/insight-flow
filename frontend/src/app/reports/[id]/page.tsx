@@ -6,6 +6,11 @@ import { ArrowLeft, Calendar, Layers } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { ArticleCard, type Article as ArticleCardModel } from "@/components/ArticleCard";
+import { ReportDocument } from "@/components/report/ReportDocument";
+import { ReportMetaPanel } from "@/components/report/ReportMetaPanel";
+import { ReportOutline } from "@/components/report/ReportOutline";
+import { useActiveHeading } from "@/hooks/use-active-heading";
+import { extractOutline, parseReportContent } from "@/lib/report-content-parser";
 import { getArticleById, getReportById, type Article as APIArticle, type Report as APIReport } from "@/lib/api";
 
 function toArticleCard(article: APIArticle): ArticleCardModel {
@@ -31,30 +36,44 @@ export default function ReportDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     const load = async () => {
       if (!id) return;
       setLoading(true);
       setError(null);
       try {
         const reportData = await getReportById(id);
+        if (cancelled) return;
         setReport(reportData);
-        const articleData = await Promise.all(
-          reportData.article_ids.map(async (articleId) => {
-            try {
-              return await getArticleById(articleId);
-            } catch {
-              return null;
-            }
-          })
-        );
-        setArticles(articleData.filter((item): item is APIArticle => item !== null));
+        if (!reportData.content?.trim()) {
+          const articleData = await Promise.all(
+            reportData.article_ids.map(async (articleId) => {
+              try {
+                return await getArticleById(articleId);
+              } catch {
+                return null;
+              }
+            })
+          );
+          if (cancelled) return;
+          setArticles(articleData.filter((item): item is APIArticle => item !== null));
+        } else {
+          setArticles([]);
+        }
       } catch (err) {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
+        if (cancelled) return;
         setLoading(false);
       }
     };
     void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const grouped = useMemo(() => {
@@ -67,6 +86,34 @@ export default function ReportDetailPage() {
     }
     return groups;
   }, [articles]);
+
+  const hasTemplateContent = Boolean(report?.content?.trim());
+  const parsedReport = useMemo(() => {
+    if (!report || !hasTemplateContent) return { sections: [] };
+    return parseReportContent(report.content);
+  }, [hasTemplateContent, report]);
+
+  const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
+  const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
+
+  const sourceCount = useMemo(() => {
+    if (!report) return 0;
+    const eventSources = new Set(report.events.map((event) => event.source_name).filter(Boolean));
+    if (eventSources.size > 0) return eventSources.size;
+    const articleSources = new Set(articles.map((article) => article.source_name).filter(Boolean));
+    if (articleSources.size > 0) return articleSources.size;
+    return report.article_count;
+  }, [articles, report]);
+
+  const handleNavigate = (sectionId: string) => {
+    const target = document.getElementById(sectionId);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#${sectionId}`);
+    }
+  };
 
   if (loading) {
     return <div className="py-10 text-sm text-muted-foreground">Loading report...</div>;
@@ -97,7 +144,7 @@ export default function ReportDetailPage() {
           </div>
           <div className="flex items-center space-x-1.5 text-sm text-muted-foreground">
             <Layers className="w-4 h-4" />
-            <span>{articles.length} Sources</span>
+            <span>{sourceCount} Sources</span>
           </div>
         </div>
 
@@ -108,29 +155,63 @@ export default function ReportDetailPage() {
         </p>
       </header>
 
-      <div className="space-y-16">
-        {[...grouped.entries()].map(([category, categoryArticles]) => (
-          <section key={category}>
-            <div className="flex items-center space-x-3 mb-6">
-              <h2 className="text-2xl font-semibold tracking-tight capitalize">{category.replace("_", " ")}</h2>
-              <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-                {categoryArticles.length} Updates
-              </Badge>
-            </div>
-            <div className="space-y-5">
-              {categoryArticles.map((article, idx) => (
-                <ArticleCard key={article.id} article={toArticleCard(article)} index={idx} />
-              ))}
-            </div>
-          </section>
-        ))}
+      {hasTemplateContent ? (
+        <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)_240px]">
+          <aside className="order-1 lg:order-none lg:sticky lg:top-6 lg:self-start">
+            <ReportOutline items={outlineItems} activeId={activeHeadingId} onNavigate={handleNavigate} />
+          </aside>
 
-        {articles.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground border border-dashed border-border/50 rounded-xl">
-            This report currently has no resolved article details.
-          </div>
-        )}
-      </div>
+          <section className="order-2 lg:order-none min-w-0">
+            <ReportDocument
+              content={report.content}
+              events={report.events}
+              globalTldr={report.global_tldr}
+              topics={report.topics}
+            />
+          </section>
+
+          <aside className="order-3 lg:order-none lg:sticky lg:top-6 lg:self-start">
+            <ReportMetaPanel
+              eventCount={report.events.length}
+              sourceCount={sourceCount}
+              topics={report.topics}
+              onTopicSelect={(topicName) => {
+                const topicLower = topicName.toLowerCase();
+                const matched = parsedReport.sections.find((section) =>
+                  section.lines.some((line) => line.toLowerCase().includes(topicLower))
+                );
+                if (matched) {
+                  handleNavigate(matched.id);
+                }
+              }}
+            />
+          </aside>
+        </div>
+      ) : (
+        <div className="space-y-16">
+          {[...grouped.entries()].map(([category, categoryArticles]) => (
+            <section key={category}>
+              <div className="flex items-center space-x-3 mb-6">
+                <h2 className="text-2xl font-semibold tracking-tight capitalize">{category.replace("_", " ")}</h2>
+                <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+                  {categoryArticles.length} Updates
+                </Badge>
+              </div>
+              <div className="space-y-5">
+                {categoryArticles.map((article, idx) => (
+                  <ArticleCard key={article.id} article={toArticleCard(article)} index={idx} />
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {articles.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground border border-dashed border-border/50 rounded-xl">
+              This report currently has no resolved article details.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
