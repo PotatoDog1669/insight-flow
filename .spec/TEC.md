@@ -154,8 +154,9 @@ LexDeepResearch/
 │   ├── tailwind.config.ts
 │   ├── tsconfig.json
 │   └── Dockerfile
-├── deepbrowse/                     # deepbrowse 浏览器 Agent（独立模块/子仓库）
-│   └── ...                         # 自研浏览器 Agent 代码
+├── agents/                         # 浏览器 Agent 模块（支持多种 Agent）
+│   ├── deepbrowse/                 # 自研 deepbrowse（默认）
+│   └── ...                         # browser-use / codex 等（按需添加）
 ├── docs/                           # Mintlify 文档站点
 │   ├── mint.json                   # Mintlify 配置
 │   ├── introduction.mdx            # 产品介绍
@@ -564,6 +565,8 @@ class BaseRenderer(ABC):
 
 ### 4.4 知识存储/落盘层 (Sinks)
 
+依据外部落盘目标的开放能力不同，此层设计抽象基类与多个原生实现，并重点规范了主流工作流工具（Notion, Obsidian）的落盘最佳实践。
+
 #### 4.4.1 抽象基类
 
 ```python
@@ -584,20 +587,47 @@ class BaseSink(ABC):
         return True
 ```
 
-#### 4.4.2 各落盘实现
+#### 4.4.2 各落盘实现与核心架构设计
 
 | **Sink** | **接入方式** | **关键依赖** | **MVP** |
 | --- | --- | --- | --- |
-| `NotionSink` | Notion API / MCP | `notion-client` | ✅ P0 |
-| `ObsidianSink` | 本地文件系统写入 | `aiofiles` | ✅ P0 |
+| `NotionSink` | Notion API API | `notion-client` | ✅ P0 |
+| `ObsidianSink` | Local REST API | `httpx` | ✅ P0 |
+| `RssSink` | 生成标准 XML File |内置 `xml` 库 | ✅ P0 |
 | `FeishuSink` | 飞书开放平台 API | `httpx` | P1 预留 |
 | `DatabaseSink` | 写入 PostgreSQL | `sqlalchemy` | ✅ P0 |
 
-#### 4.4.3 增量更新机制
+#### 4.4.3 具体写入逻辑规范 (关键技术选型)
 
-- 每次落盘记录 `report_id` 和落盘时间
-- 周报/深度报告支持追加更新模式（在已有文档末尾追加新内容）
-- Notion 落盘支持按目标 Database / Page 配置
+**一、 Rss 落盘方案 (被动订阅池)**
+作为补充性终点，系统为最终产出的报告生成全局的标准 `RSS 2.0` 源文件。
+当系统激活了 `RSS Feed` Destination 时，每当 Monitor Task 生成了一篇新 Report，系统除了将其抛给 Notion 等主动 Sink 外，也会调用 `RssSink.publish()`。
+- **机制:** 该 Sink 会读取最新的 N 篇 Report，利用 Python 原生 XML 库或专门的生成器写入 `/static/feed.xml` 或直接开放 GET API `/api/v1/feed` 返回动态组装的 XML。
+- **配置:** `frontend` 展示的固定 URL `http://<domain>/api/v1/feed.xml` 直接暴露给用户的第三方阅读器订阅。
+
+**二、 Notion 落盘方案 (基于官方 API 能力)**
+Notion 存在针对 Block 的严格数量截断要求，LexDeepResearch 针对不同长短的报告采取两步动态降级策略：
+
+1. **短报告 (如日报 L2) —— 一步直写方案**
+   - **端点**: `POST /v1/pages`
+   - **逻辑**: 通过设置 `parent` 为目标 `database_id`，并使用 `markdown` 字段直接灌入报告正文。无需复杂的 Block 结构解析，简单快速。
+   - **适用条件**: 报告块数量预估在 100 Blocks 左右及以内。
+
+2. **长篇深度报告 (如深研 L4) —— 两步分块追加方案**
+   - **端点**: 先调用 `POST /v1/pages` 创建属性元数据(不带内容)；接着通过循环调用 `PATCH /v1/blocks/{block_id}/children`。
+   - **分块逻辑 (Chunking)**: 每次 `PATCH` 追加最大 **100个 Block**。<br>
+   *(参考 n8n 写入机制：长篇内容必须先分块（chunk），再循环追加)*
+   - **约束注意**: 每个 `rich_text` 对象最多 2000 个字符，嵌套最多 2 层。须引入重试及速率限制控制（约 `3req/s`）。
+
+**二、 Obsidian 落盘方案 (基于 Local REST API)**
+由于前端处于 Web 容器或异地，不能直接进行原生文件系统写入。
+- 依赖前置：目标 Obsidian Vault 安装并开启 `Local REST API` 插件（通常默认监听 `27123` 端口）。
+- 写入方式：使用 HTTTP 协议发 PUT 请求，`PUT /vault/{{文件夹名}}/{{报告文件名}}.md` 携带纯 Markdown 文本，实现无缝云端下发到本地设备。
+
+#### 4.4.4 落盘增量更新机制
+
+- 周报/深度报告支持追加更新模式。对于已经绑定了源 Page ID 的任务（依靠本地 DatabaseSink 暂存状态映射），可通过对应的 PATCH / Append 接口在已有文档末尾追加新采集的长内容。
+- Notion 落盘支持基于预设的 Database Template 创建新 Page，保持版式输出标准统一。
 
 ---
 

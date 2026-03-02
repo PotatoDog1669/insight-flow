@@ -41,6 +41,8 @@ git clone <repo-url> && cd LexDeepResearch
 # 2. 配置环境变量
 cp .env.example .env
 # 编辑 .env 填入你的 API Key 等配置
+# 若需要 Notion 落盘，请至少配置:
+# NOTION_API_KEY=secret_xxx
 
 # 3. 使用 Docker Compose 启动基础服务
 docker compose up -d postgres redis
@@ -61,6 +63,31 @@ npm run dev
 
 > 首次启动后端时，系统会自动执行最小种子初始化：创建默认用户、P0 预置信息源（含 GitHub Trending / Hugging Face Daily Papers）以及默认订阅关系。
 
+### 一键本地开发（推荐）
+
+```bash
+# 仅首次
+make backend-deps
+make frontend-deps
+
+# 每次开发
+make dev-local
+```
+
+常用快捷命令：
+
+```bash
+make infra-up        # 启动 postgres + redis
+make migrate         # 运行数据库迁移
+make test-all        # 后端测试 + 前端 lint/build
+make profile-gen     # 从 presets 生成缺失的 P0 site profile
+make profile-check   # 校验全部 profile + P0 覆盖
+make smoke-e2e       # 本地确定性 E2E 冒烟（不依赖外网）
+make infra-down      # 停止 docker 服务
+```
+
+Notion 落盘需要在 `config.yaml` 中配置 `sink.notion.database_id`，并在 `.env` 中配置 `NOTION_API_KEY`。
+
 ## 📁 项目结构
 
 ```
@@ -68,7 +95,7 @@ LexDeepResearch/
 ├── .spec/              # 产品与技术文档 (PRD.md / TEC.md)
 ├── backend/            # 后端服务 (Python/FastAPI)
 ├── frontend/           # 前端 (Next.js)
-├── deepbrowse/         # 自研浏览器 Agent (独立模块)
+├── agents/             # 浏览器 Agent 模块 (deepbrowse / browser-use / codex 等)
 ├── docs/               # Mintlify 文档站点
 ├── docker-compose.yml  # 本地开发编排
 └── .github/workflows/  # CI/CD
