@@ -67,3 +67,6 @@ backend/alembic/versions/*.pyc
 
 # Mintlify
 docs/.mintlify/
+
+# Local git worktrees
+.worktrees/
