@@ -35,6 +35,8 @@ describe("ReportOutline", () => {
       />
     );
 
-    expect(screen.getByRole("link", { name: "Event A #1" }).className).toContain("font-medium");
+    const activeLink = screen.getByRole("link", { name: "Event A #1" });
+    expect(activeLink.className).toContain("font-medium");
+    expect(activeLink).toHaveAttribute("aria-current", "true");
   });
 });

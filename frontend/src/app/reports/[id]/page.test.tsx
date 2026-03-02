@@ -49,7 +49,7 @@ describe("ReportDetailPage", () => {
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });
 
-  it("falls back to grouped article cards when report.content is empty", async () => {
+  it("falls back to grouped article cards when report.content has no heading structure", async () => {
     mockedGetReportById.mockResolvedValue({
       id: "report-2",
       user_id: null,
@@ -62,7 +62,7 @@ describe("ReportDetailPage", () => {
       topics: [],
       events: [],
       global_tldr: "",
-      content: "   ",
+      content: "plain text body without heading markers",
       article_ids: ["article-1"],
       published_to: [],
       metadata: {},
@@ -91,5 +91,6 @@ describe("ReportDetailPage", () => {
 
     await waitFor(() => expect(screen.getByText("Fallback article title")).toBeInTheDocument());
     expect(mockedGetArticleById).toHaveBeenCalledWith("article-1");
+    expect(screen.queryByRole("heading", { name: "Outline" })).not.toBeInTheDocument();
   });
 });

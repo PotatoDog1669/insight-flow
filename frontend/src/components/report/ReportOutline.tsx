@@ -20,6 +20,7 @@ export function ReportOutline({ items, activeId, onNavigate }: ReportOutlineProp
           <li key={item.id}>
             <a
               href={`#${item.id}`}
+              aria-current={activeId === item.id ? "true" : undefined}
               onClick={(event) => {
                 event.preventDefault();
                 onNavigate(item.id);

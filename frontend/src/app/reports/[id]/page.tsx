@@ -46,7 +46,10 @@ export default function ReportDetailPage() {
         const reportData = await getReportById(id);
         if (cancelled) return;
         setReport(reportData);
-        if (!reportData.content?.trim()) {
+        const parsedReport = parseReportContent(reportData.content ?? "");
+        const canUseTemplateContent = Boolean(reportData.content?.trim() && parsedReport.sections.length > 0);
+
+        if (!canUseTemplateContent) {
           const articleData = await Promise.all(
             reportData.article_ids.map(async (articleId) => {
               try {
@@ -87,11 +90,11 @@ export default function ReportDetailPage() {
     return groups;
   }, [articles]);
 
-  const hasTemplateContent = Boolean(report?.content?.trim());
   const parsedReport = useMemo(() => {
-    if (!report || !hasTemplateContent) return { sections: [] };
-    return parseReportContent(report.content);
-  }, [hasTemplateContent, report]);
+    if (!report) return { sections: [] };
+    return parseReportContent(report.content ?? "");
+  }, [report]);
+  const hasTemplateContent = Boolean(report?.content?.trim() && parsedReport.sections.length > 0);
 
   const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
   const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
@@ -157,11 +160,11 @@ export default function ReportDetailPage() {
 
       {hasTemplateContent ? (
         <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)_240px]">
-          <aside className="order-1 lg:order-none lg:sticky lg:top-6 lg:self-start">
+          <aside className="order-2 lg:order-none lg:sticky lg:top-6 lg:self-start">
             <ReportOutline items={outlineItems} activeId={activeHeadingId} onNavigate={handleNavigate} />
           </aside>
 
-          <section className="order-2 lg:order-none min-w-0">
+          <section className="order-1 lg:order-none min-w-0">
             <ReportDocument
               content={report.content}
               events={report.events}

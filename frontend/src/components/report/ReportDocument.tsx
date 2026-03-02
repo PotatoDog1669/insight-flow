@@ -149,6 +149,7 @@ export function ReportDocument({ content, events, globalTldr, topics }: ReportDo
         const eventData = section.eventIndex !== null ? eventByIndex.get(section.eventIndex) : undefined;
         const isEventExpanded = Boolean(expandedEvents[section.id]);
         const HeadingTag = section.level === 1 ? "h1" : "h2";
+        const eventPanelId = `${section.id}-panel`;
 
         if (isEvent) {
           return (
@@ -158,6 +159,7 @@ export function ReportDocument({ content, events, globalTldr, topics }: ReportDo
                   type="button"
                   className="flex w-full items-center justify-between text-left"
                   aria-expanded={isEventExpanded}
+                  aria-controls={eventPanelId}
                   onClick={() => {
                     setExpandedEvents((prev) => ({ ...prev, [section.id]: !prev[section.id] }));
                   }}
@@ -168,7 +170,7 @@ export function ReportDocument({ content, events, globalTldr, topics }: ReportDo
               </HeadingTag>
 
               {isEventExpanded && (
-                <div className="mt-4 space-y-3">
+                <div id={eventPanelId} className="mt-4 space-y-3">
                   {eventData && (
                     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <span>{eventData.source_count} sources</span>
@@ -221,13 +223,14 @@ export function ReportDocument({ content, events, globalTldr, topics }: ReportDo
                   type="button"
                   className="flex w-full items-center justify-between text-left text-sm font-medium"
                   aria-expanded={metaExpanded}
+                  aria-controls={`${section.id}-runtime-meta`}
                   onClick={() => setMetaExpanded((prev) => !prev)}
                 >
                   <span>运行元信息</span>
                   <span className="text-xs text-muted-foreground">{metaExpanded ? "Hide" : "Show"}</span>
                 </button>
                 {metaExpanded && (
-                  <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                  <div id={`${section.id}-runtime-meta`} className="mt-3 space-y-1 text-xs text-muted-foreground">
                     {metaSplit.metaLines.map((line, lineIdx) => (
                       <p key={`${section.id}-meta-${lineIdx}`}>{line}</p>
                     ))}
