@@ -1,0 +1,12 @@
+default_version: v1
+reports:
+  daily: v1
+  weekly: v1
+  research: v1
+sinks:
+  notion:
+    schema: v1
+    reports:
+      daily: v1
+      weekly: v1
+      research: v1

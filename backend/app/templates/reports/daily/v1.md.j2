@@ -1,0 +1,32 @@
+# AI Daily Report — {{ date | default("") }}
+
+## 概览
+
+{% for section in overview | default([]) %}
+{{ section.category }}
+{% for event in section.events %}
+- {% if event.first_link %}[{{ event.title }}]({{ event.first_link }}){% else %}{{ event.title }}{% endif %} #{{ event.index }}
+{% endfor %}
+
+{% endfor %}
+{% for event in events | default([]) %}
+---
+## {{ event.title }} #{{ event.index }}
+{{ event.source_name }}：{{ event.one_line_tldr }}
+{{ event.detail }}
+{% if event.keywords %}
+关键词：{% for keyword in event.keywords[:8] %}`{{ keyword }}`{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% if event.metrics %}
+关键指标：{{ event.metrics | join(" / ") }}
+{% endif %}
+相关链接：
+{% if event.source_links %}
+{% for link in event.source_links %}
+- {{ link }}
+{% endfor %}
+{% else %}
+- (none)
+{% endif %}
+
+{% endfor %}

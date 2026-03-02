@@ -1,0 +1,13 @@
+# AI Weekly Report — {{ date | default("") }}
+
+## Weekly Highlights
+
+{% for item in highlights | default([]) %}
+- {{ item }}
+{% endfor %}
+
+## Key Events
+
+{% for event in events | default([]) %}
+- {{ event.title }}{% if event.category %} ({{ event.category }}){% endif %}
+{% endfor %}

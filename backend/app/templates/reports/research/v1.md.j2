@@ -1,0 +1,17 @@
+# AI Research Report — {{ date | default("") }}
+
+## Executive Summary
+
+{{ summary | default("") }}
+
+## Findings
+
+{% for finding in findings | default([]) %}
+- {{ finding }}
+{% endfor %}
+
+## Evidence
+
+{% for item in evidence | default([]) %}
+- {{ item }}
+{% endfor %}
