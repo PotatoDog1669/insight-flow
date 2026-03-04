@@ -18,7 +18,7 @@ function toCardReport(report: APIReport): ReportCardModel {
   return {
     id: report.id,
     time_period: report.time_period,
-    depth: report.depth,
+    report_type: report.report_type,
     title: report.title,
     report_date: report.report_date,
     tldr: report.tldr,
@@ -54,7 +54,7 @@ export default function LibraryPage() {
   }, [reports, timeFilter]);
 
   return (
-    <div className="max-w-4xl">
+    <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8 md:py-12">
       <header className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight mb-2">Knowledge Library</h1>
         <p className="text-muted-foreground text-sm max-w-2xl">

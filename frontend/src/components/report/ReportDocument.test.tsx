@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ReportDocument } from "@/components/report/ReportDocument";
 
 describe("ReportDocument", () => {
-  it("collapses runtime meta by default and toggles event sections", () => {
+  it("collapses runtime meta by default and renders event sections", () => {
     render(
       <ReportDocument
         content={`# T
@@ -28,7 +28,30 @@ Body`}
     expect(metaButton).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("样本输入数: 5")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Event A #1/i }));
+    fireEvent.click(metaButton);
+    expect(metaButton).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("样本输入数: 5")).toBeInTheDocument();
+
+    expect(screen.getByRole("heading", { name: /Event A #1/i, level: 2 })).toBeInTheDocument();
     expect(screen.getByText("Body")).toBeInTheDocument();
+  });
+
+  it("renders all event sections provided in content", () => {
+    const eventSections = Array.from({ length: 20 })
+      .map((_, idx) => `---\n## Event ${idx + 1} #${idx + 1}\nBody ${idx + 1}`)
+      .join("\n\n");
+    render(
+      <ReportDocument
+        content={`# T\n\n## 正文\n\n${eventSections}`}
+        events={[]}
+        globalTldr=""
+        topics={[]}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: /Event 15 #15/i, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Event 16 #16/i, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Event 20 #20/i, level: 2 })).toBeInTheDocument();
+    expect(screen.getByText("Body 20")).toBeInTheDocument();
   });
 });

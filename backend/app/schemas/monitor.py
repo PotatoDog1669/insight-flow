@@ -6,26 +6,37 @@ from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import model_validator
 
 
 class MonitorBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     time_period: Literal["daily", "weekly", "custom"]
-    depth: Literal["brief", "deep"]
+    report_type: Literal["daily", "weekly", "research"] | None = None
     source_ids: list[uuid.UUID] = Field(default_factory=list)
+    source_overrides: dict[str, dict] = Field(default_factory=dict)  # dict can contain max_items, limit, max_results, keywords, usernames
+    destination_ids: list[str] = Field(default_factory=list)
+    window_hours: int = Field(default=24, ge=1, le=168)
     custom_schedule: str | None = None
     enabled: bool = True
 
 
 class MonitorCreate(MonitorBase):
-    pass
+    @model_validator(mode="after")
+    def validate_custom_requires_report_type(self) -> "MonitorCreate":
+        if self.time_period == "custom" and self.report_type is None:
+            raise ValueError("report_type is required when time_period is custom")
+        return self
 
 
 class MonitorUpdate(BaseModel):
     name: str | None = None
     time_period: Literal["daily", "weekly", "custom"] | None = None
-    depth: Literal["brief", "deep"] | None = None
+    report_type: Literal["daily", "weekly", "research"] | None = None
     source_ids: list[uuid.UUID] | None = None
+    source_overrides: dict[str, dict] | None = None
+    destination_ids: list[str] | None = None
+    window_hours: int | None = Field(default=None, ge=1, le=168)
     custom_schedule: str | None = None
     enabled: bool | None = None
 
@@ -40,5 +51,17 @@ class MonitorResponse(MonitorBase):
 
 class MonitorRunResponse(BaseModel):
     task_id: uuid.UUID
+    run_id: uuid.UUID
     status: Literal["pending", "running"]
     monitor_id: uuid.UUID
+
+
+class MonitorRunCancelResponse(BaseModel):
+    run_id: uuid.UUID
+    monitor_id: uuid.UUID
+    status: Literal["pending", "running", "cancelling", "cancelled", "success", "failed", "partial_success"]
+
+
+class MonitorRunRequest(BaseModel):
+    window_hours: int | None = Field(default=None, ge=1, le=168)
+    trigger_type: Literal["manual", "test"] | None = None

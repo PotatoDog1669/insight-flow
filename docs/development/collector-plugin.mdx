@@ -2,4 +2,29 @@
 title: 编写 Collector 插件
 ---
 # 如何编写 Collector 插件
-*待补充*
+
+## 1. 选择采集策略
+
+- `rss`: 适用于公开 RSS/Atom 信息源。
+- `github_trending`: 适用于 GitHub Trending 日榜聚合。
+- `huggingface`: 适用于 Hugging Face Daily Papers。
+- `twitter_snaplytics`: 适用于通过 Snaplytics 中转接口抓取公开 X/Twitter 内容（账号时间线）。
+- `blog_scraper`: 适用于无 RSS 站点（profile 驱动）。
+- `deepbrowse`: 复杂动态站点兜底。
+
+## 2. 新增无 RSS 站点（推荐流程）
+
+1. 使用模板创建 profile：  
+   `docs/development/skills/blog-pattern-mining/templates/site_profile.template.yaml`
+2. 将 profile 放到：  
+   `backend/app/collectors/site_profiles/<site_key>.yaml`
+3. 运行校验：  
+   `python backend/scripts/validate_site_profile.py --profile backend/app/collectors/site_profiles/<site_key>.yaml`
+4. 检查 P0 覆盖：  
+   `python backend/scripts/validate_site_profile.py --check-p0`
+
+## 3. 批量维护命令
+
+- 生成缺失 P0 profile：`make profile-gen`
+- 校验 profile：`make profile-check`
+- 跑端到端冒烟：`make smoke-e2e`

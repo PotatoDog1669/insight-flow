@@ -14,9 +14,12 @@ from app.models.database import get_db
 from app.models.source import Source
 from app.models.task import CollectTask
 from app.schemas.source import CategoryStats
+from app.schemas.source import SampleArticle
 from app.schemas.source import SourceCreate
 from app.schemas.source import SourceResponse
+from app.schemas.source import SourceTestResponse
 from app.schemas.source import SourceUpdate
+from app.collectors.registry import get_collector
 
 router = APIRouter()
 
@@ -71,6 +74,39 @@ async def create_source(payload: SourceCreate, db: AsyncSession = Depends(get_db
     await db.commit()
     await db.refresh(source)
     return _to_source_response(source, None)
+
+
+@router.post("/{source_id}/test", response_model=SourceTestResponse)
+async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
+    """测试信息源连接"""
+    source = await db.get(Source, _parse_uuid(source_id))
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+
+    try:
+        collector = get_collector(source.collect_method)
+        raw_articles = await collector.collect(source.config or {})
+        
+        sample = raw_articles[:3]
+        sample_articles = [
+            SampleArticle(
+                title=a.title,
+                url=a.url,
+                published_at=a.published_at
+            ) for a in sample
+        ]
+        
+        return SourceTestResponse(
+            success=True,
+            message=f"Connection successful. Retrieved {len(raw_articles)} items.",
+            sample_articles=sample_articles
+        )
+    except Exception as e:
+        return SourceTestResponse(
+            success=False,
+            message=f"Test failed: {str(e)}",
+            sample_articles=[]
+        )
 
 
 @router.patch("/{source_id}", response_model=SourceResponse)

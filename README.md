@@ -43,6 +43,12 @@ cp .env.example .env
 # 编辑 .env 填入你的 API Key 等配置
 # 若需要 Notion 落盘，请至少配置:
 # NOTION_API_KEY=secret_xxx
+# 若需要 Codex Agent 加工，可配置:
+# CODEX_AUTH_MODE=api_key
+# CODEX_API_KEY=sk_xxx
+# 或
+# CODEX_AUTH_MODE=oauth
+# CODEX_OAUTH_TOKEN=<oauth access token>
 
 # 3. 使用 Docker Compose 启动基础服务
 docker compose up -d postgres redis
@@ -61,13 +67,14 @@ npm run dev
 
 访问 http://localhost:3000 查看前端，http://localhost:8000/docs 查看 API 文档。
 
-> 首次启动后端时，系统会自动执行最小种子初始化：创建默认用户、P0 预置信息源（含 GitHub Trending / Hugging Face Daily Papers）以及默认订阅关系。
+> 首次启动后端时，系统会自动同步 `source_presets.yaml` 的全部预设源（upsert）、创建默认用户，并补齐默认订阅关系（含系统源 GitHub Trending / Hugging Face Daily Papers）。
 
 ### 一键本地开发（推荐）
 
 ```bash
 # 仅首次
 make backend-deps
+make backend-browser-deps   # 可选：安装 Playwright Chromium（用于无 RSS 博客浏览器采集，如 Anthropic）
 make frontend-deps
 
 # 每次开发
@@ -79,14 +86,19 @@ make dev-local
 ```bash
 make infra-up        # 启动 postgres + redis
 make migrate         # 运行数据库迁移
+make sync-sources    # 将 source_presets.yaml 全量同步到数据库（upsert）
 make test-all        # 后端测试 + 前端 lint/build
 make profile-gen     # 从 presets 生成缺失的 P0 site profile
 make profile-check   # 校验全部 profile + P0 覆盖
 make smoke-e2e       # 本地确定性 E2E 冒烟（不依赖外网）
+make run-mvp-codex-notion # 4 源最小链路(OpenAI/Anthropic/GitHub/HF) -> Notion
 make infra-down      # 停止 docker 服务
 ```
 
-Notion 落盘需要在 `config.yaml` 中配置 `sink.notion.database_id`，并在 `.env` 中配置 `NOTION_API_KEY`。
+Notion 落盘需在 `.env` 中配置 `NOTION_API_KEY`，并在 `NOTION_DATABASE_ID` 或 `NOTION_PARENT_PAGE_ID` 二选一。
+Codex Agent 支持两种认证：
+- `CODEX_AUTH_MODE=api_key` + `CODEX_API_KEY`
+- `CODEX_AUTH_MODE=oauth` + `CODEX_OAUTH_TOKEN`
 
 ## 📁 项目结构
 

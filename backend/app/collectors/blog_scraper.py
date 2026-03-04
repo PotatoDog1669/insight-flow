@@ -41,7 +41,7 @@ class BlogScraperCollector(BaseCollector):
         min_content_chars = int(normalization.get("min_content_chars", 200))
         url_prefix = normalization.get("url_prefix")
 
-        async with httpx.AsyncClient(timeout=timeout_seconds, headers={"User-Agent": user_agent}) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True, headers={"User-Agent": user_agent}) as client:
             entries: list[dict[str, Any]] = []
             for start_url in start_urls:
                 try:

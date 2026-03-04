@@ -1,0 +1,32 @@
+from app.providers.registry import get_provider, list_providers
+
+
+def test_registry_returns_provider_by_stage_and_name() -> None:
+    provider = get_provider(stage="keywords", name="rule")
+    assert provider.stage == "keywords"
+    assert provider.name == "rule"
+
+
+def test_filter_stage_supports_rule_llm_and_agent_executors() -> None:
+    providers = list_providers(stage="filter")
+    assert "rule" in providers
+    assert "llm_openai" in providers
+    assert "agent_codex" in providers
+
+    agent = get_provider(stage="filter", name="agent_codex")
+    assert agent.stage == "filter"
+    assert agent.name == "agent_codex"
+
+
+def test_keywords_and_report_stage_use_unified_modules() -> None:
+    keyword_rule = get_provider(stage="keywords", name="rule")
+    keyword_llm = get_provider(stage="keywords", name="llm_openai")
+    keyword_agent = get_provider(stage="keywords", name="agent_codex")
+    report_llm = get_provider(stage="report", name="llm_openai")
+    report_agent = get_provider(stage="report", name="agent_codex")
+
+    assert keyword_rule.__class__.__module__ == "app.providers.keywords"
+    assert keyword_llm.__class__.__module__ == "app.providers.keywords"
+    assert keyword_agent.__class__.__module__ == "app.providers.keywords"
+    assert report_llm.__class__.__module__ == "app.providers.report"
+    assert report_agent.__class__.__module__ == "app.providers.report"

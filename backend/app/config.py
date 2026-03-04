@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=_yaml.get("llm", {}).get("max_tokens", 2048))
     llm_temperature: float = Field(default=_yaml.get("llm", {}).get("temperature", 0.3))
 
+    # Codex Agent
+    codex_auth_mode: str = Field(default=_yaml.get("agent", {}).get("codex", {}).get("auth_mode", "api_key"))
+    codex_api_key: str = Field(default="")
+    codex_oauth_token: str = Field(default="")
+    codex_base_url: str = Field(default=_yaml.get("agent", {}).get("codex", {}).get("base_url", "https://api.openai.com/v1"))
+    codex_model: str = Field(default=_yaml.get("agent", {}).get("codex", {}).get("model", "gpt-5-codex"))
+    codex_timeout_sec: int = Field(default=_yaml.get("agent", {}).get("codex", {}).get("timeout_sec", 90))
+
     # Scheduler
     daily_collect_time: str = Field(default=_yaml.get("scheduler", {}).get("daily_collect_time", "06:30"))
     weekly_report_day: str = Field(default=_yaml.get("scheduler", {}).get("weekly_report_day", "sunday"))
@@ -75,11 +83,15 @@ class Settings(BaseSettings):
     # Notion
     notion_api_key: str = Field(default="")
     notion_database_id: str = Field(default=_yaml.get("sink", {}).get("notion", {}).get("database_id", ""))
+    notion_parent_page_id: str = Field(default=_yaml.get("sink", {}).get("notion", {}).get("parent_page_id", ""))
 
     # Obsidian
     obsidian_vault_path: str = Field(default=_yaml.get("sink", {}).get("obsidian", {}).get("vault_path", ""))
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    # Routing
+    routing_default_profile: str = Field(default=_yaml.get("routing", {}).get("default_profile", "stable_v1"))
+
+    model_config = {"env_file": str(PROJECT_ROOT / ".env"), "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

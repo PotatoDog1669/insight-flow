@@ -108,6 +108,7 @@ def test_trigger_collect_creates_task_row(client, db_session_factory) -> None:
     task_id = uuid.UUID(task["id"])
     assert task["source_id"] == str(SOURCE_ID)
     assert task["status"] in {"pending", "running", "success"}
+    assert task["stage_trace"] == []
 
     session_factory, _ = db_session_factory
 

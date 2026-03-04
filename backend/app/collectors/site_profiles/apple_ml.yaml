@@ -1,0 +1,28 @@
+site_key: apple_ml
+profile_version: v1
+start_urls:
+- https://machinelearning.apple.com/research
+list_page:
+  item_selector: a[href*='/blog/'], a[href*='/news/'], a[href*='/research/'], a[href*='/posts/'],
+    a[href*='/article/'], a[href]
+  url_selector: ''
+  url_attr: href
+  title_selector: ''
+  published_selector: time
+  published_attr: datetime
+detail_page:
+  content_selector: article, main, [role='main'], .post-content, .article-content,
+    .content
+  remove_selectors:
+  - script
+  - style
+  - nav
+  - footer
+  - header
+  - .share
+  - .social
+  published_selector: time
+  published_attr: datetime
+normalization:
+  url_prefix: https://machinelearning.apple.com
+  min_content_chars: 300

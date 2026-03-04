@@ -1,7 +1,7 @@
 """报告渲染器抽象基类"""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.processors.pipeline import ProcessedArticle
 
@@ -23,6 +23,7 @@ class Report:
     title: str
     content: str  # Markdown / HTML
     article_ids: list[str] | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 class BaseRenderer(ABC):

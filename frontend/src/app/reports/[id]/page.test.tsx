@@ -21,23 +21,38 @@ describe("ReportDetailPage", () => {
   });
 
   it("renders document from report.content and outline", async () => {
+    const events = Array.from({ length: 15 }).map((_, idx) => ({
+      event_id: `event-${idx + 1}`,
+      index: idx + 1,
+      title: `Event ${idx + 1}`,
+      category: "行业动态",
+      one_line_tldr: `TLDR ${idx + 1}`,
+      detail: `Detail ${idx + 1}`,
+      keywords: [],
+      entities: [],
+      metrics: [],
+      source_links: [],
+      source_count: 1,
+      source_name: "Source",
+      published_at: null,
+    }));
+
     mockedGetReportById.mockResolvedValue({
       id: "report-1",
       user_id: null,
       time_period: "daily",
-      depth: "deep",
+      report_type: "research",
       title: "AI Daily",
       report_date: "2026-03-02",
       tldr: [],
       article_count: 0,
       topics: [],
-      events: [],
+      events,
       global_tldr: "",
       content: "# AI Daily\n\n## 全局总结与锐评\nA",
       article_ids: [],
       published_to: [],
       metadata: {},
-      report_type: "deep",
       created_at: "2026-03-02T00:00:00Z",
     } as never);
     mockedGetArticleById.mockResolvedValue(null as never);
@@ -45,7 +60,7 @@ describe("ReportDetailPage", () => {
     render(<ReportDetailPage />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "全局总结与锐评" })).toBeInTheDocument());
-    expect(screen.getByRole("heading", { name: "Outline" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Report outline" })).toBeInTheDocument();
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });
 
@@ -54,7 +69,7 @@ describe("ReportDetailPage", () => {
       id: "report-2",
       user_id: null,
       time_period: "daily",
-      depth: "deep",
+      report_type: "daily",
       title: "AI Daily",
       report_date: "2026-03-02",
       tldr: [],
@@ -66,7 +81,6 @@ describe("ReportDetailPage", () => {
       article_ids: ["article-1"],
       published_to: [],
       metadata: {},
-      report_type: "deep",
       created_at: "2026-03-02T00:00:00Z",
     } as never);
     mockedGetArticleById.mockResolvedValue({

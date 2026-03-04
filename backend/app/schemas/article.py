@@ -13,6 +13,7 @@ class ArticleResponse(BaseModel):
     category: str | None = None
     title: str
     url: str | None = None
+    raw_content: str | None = None
     summary: str | None = None
     keywords: list[str] = Field(default_factory=list)
     ai_score: float | None = None

@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,10 +20,12 @@ router = APIRouter()
 
 class TaskResponse(BaseModel):
     id: str
+    run_id: str | None = None
     source_id: str | None = None
     trigger_type: str
     status: str
     articles_count: int = 0
+    stage_trace: list = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -72,6 +74,7 @@ async def trigger_collect(request: TriggerRequest, db: AsyncSession = Depends(ge
 
     task = CollectTask(
         id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
         source_id=source_uuid,
         trigger_type="manual",
         status="pending",
@@ -103,8 +106,10 @@ def _parse_uuid(raw_id: str) -> uuid.UUID:
 def _to_task_response(task: CollectTask) -> TaskResponse:
     return TaskResponse(
         id=str(task.id),
+        run_id=str(task.run_id) if task.run_id else str(task.id),
         source_id=str(task.source_id) if task.source_id else None,
         trigger_type=task.trigger_type,
         status=task.status,
         articles_count=task.articles_count or 0,
+        stage_trace=task.stage_trace or [],
     )

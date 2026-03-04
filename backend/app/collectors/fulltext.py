@@ -20,22 +20,22 @@ def extract_fulltext(
     """按抽取器链路提取正文，返回 (content, extractor_name)。"""
     chain = tuple(extractor_chain or DEFAULT_EXTRACTOR_CHAIN)
     for extractor in chain:
-        text = _extract_with(extractor, html)
+        text = _extract_with(extractor, html, min_content_chars=min_content_chars)
         normalized = _normalize_text(text)
         if len(normalized) >= min_content_chars:
             return normalized, extractor
     return "", ""
 
 
-def _extract_with(extractor: str, html: str) -> str:
+def _extract_with(extractor: str, html: str, *, min_content_chars: int = 200) -> str:
     if extractor == "trafilatura":
         return _extract_trafilatura(html)
     if extractor == "readability":
         return _extract_readability(html)
     if extractor == "selectolax":
-        return _extract_selectolax(html)
+        return _extract_selectolax(html, min_content_chars=min_content_chars)
     if extractor == "bs4":
-        return _extract_bs4(html)
+        return _extract_bs4(html, min_content_chars=min_content_chars)
     return ""
 
 
@@ -61,30 +61,41 @@ def _extract_readability(html: str) -> str:
     return soup.get_text("\n", strip=True)
 
 
-def _extract_selectolax(html: str) -> str:
+def _extract_selectolax(html: str, *, min_content_chars: int = 200) -> str:
     try:
         tree = HTMLParser(html)
     except Exception:
         return ""
+    best = ""
     for selector in ("article", "main", ".post-content", ".entry-content", ".content", "body"):
         node = tree.css_first(selector)
         if not node:
             continue
         text = node.text(separator="\n", strip=True)
-        if text:
+        if not text:
+            continue
+        if len(text) >= min_content_chars:
             return text
-    return ""
+        if len(text) > len(best):
+            best = text
+    return best
 
 
-def _extract_bs4(html: str) -> str:
+def _extract_bs4(html: str, *, min_content_chars: int = 200) -> str:
     soup = BeautifulSoup(html, "html.parser")
+    best = ""
     for selector in ("article", "main", ".post-content", ".entry-content", ".content", "body"):
         node = soup.select_one(selector)
-        if node:
-            text = node.get_text("\n", strip=True)
-            if text:
-                return text
-    return soup.get_text("\n", strip=True)
+        if not node:
+            continue
+        text = node.get_text("\n", strip=True)
+        if not text:
+            continue
+        if len(text) >= min_content_chars:
+            return text
+        if len(text) > len(best):
+            best = text
+    return best or soup.get_text("\n", strip=True)
 
 
 def _normalize_text(text: str) -> str:

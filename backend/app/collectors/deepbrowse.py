@@ -2,7 +2,7 @@
 
 from app.collectors.base import BaseCollector, RawArticle
 from app.collectors.blog_scraper import BlogScraperCollector
-from app.collectors.registry import register
+from app.collectors.registry import get_collector, register
 
 
 @register("deepbrowse")
@@ -18,6 +18,17 @@ class DeepBrowseCollector(BaseCollector):
         return "blog"  # 默认分类，实际使用时根据配置覆盖
 
     async def collect(self, config: dict) -> list[RawArticle]:
-        # P0 先复用 profile 爬虫逻辑作为 deepbrowse 兜底，后续可替换为真实 browser agent。
+        requested_agent = str(config.get("browser_agent", "codex_playwright")).strip() or "codex_playwright"
+        if requested_agent and requested_agent not in {"deepbrowse", "blog_scraper"}:
+            try:
+                delegated = get_collector(requested_agent)
+                delegated_config = {**config}
+                delegated_config.pop("browser_agent", None)
+                return await delegated.collect(delegated_config)
+            except Exception:
+                # Unknown agent or delegated collector failed -> fallback to profile scraper.
+                pass
+
+        # P0: default fallback to profile scraper.
         scraper = BlogScraperCollector()
         return await scraper.collect(config)

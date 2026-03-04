@@ -31,6 +31,7 @@ class Article(Base):
         String(16), default="unknown", comment="P1 预留: primary / secondary / unknown"
     )
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict, comment="扩展字段")
+    processing_trace: Mapped[list] = mapped_column(JSON, default=list, comment="加工阶段轨迹")
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="原文发布时间")
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

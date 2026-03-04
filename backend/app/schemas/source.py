@@ -39,3 +39,15 @@ class SourceResponse(SourceBase):
 class CategoryStats(BaseModel):
     category: str
     count: int
+
+
+class SampleArticle(BaseModel):
+    title: str
+    url: str | None = None
+    published_at: datetime | None = None
+
+
+class SourceTestResponse(BaseModel):
+    success: bool
+    message: str | None = None
+    sample_articles: list[SampleArticle] = Field(default_factory=list)

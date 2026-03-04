@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import JSON
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Uuid, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -19,8 +19,11 @@ class Monitor(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     time_period: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / custom")
-    depth: Mapped[str] = mapped_column(String(16), nullable=False, comment="brief / deep")
+    report_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / research")
     source_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_overrides: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    destination_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    window_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24, comment="rolling window in hours")
     custom_schedule: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

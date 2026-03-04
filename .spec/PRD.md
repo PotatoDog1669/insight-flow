@@ -181,7 +181,7 @@ flowchart LR
 | **落盘位置** | **接入方式** | **备注** |
 | --- | --- | --- |
 | Notion | Notion MCP / Notion API / n8n | 已实现，当前主要落盘路径 |
-| Obsidian | 本地文件系统 / Obsidian API | Markdown 格式输出 |
+| Obsidian | WebDAV API + Remotely Save 插件 | 架构最解耦方案。Linux端只负责推送到自建 WebDAV，Mac 端通过插件拉取，免去互相发现和组网配置。 |
 | 飞书文档 | 飞书开放平台 API | 适配国内用户 |
 | 本地 Markdown | 文件系统直接写入 | 最轻量方案 |
 | 数据库 | 根据具体 DB 类型适配 | 结构化存储，支持查询 |

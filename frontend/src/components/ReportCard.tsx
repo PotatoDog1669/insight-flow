@@ -16,7 +16,7 @@ export interface Topic {
 export interface Report {
     id: string;
     time_period: "daily" | "weekly" | "custom";
-    depth: "brief" | "deep";
+    report_type: "daily" | "weekly" | "research";
     title: string;
     report_date: string;
     tldr: string[];
@@ -35,14 +35,15 @@ const timeConfig = {
     custom: { label: "Custom", color: "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300" },
 };
 
-const depthConfig = {
-    brief: { label: "Briefing", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
-    deep: { label: "Deep Dive", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+const reportTypeConfig = {
+    daily: { label: "Daily", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
+    weekly: { label: "Weekly", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
+    research: { label: "Research", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
 };
 
 export function ReportCard({ report, index }: ReportCardProps) {
     const tConfig = timeConfig[report.time_period];
-    const dConfig = depthConfig[report.depth];
+    const rConfig = reportTypeConfig[report.report_type];
 
     return (
         <motion.div
@@ -57,7 +58,7 @@ export function ReportCard({ report, index }: ReportCardProps) {
 
                     {/* Dynamic Graphic Cover */}
                     {report.topics && report.topics.length > 0 && (
-                        <div className="md:w-[32%] lg:w-[28%] shrink-0">
+                        <div className="md:w-[32%] lg:w-[28%] shrink-0 flex flex-col items-stretch">
                             <ReportCover topics={report.topics} date={report.report_date} className="h-40 md:h-full w-full rounded-t-xl md:rounded-tr-none md:rounded-l-xl" />
                         </div>
                     )}
@@ -71,8 +72,8 @@ export function ReportCard({ report, index }: ReportCardProps) {
                                     <Badge variant="secondary" className={`${tConfig.color} border-none font-medium px-2 py-0.5`}>
                                         {tConfig.label}
                                     </Badge>
-                                    <Badge variant="secondary" className={`${dConfig.color} border-none font-medium px-2 py-0.5`}>
-                                        {dConfig.label}
+                                    <Badge variant="secondary" className={`${rConfig.color} border-none font-medium px-2 py-0.5`}>
+                                        {rConfig.label}
                                     </Badge>
                                     <span className="flex items-center space-x-1 ml-2">
                                         <Calendar className="w-3.5 h-3.5" />
@@ -97,16 +98,21 @@ export function ReportCard({ report, index }: ReportCardProps) {
                                 <div className="bg-muted/30 rounded-md p-4 space-y-2">
                                     <div className="flex items-center space-x-2 text-sm font-medium text-foreground/80 mb-1">
                                         <Hash className="w-4 h-4 text-muted-foreground" />
-                                        <span>{report.depth === "brief" ? "Abstracts / TL;DR" : "Key Insights"}</span>
+                                        <span>{report.report_type === "daily" ? "Abstracts / TL;DR" : "Key Insights"}</span>
                                     </div>
                                     <ul className="space-y-1.5 list-none m-0 p-0 text-sm text-muted-foreground">
-                                        {report.tldr.map((point, i) => (
+                                        {report.tldr.slice(0, 3).map((point, i) => (
                                             <li key={i} className="flex items-start">
-                                                <span className="mr-2 mt-1 w-1 h-1 rounded-full bg-muted-foreground/50 shrink-0" />
-                                                <span className="leading-relaxed">{point}</span>
+                                                <span className="mr-2 mt-1.5 w-1 h-1 rounded-full bg-muted-foreground/50 shrink-0" />
+                                                <span className="leading-relaxed line-clamp-2">{point}</span>
                                             </li>
                                         ))}
                                     </ul>
+                                    {report.tldr.length > 3 && (
+                                        <div className="pt-1 text-xs text-muted-foreground/80 font-medium">
+                                            + {report.tldr.length - 3} more insights...
+                                        </div>
+                                    )}
                                 </div>
                             )}
 

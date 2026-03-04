@@ -1,5 +1,5 @@
 version: 1
-updated_at: 2026-03-01
+updated_at: 2026-03-04
 owner: lexdeepresearch
 
 groups:
@@ -11,6 +11,10 @@ groups:
     name: "创新/独角兽"
   - id: agent_infra
     name: "Agent / 推理服务"
+  - id: academic
+    name: "学术机构/论文源"
+  - id: social_media
+    name: "社交媒体"
 
 sources:
   - key: openai
@@ -20,8 +24,31 @@ sources:
     rss_url: "https://openai.com/news/rss.xml"
     rss_status: provided
     strategy: rss_then_article_fulltext
+    require_browser: true
     priority: p0
     enabled: true
+    notes: "文章页 Cloudflare 403 反爬，需 Playwright 渲染"
+
+  - key: x_social
+    group: social_media
+    company: X
+    category: social
+    urls: ["https://x.com"]
+    rss_url: null
+    rss_status: none
+    strategy: twitter_snaplytics
+    collect_config:
+      usernames:
+        - OpenAI
+        - AnthropicAI
+        - GoogleDeepMind
+      max_items: 30
+      max_pages: 1
+      include_retweets: false
+      include_pinned: true
+    priority: p1
+    enabled: true
+    notes: "2026-03-04 Social Media 统一入口，用户名列表在配置中维护"
 
   - key: google_deepmind
     group: intl_vendors
@@ -30,6 +57,9 @@ sources:
     rss_url: "https://deepmind.google/blog/rss.xml"
     rss_status: provided
     strategy: rss_then_article_fulltext
+    collect_config:
+      reader_mode: prefer
+      reader_fallback_enabled: true
     priority: p0
     enabled: true
 
@@ -83,6 +113,9 @@ sources:
     rss_url: "https://blogs.nvidia.com/blog/category/enterprise/deep-learning/feed/"
     rss_status: provided
     strategy: rss_then_article_fulltext
+    collect_config:
+      reader_mode: prefer
+      reader_fallback_enabled: true
     priority: p0
     enabled: true
     notes: "2026-03-01 从页面 link rel=alternate 验证 feed 可用"
@@ -91,11 +124,12 @@ sources:
     group: intl_vendors
     company: Apple ML
     urls: ["https://machinelearning.apple.com/research"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://machinelearning.apple.com/rss.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
     priority: p0
     enabled: true
+    notes: "2026-03-02 验证 rss.xml 可用"
 
   - key: amazon_science
     group: intl_vendors
@@ -137,26 +171,32 @@ sources:
     strategy: site_profile_scraper
     priority: p1
     enabled: true
+    notes: "2026-03-02 /feed 与 /feed/ 最终返回 HTML 页面，按无 RSS 处理"
 
   - key: stability_ai
     group: intl_vendors
     company: Stability AI
     urls: ["https://stability.ai/news", "https://stability.ai/research"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://stability.ai/news?format=rss"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
     priority: p0
     enabled: true
+    notes: "2026-03-02 验证 news/research 均支持 ?format=rss，默认采用 news feed"
 
   - key: alibaba_qwen
     group: cn_vendors
     company: 阿里 Qwen
     urls: ["https://qwen.ai/blog", "https://qwenlm.github.io/blog/"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://qwenlm.github.io/blog/index.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    collect_config:
+      reader_mode: prefer
+      reader_fallback_enabled: true
     priority: p0
     enabled: true
+    notes: "2026-03-02 验证 qwenlm.github.io 博客 Atom/RSS 可用"
 
   - key: tencent_hunyuan
     group: cn_vendors
@@ -192,83 +232,91 @@ sources:
   - key: kwai_kwai_kat
     group: cn_vendors
     company: 快手 KwaiKAT
-    urls: []
+    urls: ["https://www.kuaishou.com/en/news"]
     rss_url: null
-    rss_status: n_a
-    strategy: github_only
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p2
     enabled: false
-    notes: "无独立博客，通过 GitHub/论文发布"
+    notes: "2026-03-02 验证无公开 RSS，使用官网 news 页面走爬取"
 
   - key: xiaomi_mimo
     group: cn_vendors
     company: 小米 MiMo
-    urls: ["https://github.com/XiaomiMiMo"]
+    urls: ["https://www.mi.com/global/discover/", "https://github.com/XiaomiMiMo"]
     rss_url: null
-    rss_status: n_a
-    strategy: github_only
+    rss_status: none
+    strategy: github_plus_site_scraper
     priority: p2
     enabled: false
+    notes: "2026-03-02 未发现可用 RSS，补充官网 discover 页面+GitHub"
 
   - key: xiaohongshu
     group: cn_vendors
     company: 小红书
-    urls: []
+    urls: ["https://www.xiaohongshu.com/about/news"]
     rss_url: null
-    rss_status: n_a
-    strategy: manual_research
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p3
     enabled: false
+    notes: "2026-03-02 未发现公开 RSS，使用官网 news 页面走爬取"
 
   - key: baidu_ernie
     group: cn_vendors
     company: 百度 ERNIE
     urls: ["https://ernie.baidu.com/blog/zh/"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://ernie.baidu.com/blog/zh/index.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
     priority: p1
     enabled: true
+    notes: "2026-03-02 验证 /blog/zh/index.xml 可用"
 
   - key: huawei_pangu
     group: cn_vendors
     company: 华为盘古
-    urls: ["https://developer.huawei.com"]
+    urls: ["https://www.huawei.com/cn/news"]
     rss_url: null
-    rss_status: n_a
-    strategy: manual_research
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p3
     enabled: false
+    notes: "2026-03-02 未发现公开 RSS，使用华为官网 news 页面走爬取"
 
   - key: sensenova
     group: cn_vendors
     company: 商汤 SenseNova
-    urls: []
+    urls: ["https://www.sensetime.com/cn/news-index"]
     rss_url: null
-    rss_status: n_a
-    strategy: github_paper_only
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p3
     enabled: false
+    notes: "2026-03-02 未发现公开 RSS，使用官网 news 页面走爬取"
 
   - key: xfyun_spark
     group: cn_vendors
     company: 科大讯飞星火
-    urls: ["https://xinghuo.xfyun.cn"]
+    urls: ["https://xinghuo.xfyun.cn/news"]
     rss_url: null
-    rss_status: n_a
-    strategy: manual_research
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p3
     enabled: false
+    notes: "2026-03-02 未发现公开 RSS，使用官网 news 页面走爬取"
 
   - key: deepseek
     group: unicorns
     company: DeepSeek
-    urls: ["https://api-docs.deepseek.com", "https://github.com/deepseek-ai"]
+    urls: ["https://www.deepseek.com/news", "https://www.deepseek.com/blog"]
+    category: blog
     rss_url: null
     rss_status: none
-    strategy: github_plus_docs
+    strategy: site_profile_scraper
     priority: p0
     enabled: true
+    notes: "2026-03-02 未发现公开 RSS，切换到官网 news/blog 页面走爬取"
 
   - key: zhipu
     group: unicorns
@@ -283,12 +331,13 @@ sources:
   - key: moonshot_kimi
     group: unicorns
     company: Kimi / Moonshot
-    urls: ["https://moonshot.cn"]
+    urls: ["https://www.moonshot.cn/news"]
     rss_url: null
-    rss_status: n_a
-    strategy: manual_research
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p3
     enabled: false
+    notes: "2026-03-02 未发现公开 RSS，使用官网 news 页面走爬取"
 
   - key: minimax
     group: unicorns
@@ -306,10 +355,11 @@ sources:
     company: 阶跃 StepFun
     urls: ["https://platform.stepfun.com"]
     rss_url: null
-    rss_status: n_a
-    strategy: manual_research
+    rss_status: none
+    strategy: site_profile_scraper
     priority: p3
     enabled: false
+    notes: "2026-03-02 未发现公开 RSS，官网无独立 news 页，先抓取平台站公告"
 
   - key: baichuan
     group: unicorns
@@ -325,21 +375,23 @@ sources:
     group: unicorns
     company: 零一万物 01.AI
     urls: ["https://lingyiwanwu.com/blog/", "https://01-ai.github.io"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://lingyiwanwu.com/blog/feed"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
     priority: p1
     enabled: true
+    notes: "2026-03-02 验证 /blog/feed 可用"
 
   - key: minicpm_openbmb
     group: unicorns
     company: 面壁智能 MiniCPM
-    urls: ["https://modelbest.cn", "https://github.com/OpenBMB"]
+    urls: ["https://modelbest.cn/news", "https://github.com/OpenBMB"]
     rss_url: null
     rss_status: none
     strategy: github_plus_site_scraper
     priority: p1
     enabled: true
+    notes: "2026-03-02 未发现可用 RSS，补充官网 news 页面+GitHub"
 
   - key: perplexity
     group: unicorns
@@ -360,16 +412,18 @@ sources:
     strategy: site_profile_scraper
     priority: p1
     enabled: true
+    notes: "2026-03-02 /rss 与 /feed/ 最终返回 HTML 页面，按无 RSS 处理"
 
   - key: cursor
     group: agent_infra
     company: Cursor
     urls: ["https://cursor.com/blog"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://cursor.com/atom.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
     priority: p1
     enabled: true
+    notes: "2026-03-02 验证 atom feed 可用"
 
   - key: cognition
     group: agent_infra
@@ -396,11 +450,12 @@ sources:
     group: agent_infra
     company: Together AI
     urls: ["https://www.together.ai/blog"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://www.together.ai/blog/rss.xml"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
     priority: p1
     enabled: true
+    notes: "2026-03-02 验证 /blog/rss.xml 可用"
 
   - key: fireworks_ai
     group: agent_infra
@@ -421,3 +476,24 @@ sources:
     strategy: site_profile_scraper
     priority: p1
     enabled: true
+
+  - key: arxiv
+    group: academic
+    company: arXiv
+    category: academic
+    urls: ["https://arxiv.org/list/cs/recent"]
+    rss_url: "https://export.arxiv.org/api/query"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    collect_config:
+      arxiv_api: true
+      keywords: ["reasoning", "agent", "multimodal", "tool use"]
+      categories: ["cs.AI", "cs.LG", "cs.CL", "cs.CV"]
+      keyword_operator: OR
+      category_operator: OR
+      max_results: 80
+      sort_by: submittedDate
+      sort_order: descending
+    priority: p0
+    enabled: true
+    notes: "2026-03-02 切换为 arXiv API 查询（Atom），通过关键词+分类聚合单一学术源"

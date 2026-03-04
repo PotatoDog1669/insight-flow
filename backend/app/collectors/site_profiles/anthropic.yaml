@@ -1,0 +1,27 @@
+site_key: anthropic
+profile_version: v2
+start_urls:
+- https://anthropic.com/news
+list_page:
+  item_selector: a[href*='/news/']
+  url_selector: ''
+  url_attr: href
+  title_selector: ''
+  published_selector: time
+  published_attr: datetime
+detail_page:
+  content_selector: article, main, [role='main'], .post-content, .article-content,
+    .content
+  remove_selectors:
+  - script
+  - style
+  - nav
+  - footer
+  - header
+  - .share
+  - .social
+  published_selector: time
+  published_attr: datetime
+normalization:
+  url_prefix: https://anthropic.com
+  min_content_chars: 300

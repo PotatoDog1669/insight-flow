@@ -1,0 +1,23 @@
+site_key: example_site
+profile_version: v1
+start_urls:
+  - https://example.com/blog
+list_page:
+  item_selector: "article a[href]"
+  url_selector: ""
+  url_attr: href
+  title_selector: ""
+  published_selector: "time"
+  published_attr: datetime
+detail_page:
+  content_selector: "article, main"
+  remove_selectors:
+    - script
+    - style
+    - nav
+    - footer
+  published_selector: "time"
+  published_attr: datetime
+normalization:
+  url_prefix: "https://example.com"
+  min_content_chars: 300

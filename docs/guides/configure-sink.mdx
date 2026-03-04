@@ -2,4 +2,58 @@
 title: 配置落盘目标
 ---
 # 如何配置落盘目标
-*待补充*
+
+MVP 当前推荐路径：`database -> notion_api`。  
+Obsidian/飞书保留扩展能力，但不作为本期必达链路。
+
+## 1. 配置项
+
+在项目根目录 `config.yaml` 中确认：
+
+```yaml
+sink:
+  default: notion
+  notion:
+    # 二选一：database_id / parent_page_id
+    database_id: "YOUR_NOTION_DATABASE_ID"
+    # parent_page_id: "YOUR_NOTION_PARENT_PAGE_ID"
+```
+
+同时在 `.env` 中配置：
+
+```bash
+NOTION_API_KEY=secret_xxx
+NOTION_DATABASE_ID=...
+# 可选：使用页面父级模式时填写
+NOTION_PARENT_PAGE_ID=...
+```
+
+说明：
+- 若配置 `NOTION_DATABASE_ID`：报告会作为数据库中的一条 Page 写入。
+- 若不配置 `NOTION_DATABASE_ID`，但配置 `NOTION_PARENT_PAGE_ID`：报告会作为该页面下的子页面写入。
+- 若二者同时配置，优先使用 `NOTION_DATABASE_ID`。
+- `NOTION_DATABASE_ID` / `NOTION_PARENT_PAGE_ID` 支持直接粘贴 Notion 链接，系统会自动提取 ID。
+- Notion 数据库模式下，标题列与总结列可在 Destinations 中配置：
+  - `title_property`（默认 `Name`，中文库常用 `名称`）
+  - `summary_property`（默认 `TL;DR`，用于写入“全篇总结 + 锐评”）
+
+系统会按优先级读取配置：`.env` > `config.yaml` > 代码默认值。
+
+## 2. Notion 路由行为
+
+- publish stage 目标：`database`、`notion_api`
+- `database` 写入失败：任务直接失败（硬失败）
+- `notion_api` 写入失败：任务返回 `partial_success`，数据库报告仍可查询
+
+## 3. 写入策略
+
+- 短报告：`POST /v1/pages` 直接创建并携带内容块
+- 长报告：先创建空页面，再按 100 blocks 分批追加
+
+## 4. 验证方式
+
+1. 触发一次手动采集任务
+2. 调用 `GET /api/v1/reports` 或前端 Reports 页面查看新报告
+3. 检查返回字段：
+   - `published_to` 应包含 `database`（成功时也可包含 `notion`）
+   - `publish_trace` 应包含每个 sink 的状态、错误信息与耗时

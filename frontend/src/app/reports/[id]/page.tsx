@@ -7,11 +7,17 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { ArticleCard, type Article as ArticleCardModel } from "@/components/ArticleCard";
 import { ReportDocument } from "@/components/report/ReportDocument";
-import { ReportMetaPanel } from "@/components/report/ReportMetaPanel";
 import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
 import { extractOutline, parseReportContent } from "@/lib/report-content-parser";
 import { getArticleById, getReportById, type Article as APIArticle, type Report as APIReport } from "@/lib/api";
+
+const MAX_DAILY_REPORT_EVENTS = 15;
+const REPORT_TYPE_LABELS: Record<APIReport["report_type"], string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  research: "Research",
+};
 
 function toArticleCard(article: APIArticle): ArticleCardModel {
   return {
@@ -98,6 +104,7 @@ export default function ReportDetailPage() {
 
   const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
   const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
+  const displayEventCount = report?.events.length ?? 0;
 
   const sourceCount = useMemo(() => {
     if (!report) return 0;
@@ -127,94 +134,87 @@ export default function ReportDetailPage() {
   }
 
   return (
-    <div className="max-w-4xl py-6 pb-20">
+    <div className="max-w-[1400px] w-full mx-auto py-8 sm:py-12 pb-24 px-4 lg:px-6">
       <Link
         href="/"
-        className="inline-flex items-center space-x-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-8 group"
+        className="inline-flex items-center space-x-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-10 group"
       >
         <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
         <span>Back to Discover</span>
       </Link>
 
-      <header className="mb-12 border-b border-border/50 pb-8">
-        <div className="flex items-center space-x-3 mb-4">
-          <Badge variant="secondary" className="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-none font-medium px-2.5 py-1">
-            {report.depth === "brief" ? "L1" : "L2"} • {report.time_period}
-          </Badge>
-          <div className="flex items-center space-x-1.5 text-sm text-muted-foreground">
-            <Calendar className="w-4 h-4" />
-            <span>{new Date(report.report_date).toLocaleDateString()}</span>
-          </div>
-          <div className="flex items-center space-x-1.5 text-sm text-muted-foreground">
-            <Layers className="w-4 h-4" />
-            <span>{sourceCount} Sources</span>
-          </div>
-        </div>
-
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-4">{report.title}</h1>
-
-        <p className="text-muted-foreground text-lg max-w-2xl leading-relaxed">
-          {report.tldr.length > 0 ? report.tldr[0] : "Generated report detail view."}
-        </p>
-      </header>
-
-      {hasTemplateContent ? (
-        <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)_240px]">
-          <aside className="order-2 lg:order-none lg:sticky lg:top-6 lg:self-start">
-            <ReportOutline items={outlineItems} activeId={activeHeadingId} onNavigate={handleNavigate} />
-          </aside>
-
-          <section className="order-1 lg:order-none min-w-0">
-            <ReportDocument
-              content={report.content}
-              events={report.events}
-              globalTldr={report.global_tldr}
-              topics={report.topics}
-            />
-          </section>
-
-          <aside className="order-3 lg:order-none lg:sticky lg:top-6 lg:self-start">
-            <ReportMetaPanel
-              eventCount={report.events.length}
-              sourceCount={sourceCount}
-              topics={report.topics}
-              onTopicSelect={(topicName) => {
-                const topicLower = topicName.toLowerCase();
-                const matched = parsedReport.sections.find((section) =>
-                  section.lines.some((line) => line.toLowerCase().includes(topicLower))
-                );
-                if (matched) {
-                  handleNavigate(matched.id);
-                }
-              }}
-            />
-          </aside>
-        </div>
-      ) : (
-        <div className="space-y-16">
-          {[...grouped.entries()].map(([category, categoryArticles]) => (
-            <section key={category}>
-              <div className="flex items-center space-x-3 mb-6">
-                <h2 className="text-2xl font-semibold tracking-tight capitalize">{category.replace("_", " ")}</h2>
-                <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-                  {categoryArticles.length} Updates
-                </Badge>
+      <div className={`relative flex flex-col lg:flex-row gap-10 items-start ${hasTemplateContent ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_240px]' : ''}`}>
+        <div className="order-1 min-w-0 w-full">
+          <header className="mb-14 mt-2">
+            <div className="flex flex-wrap items-center gap-3 mb-6">
+              <Badge variant="secondary" className="bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-none font-medium px-3 py-1">
+                {REPORT_TYPE_LABELS[report.report_type]} • <span className="capitalize ml-1">{report.time_period}</span>
+              </Badge>
+              <div className="flex items-center space-x-1.5 text-sm font-medium text-muted-foreground/80">
+                <Calendar className="w-4 h-4" />
+                <span>{new Date(report.report_date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}</span>
               </div>
-              <div className="space-y-5">
-                {categoryArticles.map((article, idx) => (
-                  <ArticleCard key={article.id} article={toArticleCard(article)} index={idx} />
-                ))}
+              <div className="flex items-center space-x-1.5 text-sm font-medium text-muted-foreground/80">
+                <Layers className="w-4 h-4" />
+                <span>{sourceCount} Sources</span>
               </div>
+            </div>
+
+            <h1 className="text-4xl sm:text-5xl lg:text-5xl font-extrabold tracking-tight leading-[1.15] mb-6 text-foreground">
+              {report.title}
+            </h1>
+
+            {report.tldr.length > 0 && (
+              <div className="text-xl sm:text-2xl font-medium text-foreground/70 max-w-3xl leading-relaxed border-l-4 border-blue-500/30 pl-5 py-1">
+                {report.tldr[0]}
+              </div>
+            )}
+          </header>
+
+          {hasTemplateContent ? (
+            <section className="bg-background rounded-2xl border-none sm:border sm:border-border/40 sm:shadow-sm sm:p-8 md:p-10">
+              <ReportDocument
+                content={report.content}
+                events={report.events}
+                globalTldr={report.global_tldr}
+                topics={report.topics}
+              />
             </section>
-          ))}
+          ) : (
+            <div className="space-y-16">
+              {[...grouped.entries()].map(([category, categoryArticles]) => (
+                <section key={category}>
+                  <div className="flex items-center space-x-3 mb-6">
+                    <h2 className="text-2xl font-semibold tracking-tight capitalize">{category.replace("_", " ")}</h2>
+                    <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+                      {categoryArticles.length} Updates
+                    </Badge>
+                  </div>
+                  <div className="space-y-5">
+                    {categoryArticles.map((article, idx) => (
+                      <ArticleCard key={article.id} article={toArticleCard(article)} index={idx} />
+                    ))}
+                  </div>
+                </section>
+              ))}
 
-          {articles.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground border border-dashed border-border/50 rounded-xl">
-              This report currently has no resolved article details.
+              {articles.length === 0 && (
+                <div className="text-center py-12 text-muted-foreground border border-dashed border-border/50 rounded-xl">
+                  This report currently has no resolved article details.
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
+
+        {hasTemplateContent && (
+          <aside className="order-2 lg:sticky lg:top-10 lg:self-start lg:max-h-[calc(100vh-4rem)] overflow-y-auto hidden lg:block scrollbar-none w-full lg:w-auto">
+            <div className="pl-2">
+              <ReportOutline items={outlineItems} activeId={activeHeadingId} onNavigate={handleNavigate} />
+            </div>
+          </aside>
+        )}
+      </div>
     </div>
   );
 }

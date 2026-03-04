@@ -39,7 +39,10 @@ async def update_settings(payload: UserSettingsUpdate, db: AsyncSession = Depend
     user = await _get_or_create_default_user(db)
     merged = {
         "default_time_period": payload.default_time_period or (user.settings or {}).get("default_time_period", "daily"),
-        "default_depth": payload.default_depth or (user.settings or {}).get("default_depth", "brief"),
+        "default_report_type": payload.default_report_type
+        or (user.settings or {}).get("default_report_type")
+        or _legacy_depth_to_report_type((user.settings or {}).get("default_depth"))
+        or "daily",
         "default_sink": payload.default_sink or (user.settings or {}).get("default_sink", "notion"),
     }
     user.settings = merged
@@ -59,7 +62,7 @@ async def _get_or_create_default_user(db: AsyncSession) -> User:
         id=DEFAULT_USER_ID,
         email="admin@lexmount.com",
         name="Lex Researcher",
-        settings={"default_time_period": "daily", "default_depth": "brief", "default_sink": "notion"},
+        settings={"default_time_period": "daily", "default_report_type": "daily", "default_sink": "notion"},
         created_at=now,
         updated_at=now,
     )
@@ -67,3 +70,11 @@ async def _get_or_create_default_user(db: AsyncSession) -> User:
     await db.commit()
     await db.refresh(user)
     return user
+
+
+def _legacy_depth_to_report_type(depth: str | None) -> str | None:
+    if depth == "brief":
+        return "daily"
+    if depth == "deep":
+        return "research"
+    return None

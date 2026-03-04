@@ -10,7 +10,7 @@ function toCardReport(report: APIReport): ReportCardModel {
   return {
     id: report.id,
     time_period: report.time_period,
-    depth: report.depth,
+    report_type: report.report_type,
     title: report.title,
     report_date: report.report_date,
     tldr: report.tldr,
@@ -29,7 +29,7 @@ export default function DiscoverPage() {
       setLoading(true);
       setError(null);
       try {
-        const data = await getReports({ limit: 10, page: 1 });
+        const data = await getReports({ report_type: "research", limit: 10, page: 1 });
         setReports(data.map(toCardReport));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -41,7 +41,7 @@ export default function DiscoverPage() {
   }, []);
 
   return (
-    <div className="max-w-4xl">
+    <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8 md:py-12">
       <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight mb-2">Discover</h1>

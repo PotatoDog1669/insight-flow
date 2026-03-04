@@ -94,7 +94,7 @@ const RANDOM_ICONS = [
     { icon: Globe, colors: "text-fuchsia-600 bg-fuchsia-50" }
 ];
 
-export function ReportCover({ topics, date, className = "h-40 sm:h-48 rounded-t-xl" }: ReportCoverProps) {
+export function ReportCover({ topics, date, className = "h-40 md:flex-1 md:h-full sm:h-48 rounded-t-xl" }: ReportCoverProps) {
     const { mainTopic, subTopics } = useMemo(() => {
         if (!topics || topics.length === 0) {
             return { mainTopic: BRAND_CONFIGS.default, subTopics: [BRAND_CONFIGS.openai, BRAND_CONFIGS.gemini, BRAND_CONFIGS.github] };

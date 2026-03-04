@@ -19,6 +19,13 @@ llm:
   max_tokens: 2048
   temperature: 0.3
 
+agent:
+  codex:
+    auth_mode: api_key  # api_key | oauth
+    base_url: https://api.openai.com/v1
+    model: gpt-5-codex
+    timeout_sec: 90
+
 scheduler:
   daily_collect_time: "06:30"
   weekly_report_day: "sunday"
@@ -45,5 +52,80 @@ sink:
   default: notion
   notion:
     database_id: ""
+    parent_page_id: ""
   obsidian:
     vault_path: ""
+
+routing:
+  default_profile: codex_mvp_v1
+  profiles:
+    stable_v1:
+      stages:
+        collect:
+          primary: rss
+          fallback: [blog_scraper, deepbrowse]
+        filter:
+          primary: rule
+          fallback: [llm_openai]
+        keywords:
+          primary: llm_openai
+          fallback: [rule]
+        report:
+          primary: llm_openai
+          fallback: [agent_codex]
+        publish:
+          targets: [database, notion_api]
+          on_failure:
+            database: abort
+            notion_api: continue
+      providers:
+        llm_openai:
+          type: llm
+          model: gpt-4o-mini
+          timeout_sec: 30
+          max_retry: 2
+        agent_codex:
+          type: agent
+          mode: api
+          timeout_sec: 90
+          max_retry: 1
+        deepbrowse:
+          type: browser_agent
+          timeout_sec: 60
+          max_retry: 1
+    codex_mvp_v1:
+      stages:
+        collect:
+          primary: rss
+          fallback: [blog_scraper, deepbrowse]
+        filter:
+          primary: agent_codex
+          fallback: [rule]
+        keywords:
+          primary: agent_codex
+          fallback: [rule]
+        report:
+          primary: agent_codex
+          fallback: [llm_openai]
+        publish:
+          targets: [database, notion_api]
+          on_failure:
+            database: abort
+            notion_api: continue
+      providers:
+        llm_openai:
+          type: llm
+          model: gpt-4o-mini
+          timeout_sec: 30
+          max_retry: 2
+        agent_codex:
+          type: agent
+          mode: api
+          auth_mode: api_key
+          model: gpt-5-codex
+          timeout_sec: 90
+          max_retry: 1
+        deepbrowse:
+          type: browser_agent
+          timeout_sec: 60
+          max_retry: 1

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Telescope, Activity, Library, Globe, Menu, Settings, LogOut, User, Zap } from "lucide-react";
+import { Telescope, Activity, Library, Globe, Menu, Settings, LogOut, User, Zap, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -11,6 +11,8 @@ const NAV_ITEMS = [
     { href: "/monitors", label: "Monitors", icon: Activity },
     { href: "/library", label: "Library", icon: Library },
     { href: "/sources", label: "Sources", icon: Globe },
+    { href: "/providers", label: "Providers", icon: Bot },
+    { href: "/destinations", label: "Destinations", icon: Settings },
 ];
 
 export function Sidebar() {

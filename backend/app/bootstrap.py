@@ -1,14 +1,15 @@
-"""Runtime bootstrap: seed minimal P0 data for a fresh database."""
+"""Runtime bootstrap: sync source presets into database."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
 import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from urllib.parse import urlparse
 
 import structlog
 import yaml
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session
@@ -20,6 +21,8 @@ logger = structlog.get_logger()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 PRESETS_PATH = Path(__file__).resolve().parent / "collectors" / "source_presets.yaml"
+SITE_PROFILE_DIR = Path(__file__).resolve().parent / "collectors" / "site_profiles"
+VALID_SOURCE_CATEGORIES = {"open_source", "blog", "academic", "social"}
 
 
 def _source_uuid(key: str) -> uuid.UUID:
@@ -28,30 +31,83 @@ def _source_uuid(key: str) -> uuid.UUID:
 
 def _infer_collect_method(preset: dict) -> tuple[str, dict]:
     rss_url = preset.get("rss_url")
+    collect_config = preset.get("collect_config")
     strategy = str(preset.get("strategy", ""))
+    key = str(preset.get("key") or "custom_site")
     urls = preset.get("urls") or []
     primary_url = urls[0] if urls else None
+    github_urls = [url for url in urls if isinstance(url, str) and "github.com" in url]
 
     if rss_url:
-        return "rss", {"feed_url": rss_url, "max_items": 30}
+        config: dict = {"feed_url": rss_url, "max_items": 30}
+        if isinstance(collect_config, dict):
+            config.update(collect_config)
+        if bool(preset.get("require_browser")):
+            config["require_browser"] = True
+        return "rss", config
 
-    if strategy in {"github_only", "github_plus_docs", "github_plus_site_scraper"}:
+    if strategy in {"twitter_snaplytics", "twitter_snaplytics_profile"}:
+        config: dict = {"max_items": 30}
+        if isinstance(collect_config, dict):
+            config.update(collect_config)
+        username = str(config.get("username") or "").strip()
+        if not username:
+            username = _infer_twitter_username_from_urls(urls)
+        if username:
+            config["username"] = username
+        return "twitter_snaplytics", config
+
+    if strategy == "github_only":
         return "github_trending", {"since": "daily", "limit": 10, "include_readme": True, "include_repo_tree": True}
 
-    profile = {
-        "site_key": preset.get("key", "custom_site"),
-        "start_urls": [primary_url] if primary_url else [],
-        "list_page": {"item_selector": "a[href]", "url_attr": "href"},
-        "detail_page": {
-            "content_selector": "article, main, body",
-            "remove_selectors": ["script", "style", "nav"],
-        },
-        "normalization": {
-            "url_prefix": _origin(primary_url) if primary_url else "",
-            "min_content_chars": 200,
-        },
+    config: dict = {
+        "site_key": key,
+        "max_items": 20,
+        "fallback_chain": ["blog_scraper", "deepbrowse"],
     }
-    return "blog_scraper", {"profile": profile, "max_items": 20}
+    if github_urls:
+        config["github_repo_urls"] = github_urls
+    if strategy in {"github_plus_docs", "github_plus_site_scraper"}:
+        config["fallback_chain"] = ["blog_scraper", "github_trending", "deepbrowse"]
+
+    profile_path = SITE_PROFILE_DIR / f"{key}.yaml"
+    if not profile_path.exists():
+        # 兜底：内联最小 profile，避免因为 profile 文件缺失导致启动不可用。
+        config["profile"] = {
+            "site_key": key,
+            "start_urls": [primary_url] if primary_url else [],
+            "list_page": {"item_selector": "a[href]", "url_attr": "href"},
+            "detail_page": {
+                "content_selector": "article, main, body",
+                "remove_selectors": ["script", "style", "nav"],
+            },
+            "normalization": {
+                "url_prefix": _origin(primary_url) if primary_url else "",
+                "min_content_chars": 200,
+            },
+        }
+    return "blog_scraper", config
+
+
+def _infer_twitter_username_from_urls(urls: list) -> str:
+    for raw_url in urls:
+        if not isinstance(raw_url, str):
+            continue
+        parsed = urlparse(raw_url)
+        host = parsed.netloc.lower()
+        if not host:
+            continue
+        if host.startswith("www."):
+            host = host[4:]
+        if host not in {"x.com", "twitter.com"}:
+            continue
+        path = (parsed.path or "").strip("/")
+        if not path:
+            continue
+        username = path.split("/", 1)[0].strip()
+        if username and username.lower() not in {"home", "explore", "search"}:
+            return username
+    return ""
 
 
 def _origin(url: str | None) -> str:
@@ -67,11 +123,15 @@ def _origin(url: str | None) -> str:
 
 
 async def seed_initial_data(db: AsyncSession) -> None:
-    source_count = await db.scalar(select(func.count()).select_from(Source))
-    if source_count and source_count > 0:
-        return
+    now = datetime.now(UTC)
 
-    now = datetime.now(timezone.utc)
+    # Backward compatibility: DeepSeek was previously hardcoded as open_source.
+    deepseek = await db.get(Source, _source_uuid("deepseek"))
+    if deepseek and deepseek.category == "open_source":
+        deepseek.category = "blog"
+        deepseek.updated_at = now
+        db.add(deepseek)
+        await db.commit()
 
     user = await db.get(User, DEFAULT_USER_ID)
     if user is None:
@@ -79,7 +139,7 @@ async def seed_initial_data(db: AsyncSession) -> None:
             id=DEFAULT_USER_ID,
             email="admin@lexmount.com",
             name="Lex Researcher",
-            settings={"default_time_period": "daily", "default_depth": "brief", "default_sink": "database"},
+            settings={"default_time_period": "daily", "default_report_type": "daily", "default_sink": "database"},
             created_at=now,
             updated_at=now,
         )
@@ -88,76 +148,116 @@ async def seed_initial_data(db: AsyncSession) -> None:
     presets_payload = yaml.safe_load(PRESETS_PATH.read_text(encoding="utf-8")) if PRESETS_PATH.exists() else {}
     preset_sources = presets_payload.get("sources", []) if isinstance(presets_payload, dict) else []
 
-    seeded_sources: list[Source] = []
+    synced_source_ids: list[uuid.UUID] = []
+
     for preset in preset_sources:
         if not isinstance(preset, dict):
             continue
-        if preset.get("priority") != "p0" or not preset.get("enabled", False):
-            continue
 
         key = str(preset.get("key") or "")
+        if not key:
+            continue
         company = str(preset.get("company") or key)
-        category = "blog"
-        if key in {"deepseek"}:
-            category = "open_source"
+        raw_category = str(preset.get("category") or "blog").strip().lower()
+        category = raw_category if raw_category in VALID_SOURCE_CATEGORIES else "blog"
+        enabled = bool(preset.get("enabled", False))
 
         collect_method, config = _infer_collect_method(preset)
-        source = Source(
-            id=_source_uuid(key),
-            name=company,
-            category=category,
-            collect_method=collect_method,
-            config=config,
-            enabled=True,
-            created_at=now,
-            updated_at=now,
-        )
+        source_id = _source_uuid(key)
+        source = await db.get(Source, source_id)
+        if source is None:
+            source = Source(
+                id=source_id,
+                name=company,
+                category=category,
+                collect_method=collect_method,
+                config=config,
+                enabled=enabled,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            source.name = company
+            source.category = category
+            source.collect_method = collect_method
+            source.config = config
+            source.enabled = enabled
+            source.updated_at = now
         db.add(source)
-        seeded_sources.append(source)
+        synced_source_ids.append(source.id)
 
     # 固定补充 2 个系统信息源（P0）
     system_sources = [
-        Source(
-            id=_source_uuid("github_trending_daily"),
-            name="GitHub Trending Daily",
-            category="open_source",
-            collect_method="github_trending",
-            config={"since": "daily", "limit": 10, "include_readme": True, "include_repo_tree": True},
-            enabled=True,
-            created_at=now,
-            updated_at=now,
-        ),
-        Source(
-            id=_source_uuid("huggingface_daily_papers"),
-            name="Hugging Face Daily Papers",
-            category="open_source",
-            collect_method="huggingface",
-            config={"limit": 30, "include_paper_detail": True, "include_arxiv_repos": True},
-            enabled=True,
-            created_at=now,
-            updated_at=now,
-        ),
+        {
+            "key": "github_trending_daily",
+            "name": "GitHub Trending Daily",
+            "category": "open_source",
+            "collect_method": "github_trending",
+            "config": {"since": "daily", "limit": 10, "include_readme": True, "include_repo_tree": True},
+        },
+        {
+            "key": "huggingface_daily_papers",
+            "name": "Hugging Face Daily Papers",
+            "category": "open_source",
+            "collect_method": "huggingface",
+            "config": {"limit": 30, "include_paper_detail": True, "include_arxiv_repos": True},
+        },
     ]
     for source in system_sources:
-        db.add(source)
-        seeded_sources.append(source)
+        source_id = _source_uuid(source["key"])
+        existing = await db.get(Source, source_id)
+        if existing is None:
+            existing = Source(
+                id=source_id,
+                name=source["name"],
+                category=source["category"],
+                collect_method=source["collect_method"],
+                config=source["config"],
+                enabled=True,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            existing.name = source["name"]
+            existing.category = source["category"]
+            existing.collect_method = source["collect_method"]
+            existing.config = source["config"]
+            existing.enabled = True
+            existing.updated_at = now
+        db.add(existing)
+        synced_source_ids.append(existing.id)
 
     await db.flush()
 
-    for source in seeded_sources:
+    unique_source_ids = list(dict.fromkeys(synced_source_ids))
+    subscription_additions = 0
+    for source_id in unique_source_ids:
+        existing_subscription = await db.execute(
+            select(UserSubscription.id).where(
+                UserSubscription.user_id == DEFAULT_USER_ID,
+                UserSubscription.source_id == source_id,
+            )
+        )
+        if existing_subscription.scalar_one_or_none() is not None:
+            continue
         db.add(
             UserSubscription(
                 id=uuid.uuid4(),
                 user_id=DEFAULT_USER_ID,
-                source_id=source.id,
+                source_id=source_id,
                 enabled=True,
                 custom_config={},
                 created_at=now,
             )
         )
+        subscription_additions += 1
 
     await db.commit()
-    logger.info("seeded_initial_data", sources=len(seeded_sources))
+    logger.info(
+        "seeded_initial_data",
+        sources=len(unique_source_ids),
+        subscriptions_added=subscription_additions,
+    )
 
 
 async def bootstrap_runtime_data() -> None:

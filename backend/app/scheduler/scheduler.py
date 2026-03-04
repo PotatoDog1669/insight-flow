@@ -1,17 +1,32 @@
 """定时任务调度器"""
 
+import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import select
 
 from app.config import settings
-from app.scheduler.orchestrator import Orchestrator
+from app.models.database import async_session
+from app.models.monitor import Monitor
+from app.scheduler.monitor_runner import run_monitor_once
 
 scheduler = AsyncIOScheduler()
+logger = structlog.get_logger()
 
 
 async def daily_collect_and_report():
     """每日采集 + 生成报告"""
-    orchestrator = Orchestrator(max_concurrency=settings.collector_max_concurrency)
-    await orchestrator.run_daily_pipeline()
+    async with async_session() as db:
+        result = await db.execute(
+            select(Monitor)
+            .where(Monitor.enabled.is_(True))
+            .order_by(Monitor.updated_at.desc())
+        )
+        monitors = result.scalars().all()
+        for monitor in monitors:
+            try:
+                await run_monitor_once(db=db, monitor=monitor, trigger_type="scheduled")
+            except Exception as exc:  # pragma: no cover - scheduler guard
+                logger.warning("scheduled_monitor_run_failed", monitor_id=str(monitor.id), error=str(exc))
 
 
 async def weekly_report():

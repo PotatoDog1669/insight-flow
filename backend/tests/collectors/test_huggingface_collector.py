@@ -41,7 +41,10 @@ async def test_collects_daily_papers_with_filters(monkeypatch: pytest.MonkeyPatc
     items = await collector.collect({"limit": 2, "include_paper_detail": False, "include_arxiv_repos": False})
 
     assert len(items) == 2
-    assert items[0].external_id == "2509.02523"
+    assert items[0].external_id.startswith("2509.02523#")
+    assert items[0].metadata["entity_id"] == "2509.02523"
+    assert "snapshot_date" in items[0].metadata
+    assert "snapshot_at" in items[0].metadata
     assert items[0].url == "https://huggingface.co/papers/2509.02523"
 
 

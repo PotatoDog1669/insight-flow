@@ -39,8 +39,10 @@ class HuggingFaceCollector(BaseCollector):
             "sort": config.get("sort"),
         }
         params = {k: v for k, v in params.items() if v is not None}
+        snapshot_at = datetime.now(timezone.utc)
+        snapshot_date = snapshot_at.date().isoformat()
 
-        async with httpx.AsyncClient(timeout=timeout_seconds, headers={"User-Agent": user_agent}) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True, headers={"User-Agent": user_agent}) as client:
             daily_resp = await client.get("https://huggingface.co/api/daily_papers", params=params)
             daily_resp.raise_for_status()
             daily_json = daily_resp.json() or []
@@ -68,15 +70,18 @@ class HuggingFaceCollector(BaseCollector):
                 metadata = {
                     "collector": "huggingface_daily_papers",
                     "paper_id": paper_id,
+                    "entity_id": paper_id,
+                    "snapshot_at": snapshot_at.isoformat(),
+                    "snapshot_date": snapshot_date,
                     "source_endpoint": "/api/daily_papers",
                     "authors": paper.get("authors") or detail_payload.get("authors") or [],
                     "summary_source": "hf_paper_detail" if detail_payload else "daily_papers",
                     "arxiv_repos": arxiv_repos,
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "fetched_at": snapshot_at.isoformat(),
                 }
                 items.append(
                     RawArticle(
-                        external_id=paper_id,
+                        external_id=f"{paper_id}#{snapshot_date}",
                         title=title,
                         url=f"https://huggingface.co/papers/{paper_id}",
                         content=summary or None,

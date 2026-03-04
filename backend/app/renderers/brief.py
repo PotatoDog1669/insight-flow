@@ -27,7 +27,6 @@ class BriefRenderer(BaseRenderer):
             article_ids=[item.raw.external_id for item in top_items],
             metadata={
                 "time_period": "daily",
-                "depth": "brief",
                 "report_type": "daily",
             },
         )

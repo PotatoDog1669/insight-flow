@@ -70,3 +70,7 @@ docs/.mintlify/
 
 # Local git worktrees
 .worktrees/
+
+.spec/
+test_data/
+rss-sample/

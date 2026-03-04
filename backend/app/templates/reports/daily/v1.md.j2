@@ -3,7 +3,7 @@
 ## 概览
 
 {% for section in overview | default([]) %}
-{{ section.category }}
+### {{ section.category }}
 {% for event in section.events %}
 - {% if event.first_link %}[{{ event.title }}]({{ event.first_link }}){% else %}{{ event.title }}{% endif %} #{{ event.index }}
 {% endfor %}
@@ -11,15 +11,15 @@
 {% endfor %}
 {% for event in events | default([]) %}
 ---
-## {{ event.title }} #{{ event.index }}
-{{ event.source_name }}：{{ event.one_line_tldr }}
+## {% if event.source_links %}[{{ event.title }}]({{ event.source_links[0] }}){% else %}{{ event.title }}{% endif %} #{{ event.index }}
+{{ event.one_line_tldr }}
+来源：{{ event.source_name | default("unknown", true) }}
+发布时间：{{ event.published_at | default("unknown", true) }}
+分类：{{ event.category | default("行业动态", true) }}{% if event.importance %}（importance={{ event.importance }}）{% endif %}
+关键词：{% if event.keywords %}{{ event.keywords | join(" / ") }}{% else %}(none){% endif %}
+关键指标：{% if event.metrics %}{{ event.metrics | join(" / ") }}{% else %}(none){% endif %}
+详细信息：
 {{ event.detail }}
-{% if event.keywords %}
-关键词：{% for keyword in event.keywords[:8] %}`{{ keyword }}`{% if not loop.last %}, {% endif %}{% endfor %}
-{% endif %}
-{% if event.metrics %}
-关键指标：{{ event.metrics | join(" / ") }}
-{% endif %}
 相关链接：
 {% if event.source_links %}
 {% for link in event.source_links %}

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
 from app.models.report import Report
 from app.schemas.report import ReportCustomRequest
+from app.schemas.report import ReportEvent
 from app.schemas.report import ReportFiltersResponse
 from app.schemas.report import ReportResponse
 from app.schemas.report import ReportTopic
@@ -25,7 +26,7 @@ router = APIRouter()
 async def list_reports(
     db: AsyncSession = Depends(get_db),
     time_period: str | None = Query(default=None),
-    depth: str | None = Query(default=None),
+    report_type: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     page: int = Query(default=1, ge=1),
 ):
@@ -33,8 +34,8 @@ async def list_reports(
     stmt = select(Report)
     if time_period:
         stmt = stmt.where(Report.time_period == time_period)
-    if depth:
-        stmt = stmt.where(Report.depth == depth)
+    if report_type:
+        stmt = stmt.where(Report.report_type == report_type)
     stmt = stmt.order_by(Report.report_date.desc(), Report.created_at.desc()).offset((page - 1) * limit).limit(limit)
     result = await db.execute(stmt)
     reports = result.scalars().all()
@@ -47,11 +48,11 @@ async def get_report_filters(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Report))
     reports = result.scalars().all()
     periods = sorted({report.time_period for report in reports if report.time_period})
-    depths = sorted({report.depth for report in reports if report.depth})
+    report_types = sorted({report.report_type for report in reports if report.report_type})
     categories: set[str] = set()
     for report in reports:
         categories.update((report.metadata_ or {}).get("categories", []))
-    return ReportFiltersResponse(time_periods=periods, depths=depths, categories=sorted(categories))
+    return ReportFiltersResponse(time_periods=periods, report_types=report_types, categories=sorted(categories))
 
 
 @router.get("/{report_id}", response_model=ReportResponse)
@@ -92,20 +93,33 @@ def _to_report_response(report: Report) -> ReportResponse:
     tldr = metadata.get("tldr", [])
     if not isinstance(tldr, list):
         tldr = []
+    raw_events = metadata.get("events", [])
+    events: list[ReportEvent] = []
+    if isinstance(raw_events, list):
+        for raw_event in raw_events:
+            if not isinstance(raw_event, dict):
+                continue
+            try:
+                events.append(ReportEvent.model_validate(raw_event))
+            except Exception:
+                continue
+    global_tldr = str(metadata.get("global_tldr") or "")
     return ReportResponse(
         id=report.id,
         user_id=report.user_id,
         time_period=report.time_period,  # type: ignore[arg-type]
-        depth=report.depth,  # type: ignore[arg-type]
+        report_type=report.report_type,  # type: ignore[arg-type]
         title=report.title,
         tldr=[str(item) for item in tldr],
         article_count=len(report.article_ids or []),
         topics=topics,
+        events=events,
+        global_tldr=global_tldr,
         content=report.content or "",
         article_ids=[uuid.UUID(item) if isinstance(item, str) else item for item in (report.article_ids or [])],
         published_to=report.published_to or [],
+        publish_trace=report.publish_trace or [],
         metadata=metadata,
-        report_type=str(metadata.get("report_type", "standard")),
         report_date=report.report_date if isinstance(report.report_date, date) else date.today(),
         created_at=report.created_at,
     )

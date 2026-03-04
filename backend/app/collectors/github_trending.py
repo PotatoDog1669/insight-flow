@@ -38,13 +38,15 @@ class GitHubTrendingCollector(BaseCollector):
         if github_token:
             headers["Authorization"] = f"Bearer {github_token}"
 
-        async with httpx.AsyncClient(timeout=timeout_seconds, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True, headers=headers) as client:
             params = {"since": since}
             if language:
                 params["l"] = language
             response = await client.get("https://github.com/trending", params=params)
             response.raise_for_status()
             repos = _parse_trending(response.text)[:limit]
+            snapshot_at = datetime.now(timezone.utc)
+            snapshot_date = snapshot_at.date().isoformat()
 
             items: list[RawArticle] = []
             for repo in repos:
@@ -59,6 +61,9 @@ class GitHubTrendingCollector(BaseCollector):
                 metadata = {
                     "collector": "github_trending",
                     "repo_full_name": full_name,
+                    "entity_id": full_name,
+                    "snapshot_at": snapshot_at.isoformat(),
+                    "snapshot_date": snapshot_date,
                     "stars_today": repo.get("stars_today", 0),
                     "stars_total": enrich.get("stars_total"),
                     "language": repo.get("language"),
@@ -66,11 +71,11 @@ class GitHubTrendingCollector(BaseCollector):
                     "readme_source": "github_api" if enrich.get("readme") else None,
                     "readme_chars": len(enrich.get("readme") or ""),
                     "repo_tree": enrich.get("repo_tree", []),
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "fetched_at": snapshot_at.isoformat(),
                 }
                 items.append(
                     RawArticle(
-                        external_id=full_name,
+                        external_id=f"{full_name}#{snapshot_date}",
                         title=full_name,
                         url=f"https://github.com/{full_name}",
                         content=content or None,

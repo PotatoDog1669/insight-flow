@@ -6,6 +6,8 @@ import { createSource, getSources, type Source } from "@/lib/api";
 import { Plus, X, Globe, Rss, Github, BookOpen, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { SourceDetailModal } from "@/components/SourceDetailModal";
+
 type SourceCategory = "blog" | "open_source" | "academic" | "social";
 
 function slugify(input: string): string {
@@ -71,6 +73,7 @@ function inferSourceConfig(category: SourceCategory, url: string, name: string) 
 
 export default function SourcesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +128,7 @@ export default function SourcesPage() {
   };
 
   return (
-    <div className="max-w-5xl relative">
+    <div className="mx-auto max-w-5xl relative px-4 sm:px-6 lg:px-8 py-8 md:py-12">
       <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight mb-2">Sources Dashboard</h1>
@@ -143,7 +146,17 @@ export default function SourcesPage() {
         </button>
       </header>
 
-      <SourceStatusPanel sources={sources} loading={loading} error={error} />
+      <SourceStatusPanel sources={sources} loading={loading} error={error} onSourceClick={setSelectedSource} />
+
+      {selectedSource && (
+        <SourceDetailModal
+          source={selectedSource}
+          onClose={() => setSelectedSource(null)}
+          onUpdated={() => {
+            void loadSources();
+          }}
+        />
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

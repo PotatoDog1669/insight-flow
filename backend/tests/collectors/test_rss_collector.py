@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from urllib.parse import parse_qs, urlparse
 
 from app.collectors.rss import RSSCollector
 
@@ -102,3 +103,219 @@ async def test_rss_extractor_fallback_chain(monkeypatch: pytest.MonkeyPatch) -> 
     assert len(articles) == 1
     assert "Readable body" in (articles[0].content or "")
     assert articles[0].metadata.get("extractor") == "bs4"
+
+
+@pytest.mark.asyncio
+async def test_rss_supports_arxiv_api_keyword_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    article_url = "https://arxiv.org/abs/2603.00001"
+    feed_xml = f"""
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <id>http://arxiv.org/abs/2603.00001v1</id>
+        <title>Reasoning with Agents</title>
+        <link href="{article_url}" rel="alternate" type="text/html" />
+        <summary>abstract summary</summary>
+      </entry>
+    </feed>
+    """
+    called_urls: list[str] = []
+
+    async def fake_get(self, url, *args, **kwargs):
+        raw = str(url)
+        called_urls.append(raw)
+        if raw.startswith("https://export.arxiv.org/api/query?"):
+            return DummyResponse(200, text=feed_xml)
+        if raw == article_url:
+            return DummyResponse(200, text="<html><body><article><p>paper full text</p></article></body></html>")
+        raise AssertionError(f"unexpected url: {raw}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = RSSCollector()
+    articles = await collector.collect(
+        {
+            "arxiv_api": True,
+            "feed_url": "https://export.arxiv.org/api/query",
+            "keywords": ["reasoning", "agent"],
+            "categories": ["cs.AI", "cs.LG"],
+            "max_results": 25,
+            "max_items": 5,
+        }
+    )
+
+    assert len(articles) == 1
+    assert called_urls
+    first_url = called_urls[0]
+    parsed = urlparse(first_url)
+    params = parse_qs(parsed.query)
+
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "export.arxiv.org"
+    assert parsed.path == "/api/query"
+    assert "search_query" in params
+    query = params["search_query"][0]
+    assert "all:reasoning" in query
+    assert "all:agent" in query
+    assert "cat:cs.AI" in query
+    assert "cat:cs.LG" in query
+    assert params["max_results"][0] == "25"
+    assert params["sortBy"][0] == "submittedDate"
+    assert params["sortOrder"][0] == "descending"
+
+
+@pytest.mark.asyncio
+async def test_rss_reader_fallback_when_browser_required_and_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    feed_url = "https://example.com/openai-feed.xml"
+    article_url = "https://openai.com/index/example-post"
+    reader_url = f"https://r.jina.ai/{article_url}"
+    feed_xml = f"""
+    <rss version=\"2.0\">
+      <channel>
+        <item>
+          <guid>openai-1</guid>
+          <title>OpenAI Post</title>
+          <link>{article_url}</link>
+          <description>feed summary only</description>
+        </item>
+      </channel>
+    </rss>
+    """
+    challenge_html = "<html><body>cf_chl_opt challenge-platform</body></html>"
+    reader_text = " ".join(["full"] * 500)
+
+    routes = {
+        feed_url: DummyResponse(200, text=feed_xml),
+        article_url: DummyResponse(403, text=challenge_html),
+        reader_url: DummyResponse(200, text=reader_text),
+    }
+
+    async def fake_get(self, url, *args, **kwargs):
+        raw = str(url)
+        if raw not in routes:
+            raise AssertionError(f"unexpected url: {raw}")
+        return routes[raw]
+
+    async def fake_browser_batch_extract(urls: list[str], min_content_chars: int) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr("app.collectors.rss._browser_batch_extract", fake_browser_batch_extract)
+
+    collector = RSSCollector()
+    articles = await collector.collect(
+        {
+            "feed_url": feed_url,
+            "max_items": 5,
+            "require_browser": True,
+            "reader_fallback_enabled": True,
+            "reader_base_url": "https://r.jina.ai/",
+        }
+    )
+
+    assert len(articles) == 1
+    assert articles[0].content is not None
+    assert "feed summary only" not in articles[0].content
+    assert "full full full" in articles[0].content
+    assert articles[0].metadata.get("extractor") == "jina_reader"
+
+
+@pytest.mark.asyncio
+async def test_rss_reader_mode_prefer_uses_reader_content_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    feed_url = "https://example.com/qwen-feed.xml"
+    article_url = "https://example.com/posts/reader-first"
+    reader_url = f"https://r.jina.ai/{article_url}"
+    feed_xml = f"""
+    <rss version=\"2.0\">
+      <channel>
+        <item>
+          <guid>reader-first-1</guid>
+          <title>Reader First Post</title>
+          <link>{article_url}</link>
+          <description>feed summary only</description>
+        </item>
+      </channel>
+    </rss>
+    """
+    html_text = "<html><body><article><p>HTML extractor body.</p></article></body></html>"
+    reader_text = " ".join(["reader-full-content"] * 50)
+
+    routes = {
+        feed_url: DummyResponse(200, text=feed_xml),
+        article_url: DummyResponse(200, text=html_text),
+        reader_url: DummyResponse(200, text=reader_text),
+    }
+
+    async def fake_get(self, url, *args, **kwargs):
+        raw = str(url)
+        if raw not in routes:
+            raise AssertionError(f"unexpected url: {raw}")
+        return routes[raw]
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = RSSCollector()
+    articles = await collector.collect(
+        {
+            "feed_url": feed_url,
+            "max_items": 5,
+            "reader_mode": "prefer",
+            "reader_fallback_enabled": True,
+            "reader_base_url": "https://r.jina.ai/",
+        }
+    )
+
+    assert len(articles) == 1
+    assert articles[0].content is not None
+    assert "reader-full-content" in articles[0].content
+    assert articles[0].metadata.get("extractor") == "jina_reader"
+
+
+@pytest.mark.asyncio
+async def test_rss_falls_back_to_reader_when_extracted_content_mismatches_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    feed_url = "https://example.com/nvidia-feed.xml"
+    article_url = "https://example.com/posts/true-article"
+    reader_url = f"https://r.jina.ai/{article_url}"
+    feed_xml = f"""
+    <rss version=\"2.0\">
+      <channel>
+        <item>
+          <guid>nvidia-1</guid>
+          <title>True Article About New Platform</title>
+          <link>{article_url}</link>
+          <description>summary only</description>
+        </item>
+      </channel>
+    </rss>
+    """
+    wrong_html = "<html><body><article>Other teaser card ... Read Article</article></body></html>"
+    reader_text = "True Article About New Platform " + ("detailed body " * 80)
+
+    routes = {
+        feed_url: DummyResponse(200, text=feed_xml),
+        article_url: DummyResponse(200, text=wrong_html),
+        reader_url: DummyResponse(200, text=reader_text),
+    }
+
+    async def fake_get(self, url, *args, **kwargs):
+        raw = str(url)
+        if raw not in routes:
+            raise AssertionError(f"unexpected url: {raw}")
+        return routes[raw]
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = RSSCollector()
+    articles = await collector.collect(
+        {
+            "feed_url": feed_url,
+            "max_items": 5,
+            "reader_mode": "fallback",
+            "reader_fallback_enabled": True,
+            "reader_base_url": "https://r.jina.ai/",
+        }
+    )
+
+    assert len(articles) == 1
+    assert articles[0].content is not None
+    assert "True Article About New Platform" in articles[0].content
+    assert articles[0].metadata.get("extractor") == "jina_reader"

@@ -49,7 +49,11 @@ async def test_extracts_daily_top10(monkeypatch: pytest.MonkeyPatch) -> None:
     items = await collector.collect({"since": "daily", "limit": 10, "include_readme": False, "include_repo_tree": False})
 
     assert len(items) == 10
+    assert items[0].external_id.startswith("owner0/repo0#")
     assert items[0].metadata["repo_full_name"] == "owner0/repo0"
+    assert items[0].metadata["entity_id"] == "owner0/repo0"
+    assert "snapshot_date" in items[0].metadata
+    assert "snapshot_at" in items[0].metadata
     assert items[0].metadata["stars_today"] == 1
 
 

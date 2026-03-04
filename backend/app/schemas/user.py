@@ -20,11 +20,11 @@ class UserMeResponse(BaseModel):
 
 class UserSettingsUpdate(BaseModel):
     default_time_period: Literal["daily", "weekly", "custom"] | None = None
-    default_depth: Literal["brief", "deep"] | None = None
+    default_report_type: Literal["daily", "weekly", "research"] | None = None
     default_sink: str | None = None
 
 
 class UserSettingsResponse(BaseModel):
     default_time_period: Literal["daily", "weekly", "custom"] = "daily"
-    default_depth: Literal["brief", "deep"] = "brief"
+    default_report_type: Literal["daily", "weekly", "research"] = "daily"
     default_sink: str = "notion"
