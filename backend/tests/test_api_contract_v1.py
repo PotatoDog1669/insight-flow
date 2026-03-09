@@ -15,6 +15,7 @@ def test_openapi_contains_new_dashboard_routes(client: TestClient) -> None:
     paths = response.json()["paths"]
     assert "/api/v1/sources" in paths
     assert "/api/v1/monitors" in paths
+    assert "/api/v1/monitors/ai-routing/defaults" in paths
     assert "/api/v1/monitors/{monitor_id}/run" in paths
     assert "/api/v1/monitors/{monitor_id}/runs/{run_id}/cancel" in paths
     assert "/api/v1/reports" in paths
@@ -42,6 +43,16 @@ def test_sources_contract_includes_runtime_status_fields(client: TestClient) -> 
     assert item["status"] in {"healthy", "error", "running"}
 
 
+def test_monitors_ai_routing_defaults_contract(client: TestClient) -> None:
+    response = client.get("/api/v1/monitors/ai-routing/defaults")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["profile_name"]
+    assert data["stages"]["filter"] in {"rule", "llm_openai", "agent_codex"}
+    assert data["stages"]["keywords"] in {"rule", "llm_openai", "agent_codex"}
+    assert data["stages"]["report"] in {"llm_openai", "agent_codex"}
+
+
 def test_monitors_contract_supports_list_create_and_run(client: TestClient, monkeypatch) -> None:
     list_response = client.get("/api/v1/monitors")
     assert list_response.status_code == 200
@@ -51,6 +62,7 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert "time_period" in listed[0]
     assert "report_type" in listed[0]
     assert "source_ids" in listed[0]
+    assert "ai_routing" in listed[0]
 
     create_response = client.post(
         "/api/v1/monitors",
@@ -68,6 +80,17 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
                     "keywords": ["reasoning", "agent"],
                 }
             },
+            "ai_routing": {
+                "stages": {
+                    "filter": {"primary": "agent_codex"},
+                    "keywords": {"primary": "llm_openai"},
+                    "report": {"primary": "agent_codex"},
+                },
+                "providers": {
+                    "agent_codex": {"model": "gpt-5-codex"},
+                    "llm_openai": {"model": "gpt-4o-mini"},
+                },
+            },
         },
     )
     assert create_response.status_code == 201
@@ -81,6 +104,11 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert created["source_overrides"][created["source_ids"][0]]["limit"] == 12
     assert created["source_overrides"][created["source_ids"][0]]["max_results"] == 40
     assert created["source_overrides"][created["source_ids"][0]]["keywords"] == ["reasoning", "agent"]
+    assert created["ai_routing"]["stages"]["filter"]["primary"] == "agent_codex"
+    assert created["ai_routing"]["stages"]["keywords"]["primary"] == "llm_openai"
+    assert created["ai_routing"]["stages"]["report"]["primary"] == "agent_codex"
+    assert created["ai_routing"]["providers"]["agent_codex"]["model"] == "gpt-5-codex"
+    assert created["ai_routing"]["providers"]["llm_openai"]["model"] == "gpt-4o-mini"
 
     captured: dict = {}
 
@@ -143,6 +171,11 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert captured["source_overrides"][created["source_ids"][0]]["limit"] == 12
     assert captured["source_overrides"][created["source_ids"][0]]["max_results"] == 40
     assert captured["source_overrides"][created["source_ids"][0]]["keywords"] == ["reasoning", "agent"]
+    assert captured["monitor_ai_routing"]["stages"]["filter"]["primary"] == "agent_codex"
+    assert captured["monitor_ai_routing"]["stages"]["keywords"]["primary"] == "llm_openai"
+    assert captured["monitor_ai_routing"]["stages"]["report"]["primary"] == "agent_codex"
+    assert captured["monitor_ai_routing"]["providers"]["agent_codex"]["model"] == "gpt-5-codex"
+    assert captured["monitor_ai_routing"]["providers"]["llm_openai"]["model"] == "gpt-4o-mini"
 
     logs_response = client.get(f"/api/v1/monitors/{created['id']}/logs")
     assert logs_response.status_code == 200
@@ -212,6 +245,25 @@ def test_monitors_contract_supports_run_cancel(client: TestClient, monkeypatch) 
     assert runs
     assert runs[0]["run_id"] == run_payload["run_id"]
     assert runs[0]["status"] in {"cancelling", "cancelled"}
+
+
+def test_monitors_contract_rejects_invalid_report_stage_provider(client: TestClient) -> None:
+    listed = client.get("/api/v1/monitors").json()
+    source_id = listed[0]["source_ids"][0]
+    response = client.post(
+        "/api/v1/monitors",
+        json={
+            "name": "Invalid AI routing",
+            "time_period": "daily",
+            "source_ids": [source_id],
+            "ai_routing": {
+                "stages": {
+                    "report": {"primary": "rule"},
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_reports_contract_supports_filters_endpoint(client: TestClient) -> None:
@@ -305,6 +357,8 @@ def test_providers_contract_supports_list_and_update(client: TestClient) -> None
     assert isinstance(items, list)
     assert any(item["id"] == "agent_codex" for item in items)
     assert any(item["id"] == "llm_openai" for item in items)
+    llm_default = next(item for item in items if item["id"] == "llm_openai")
+    assert llm_default["config"]["timeout_sec"] == 120
 
     update_response = client.patch(
         "/api/v1/providers/agent_codex",

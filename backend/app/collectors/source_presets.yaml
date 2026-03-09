@@ -418,12 +418,12 @@ sources:
     group: agent_infra
     company: Cursor
     urls: ["https://cursor.com/blog"]
-    rss_url: "https://cursor.com/atom.xml"
-    rss_status: provided
-    strategy: rss_then_article_fulltext
+    rss_url: null
+    rss_status: stale
+    strategy: site_profile_scraper
     priority: p1
     enabled: true
-    notes: "2026-03-02 验证 atom feed 可用"
+    notes: "2026-03-08 atom.xml 仍返回 200，但 feed 停在 2024-11；改为直接抓取 blog 首页"
 
   - key: cognition
     group: agent_infra

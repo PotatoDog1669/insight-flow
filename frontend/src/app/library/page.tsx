@@ -68,7 +68,7 @@ export default function LibraryPage() {
             key={tab.id}
             onClick={() => setTimeFilter(tab.id)}
             className={cn(
-              "pb-3 text-sm font-medium transition-colors relative whitespace-nowrap outline-none flex items-center",
+              "pb-3 px-1 text-sm font-medium transition-colors relative whitespace-nowrap outline-none flex items-center rounded-t-md focus-visible:ring-2 focus-visible:ring-ring",
               timeFilter === tab.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"
             )}
           >

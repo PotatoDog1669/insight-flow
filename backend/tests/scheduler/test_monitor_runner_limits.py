@@ -23,6 +23,16 @@ def _make_monitor(*, monitor_id: uuid.UUID, time_period: str) -> Monitor:
         source_ids=["11111111-1111-1111-1111-111111111111"],
         source_overrides={},
         destination_ids=[],
+        ai_routing={
+            "stages": {
+                "filter": {"primary": "agent_codex"},
+                "report": {"primary": "llm_openai"},
+            },
+            "providers": {
+                "agent_codex": {"model": "gpt-5-codex"},
+                "llm_openai": {"model": "gpt-4o-mini"},
+            },
+        },
         custom_schedule=None,
         enabled=True,
         last_run=None,
@@ -78,4 +88,7 @@ async def test_run_monitor_once_passes_default_source_fetch_limit_by_time_period
         await run_monitor_once(db=session, monitor=monitor, trigger_type="manual")
 
     assert captured["default_source_max_items"] == expected_limit
-
+    assert captured["monitor_ai_routing"]["stages"]["filter"]["primary"] == "agent_codex"
+    assert captured["monitor_ai_routing"]["stages"]["report"]["primary"] == "llm_openai"
+    assert captured["monitor_ai_routing"]["providers"]["agent_codex"]["model"] == "gpt-5-codex"
+    assert captured["monitor_ai_routing"]["providers"]["llm_openai"]["model"] == "gpt-4o-mini"

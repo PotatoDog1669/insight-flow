@@ -38,5 +38,6 @@ def load_routing_profile(name: str = "stable_v1") -> RoutingProfile:
         keywords=_stage(stages.get("keywords", {}), "llm_openai", ["rule"]),
         report=_stage(stages.get("report", {}), "llm_openai", ["agent_codex"]),
         publish=_publish(stages.get("publish", {})),
+        global_summary=_stage(stages.get("global_summary", stages.get("report", {})), "llm_openai", ["agent_codex"]),
     )
     return RoutingProfile(name=name, stages=parsed_stages, providers=providers if isinstance(providers, dict) else {})

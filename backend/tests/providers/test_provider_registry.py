@@ -24,9 +24,13 @@ def test_keywords_and_report_stage_use_unified_modules() -> None:
     keyword_agent = get_provider(stage="keywords", name="agent_codex")
     report_llm = get_provider(stage="report", name="llm_openai")
     report_agent = get_provider(stage="report", name="agent_codex")
+    summary_llm = get_provider(stage="global_summary", name="llm_openai")
+    summary_agent = get_provider(stage="global_summary", name="agent_codex")
 
     assert keyword_rule.__class__.__module__ == "app.providers.keywords"
     assert keyword_llm.__class__.__module__ == "app.providers.keywords"
     assert keyword_agent.__class__.__module__ == "app.providers.keywords"
     assert report_llm.__class__.__module__ == "app.providers.report"
     assert report_agent.__class__.__module__ == "app.providers.report"
+    assert summary_llm.__class__.__module__ == "app.providers.global_summary"
+    assert summary_agent.__class__.__module__ == "app.providers.global_summary"

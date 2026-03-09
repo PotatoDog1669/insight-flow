@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from app.processors.event_models import ProcessedEvent
 from app.processors.pipeline import ProcessedArticle
 
 
@@ -36,6 +37,6 @@ class BaseRenderer(ABC):
         ...
 
     @abstractmethod
-    async def render(self, articles: list[ProcessedArticle], context: RenderContext) -> Report:
+    async def render(self, articles: list[ProcessedArticle] | list[ProcessedEvent], context: RenderContext) -> Report:
         """渲染生成报告"""
         ...

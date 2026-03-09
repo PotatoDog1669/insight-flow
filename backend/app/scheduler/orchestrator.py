@@ -2,10 +2,12 @@
 
 import asyncio
 from collections import Counter
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Awaitable, Callable
 import uuid
 
+import httpx
 import structlog
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,17 +23,48 @@ from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
 from app.providers.registry import get_provider
+from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
+from app.processors.global_summary import run_global_summary_stage, run_global_summary_with_retry
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
+from app.processors.report_stage import run_report_with_retry
+from app.processors.window_filter import filter_raw_articles_by_window
 from app.renderers.base import RenderContext
-from app.renderers.daily import DailyRenderer
+from app.renderers.daily import DailyRenderer, build_daily_events, render_daily_report
 from app.routing.loader import load_routing_profile
-from app.routing.schema import StageRoute
+from app.routing.schema import PublishRoute, RoutingProfile, RoutingStages, StageRoute
 from app.sinks.registry import get_sink, normalize_sink_name
+from app.scheduler.run_debug import (
+    build_article_log_items,
+    build_candidate_cluster_log_items,
+    build_processed_article_log_items,
+    build_report_event_log_items,
+    build_section,
+    build_transparent_log_payload,
+    partition_article_log_items,
+    write_run_debug_artifact,
+)
 from app.scheduler.task_events import append_task_event
 
 logger = structlog.get_logger()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
+_AI_STAGE_ALLOWED_PROVIDERS: dict[str, set[str]] = {
+    "filter": {"rule", "llm_openai", "agent_codex"},
+    "keywords": {"rule", "llm_openai", "agent_codex"},
+    "global_summary": {"llm_openai", "agent_codex"},
+    "report": {"llm_openai", "agent_codex"},
+}
+_AI_PROVIDER_NAMES = {"rule", "llm_openai", "agent_codex"}
+_ORIGINAL_PIPELINE_PROCESS = ProcessingPipeline.process
+
+
+@dataclass(slots=True)
+class SourceProcessResult:
+    relevant_articles: list[RawArticle]
+    candidate_clusters: list[CandidateCluster]
+    processed_articles: list[ProcessedArticle]
+    stage_trace: list[dict]
+    compat_mode: bool = False
 
 
 class Orchestrator:
@@ -42,7 +75,17 @@ class Orchestrator:
         self.routing_profile = load_routing_profile(settings.routing_default_profile)
         self.pipeline = ProcessingPipeline(routing_profile=self.routing_profile.name)
         self.provider_overrides: dict[str, dict] = {}
+        self.monitor_provider_overrides: dict[str, dict] = {}
+        self.runtime_provider_overrides: dict[str, dict] = {}
+        self.runtime_routing_profile = self.routing_profile
         self.daily_renderer = DailyRenderer()
+
+    @staticmethod
+    def _error_message(exc: Exception, *, limit: int = 1000) -> str:
+        message = str(exc).strip()
+        if not message:
+            message = type(exc).__name__
+        return message[:limit]
 
     async def collect_source(
         self,
@@ -87,16 +130,122 @@ class Orchestrator:
                             "provider": candidate,
                             "status": "failed",
                             "attempt": idx + 1,
-                            "error": str(exc)[:300],
+                            "error": self._error_message(exc, limit=300),
                         }
                     )
                     if trace_emitter:
                         await trace_emitter(trace[-1])
-                    logger.warning("collect_attempt_failed", source_id=source_id, method=candidate, error=str(exc))
+                    logger.warning(
+                        "collect_attempt_failed",
+                        source_id=source_id,
+                        method=candidate,
+                        error=self._error_message(exc, limit=300),
+                    )
                     continue
             if last_exc:
                 raise last_exc
             return [], trace
+
+    async def _process_source_articles(self, raw_articles: list[RawArticle]) -> SourceProcessResult:
+        pipeline = ProcessingPipeline(routing_profile=self.runtime_routing_profile.name)
+        pipeline.set_routing_profile(self.runtime_routing_profile)
+        pipeline.set_provider_overrides(
+            {name: dict(cfg) if isinstance(cfg, dict) else {} for name, cfg in self.runtime_provider_overrides.items()}
+        )
+        filter_provider = pipeline.routing_profile.stages.filter.primary
+        keywords_provider = pipeline.routing_profile.stages.keywords.primary
+        if not raw_articles:
+            pipeline.last_stage_trace = {
+                "filter": {
+                    "provider": filter_provider,
+                    "model": pipeline._trace_model(filter_provider),
+                    "input": 0,
+                    "output": 0,
+                    "skipped": True,
+                },
+                "candidate_cluster": {
+                    "provider": "candidate_rule",
+                    "input": 0,
+                    "output": 0,
+                    "largest_cluster": 0,
+                    "skipped": True,
+                },
+                "summarizer": {
+                    "provider": keywords_provider,
+                    "model": pipeline._trace_model(keywords_provider),
+                    "input": 0,
+                    "output": 0,
+                    "compact_output": 0,
+                    "stage_concurrency": pipeline.stage_concurrency,
+                    "skipped": True,
+                },
+            }
+            return SourceProcessResult(
+                relevant_articles=[],
+                candidate_clusters=[],
+                processed_articles=[],
+                stage_trace=self._trace_dict_to_list(pipeline.last_stage_trace),
+                compat_mode=False,
+            )
+        if type(pipeline).process is not _ORIGINAL_PIPELINE_PROCESS:
+            async with self.semaphore:
+                processed = await pipeline.process(raw_articles)
+            if not pipeline.last_stage_trace:
+                pipeline.last_stage_trace = {
+                    "filter": {
+                        "provider": filter_provider,
+                        "model": pipeline._trace_model(filter_provider),
+                        "input": len(raw_articles),
+                        "output": len(raw_articles),
+                        "compat_mode": True,
+                    },
+                    "candidate_cluster": {
+                        "provider": "candidate_rule",
+                        "input": len(raw_articles),
+                        "output": 0,
+                        "largest_cluster": 0,
+                        "compat_mode": True,
+                    },
+                    "summarizer": {
+                        "provider": keywords_provider,
+                        "model": pipeline._trace_model(keywords_provider),
+                        "input": len(raw_articles),
+                        "output": len(processed),
+                        "compact_output": 0,
+                        "stage_concurrency": pipeline.stage_concurrency,
+                        "compat_mode": True,
+                    },
+                }
+            return SourceProcessResult(
+                relevant_articles=list(raw_articles),
+                candidate_clusters=[],
+                processed_articles=processed,
+                stage_trace=self._trace_dict_to_list(pipeline.last_stage_trace),
+                compat_mode=True,
+            )
+        async with self.semaphore:
+            relevant, _ = await pipeline.run_filter_stage(raw_articles)
+            clusters, _ = await pipeline.run_candidate_cluster_stage(relevant)
+            processed: list[ProcessedArticle] = []
+            if relevant:
+                processed, _ = await pipeline.run_keywords_stage(relevant)
+            else:
+                pipeline.last_stage_trace["summarizer"] = {
+                    "provider": keywords_provider,
+                    "model": pipeline._trace_model(keywords_provider),
+                    "input": 0,
+                    "output": 0,
+                    "compact_output": 0,
+                    "stage_concurrency": pipeline.stage_concurrency,
+                    "skipped": True,
+                }
+        return SourceProcessResult(
+            relevant_articles=relevant,
+            candidate_clusters=clusters,
+            processed_articles=processed,
+            stage_trace=self._trace_dict_to_list(pipeline.last_stage_trace),
+            compat_mode=False,
+        )
 
     async def run_daily_pipeline(
         self,
@@ -112,6 +261,7 @@ class Orchestrator:
         default_source_max_items: int | None = None,
         report_type: str = "daily",
         window_hours: int = 24,
+        monitor_ai_routing: dict | None = None,
     ) -> dict:
         """执行完整的每日采集编排"""
         if db is not None:
@@ -128,6 +278,7 @@ class Orchestrator:
                 default_source_max_items=default_source_max_items,
                 report_type=report_type,
                 window_hours=window_hours,
+                monitor_ai_routing=monitor_ai_routing,
             )
         async with async_session() as session:
             return await self._run_daily_pipeline(
@@ -143,6 +294,7 @@ class Orchestrator:
                 default_source_max_items=default_source_max_items,
                 report_type=report_type,
                 window_hours=window_hours,
+                monitor_ai_routing=monitor_ai_routing,
             )
 
     async def _run_daily_pipeline(
@@ -159,6 +311,7 @@ class Orchestrator:
         default_source_max_items: int | None = None,
         report_type: str = "daily",
         window_hours: int = 24,
+        monitor_ai_routing: dict | None = None,
     ) -> dict:
         pipeline_run_id = run_id or uuid.uuid4()
         normalized_window_hours = window_hours if isinstance(window_hours, int) and 1 <= window_hours <= 168 else 24
@@ -194,12 +347,18 @@ class Orchestrator:
         processed_articles: list[ProcessedArticle] = []
         persisted_article_ids: list[uuid.UUID] = []
         task_rows: dict[uuid.UUID, CollectTask] = {}
+        source_by_id: dict[uuid.UUID, Source] = {item.id: item for item in subscribed_sources}
         source_name_by_id: dict[uuid.UUID, str] = {item.id: item.name for item in subscribed_sources}
         user = await db.get(User, user_id)
         destination_settings = self._extract_destination_settings(user.settings if user else {})
         provider_overrides = self._extract_provider_settings(user.settings if user else {})
+        normalized_monitor_ai_routing = self._normalize_monitor_ai_routing(monitor_ai_routing)
+        self.runtime_routing_profile = self._build_runtime_routing_profile(normalized_monitor_ai_routing)
+        self.monitor_provider_overrides = self._extract_monitor_provider_overrides(normalized_monitor_ai_routing)
         self.provider_overrides = provider_overrides
-        self.pipeline.set_provider_overrides(provider_overrides)
+        self.runtime_provider_overrides = self._merge_provider_overrides(provider_overrides, self.monitor_provider_overrides)
+        self.pipeline.set_routing_profile(self.runtime_routing_profile)
+        self.pipeline.set_provider_overrides(self.runtime_provider_overrides)
 
         now = datetime.now(timezone.utc)
         for source in subscribed_sources:
@@ -330,18 +489,63 @@ class Orchestrator:
                 await db.commit()
 
                 for raw in raw_articles:
+                    raw.metadata.setdefault("source_id", str(source.id))
                     raw.metadata.setdefault("source_name", source.name)
                     raw.metadata.setdefault("source_category", source.category)
+                raw_items = build_article_log_items(raw_articles)
+                raw_artifact_path = write_run_debug_artifact(
+                    run_id=pipeline_run_id,
+                    source_id=source.id,
+                    filename="01_collect_raw_items.json",
+                    payload=raw_items,
+                )
+                await append_task_event(
+                    db,
+                    run_id=pipeline_run_id,
+                    monitor_id=monitor_id,
+                    task_id=task.id,
+                    source_id=source.id,
+                    stage="collect",
+                    event_type="source_collected_detail",
+                    message=f"[{source.name}] collected {len(raw_articles)} raw items",
+                    payload=build_transparent_log_payload(
+                        summary={
+                            "source_name": source.name,
+                            "provider": collect_trace[-1].get("provider") if collect_trace else source.collect_method,
+                            "collected": len(raw_articles),
+                        },
+                        sections=[
+                            build_section(
+                                title="Raw Items",
+                                section_type="article_items",
+                                items=raw_items,
+                                artifact_path=raw_artifact_path,
+                            )
+                        ],
+                    ),
+                )
+                await db.commit()
                 collected_by_source[source.id] = (raw_articles, collect_trace)
             except Exception as exc:  # pragma: no cover - defensive path
+                error_text = self._error_message(exc, limit=1000)
                 task.status = "failed"
-                task.error_message = str(exc)[:1000]
+                task.error_message = error_text
                 task.finished_at = datetime.now(timezone.utc)
                 existing_trace = task.stage_trace or []
                 task.stage_trace = [
                     *existing_trace,
-                    {"stage": "collect", "provider": source.collect_method, "status": "failed", "error": str(exc)[:300]},
-                    {"stage": "pipeline", "provider": "orchestrator", "status": "failed", "error": str(exc)[:300]},
+                    {
+                        "stage": "collect",
+                        "provider": source.collect_method,
+                        "status": "failed",
+                        "error": self._error_message(exc, limit=300),
+                    },
+                    {
+                        "stage": "pipeline",
+                        "provider": "orchestrator",
+                        "status": "failed",
+                        "error": self._error_message(exc, limit=300),
+                    },
                 ]
                 db.add(task)
                 await append_task_event(
@@ -354,7 +558,7 @@ class Orchestrator:
                     level="error",
                     event_type="source_failed",
                     message=f"[{source.name}] source task failed",
-                    payload={"error": str(exc)[:1000]},
+                    payload={"error": error_text},
                 )
                 await self._cancel_unfinished_sources_after_failure(
                     db=db,
@@ -368,6 +572,7 @@ class Orchestrator:
                 await db.commit()
                 raise
 
+        process_inputs: dict[uuid.UUID, tuple[list[RawArticle], list[dict], dict]] = {}
         for source in subscribed_sources:
             if await self._is_monitor_run_cancelling(db, monitor_task_id=monitor_task_id):
                 run_cancelled = True
@@ -378,7 +583,6 @@ class Orchestrator:
                 continue
 
             raw_articles, collect_trace = collected_by_source.get(source.id, ([], []))
-
             try:
                 filtered_raw, filter_trace = await self._filter_raw_articles_by_window(
                     db=db,
@@ -400,6 +604,23 @@ class Orchestrator:
                     },
                 ]
                 db.add(task)
+                window_kept_items, window_dropped_items = partition_article_log_items(
+                    raw_articles,
+                    filtered_raw,
+                    dropped_reason="outside_monitor_window",
+                )
+                window_kept_artifact = write_run_debug_artifact(
+                    run_id=pipeline_run_id,
+                    source_id=source.id,
+                    filename="02_window_kept.json",
+                    payload=window_kept_items,
+                )
+                window_dropped_artifact = write_run_debug_artifact(
+                    run_id=pipeline_run_id,
+                    source_id=source.id,
+                    filename="02_window_dropped.json",
+                    payload=window_dropped_items,
+                )
                 await append_task_event(
                     db,
                     run_id=pipeline_run_id,
@@ -409,7 +630,30 @@ class Orchestrator:
                     stage="window_filter",
                     event_type="window_filter_completed",
                     message=f"[{source.name}] window filter {filter_trace.get('after', 0)}/{filter_trace.get('before', 0)} kept",
-                    payload=filter_trace,
+                    payload=build_transparent_log_payload(
+                        summary={
+                            "provider": filter_trace.get("provider"),
+                            "window_hours": normalized_window_hours,
+                            "kept": len(window_kept_items),
+                            "dropped": len(window_dropped_items),
+                            "outside_window": int(filter_trace.get("outside_window", 0) or 0),
+                            "first_seen_fallback": int(filter_trace.get("first_seen_fallback", 0) or 0),
+                        },
+                        sections=[
+                            build_section(
+                                title="Kept Items",
+                                section_type="article_items",
+                                items=window_kept_items,
+                                artifact_path=window_kept_artifact,
+                            ),
+                            build_section(
+                                title="Dropped Items",
+                                section_type="article_items",
+                                items=window_dropped_items,
+                                artifact_path=window_dropped_artifact,
+                            ),
+                        ],
+                    ),
                 )
                 await append_task_event(
                     db,
@@ -437,96 +681,27 @@ class Orchestrator:
                     run_cancelled = True
                     break
 
-                processed = await self.pipeline.process(filtered_raw)
-                processing_trace = self._trace_dict_to_list(self.pipeline.last_stage_trace)
-                task.stage_trace = [
-                    *collect_trace,
-                    filter_trace,
-                    {"stage": "process", "provider": "pipeline", "status": "running", "articles": len(processed)},
-                    {"stage": "persist", "provider": "database", "status": "running"},
-                ]
-                db.add(task)
-                await append_task_event(
-                    db,
-                    run_id=pipeline_run_id,
-                    monitor_id=monitor_id,
-                    task_id=task.id,
-                    source_id=source.id,
-                    stage="process",
-                    event_type="process_completed",
-                    message=f"[{source.name}] processing completed",
-                    payload={"output": len(processed), "trace": processing_trace},
-                )
-                await append_task_event(
-                    db,
-                    run_id=pipeline_run_id,
-                    monitor_id=monitor_id,
-                    task_id=task.id,
-                    source_id=source.id,
-                    stage="persist",
-                    event_type="persist_started",
-                    message=f"[{source.name}] persisting processed articles",
-                    payload={"input": len(processed)},
-                )
-                await db.commit()
-
-                if await self._is_monitor_run_cancelling(db, monitor_task_id=monitor_task_id):
-                    await self._mark_source_cancelled(
-                        db=db,
-                        task=task,
-                        source=source,
-                        run_id=pipeline_run_id,
-                        monitor_id=monitor_id,
-                        reason=cancel_reason,
-                        stage="process",
-                    )
-                    run_cancelled = True
-                    break
-
-                article_ids = await self._persist_processed_articles(
-                    db, source, processed, processing_trace=processing_trace, trigger_type=trigger_type
-                )
-                persisted_article_ids.extend(article_ids)
-                processed_articles.extend(processed)
-
-                source.last_collected = datetime.now(timezone.utc)
-                task.status = "success"
-                task.articles_count = len(article_ids)
-                task.finished_at = datetime.now(timezone.utc)
-                task.stage_trace = [
-                    *collect_trace,
-                    filter_trace,
-                    *processing_trace,
-                    {"stage": "process", "provider": "pipeline", "status": "success", "articles": len(processed)},
-                    {"stage": "persist", "provider": "database", "status": "success", "articles": len(article_ids)},
-                ]
-                db.add(source)
-                db.add(task)
-                await append_task_event(
-                    db,
-                    run_id=pipeline_run_id,
-                    monitor_id=monitor_id,
-                    task_id=task.id,
-                    source_id=source.id,
-                    stage="persist",
-                    event_type="source_completed",
-                    message=f"[{source.name}] source task completed",
-                    payload={
-                        "articles_persisted": len(article_ids),
-                        "processed_articles": len(processed),
-                        "status": task.status,
-                    },
-                )
-                await db.commit()
+                process_inputs[source.id] = (filtered_raw, collect_trace, filter_trace)
             except Exception as exc:  # pragma: no cover - defensive path
+                error_text = self._error_message(exc, limit=1000)
                 task.status = "failed"
-                task.error_message = str(exc)[:1000]
+                task.error_message = error_text
                 task.finished_at = datetime.now(timezone.utc)
                 existing_trace = task.stage_trace or []
                 task.stage_trace = [
                     *existing_trace,
-                    {"stage": "process", "provider": "pipeline", "status": "failed", "error": str(exc)[:300]},
-                    {"stage": "pipeline", "provider": "orchestrator", "status": "failed", "error": str(exc)[:300]},
+                    {
+                        "stage": "process",
+                        "provider": "pipeline",
+                        "status": "failed",
+                        "error": self._error_message(exc, limit=300),
+                    },
+                    {
+                        "stage": "pipeline",
+                        "provider": "orchestrator",
+                        "status": "failed",
+                        "error": self._error_message(exc, limit=300),
+                    },
                 ]
                 db.add(task)
                 await append_task_event(
@@ -539,7 +714,7 @@ class Orchestrator:
                     level="error",
                     event_type="source_failed",
                     message=f"[{source.name}] source task failed",
-                    payload={"error": str(exc)[:1000]},
+                    payload={"error": error_text},
                 )
                 await self._cancel_unfinished_sources_after_failure(
                     db=db,
@@ -552,6 +727,306 @@ class Orchestrator:
                 )
                 await db.commit()
                 raise
+
+        if not run_cancelled and process_inputs:
+            process_jobs: dict[uuid.UUID, asyncio.Task[SourceProcessResult]] = {
+                source_id: asyncio.create_task(self._process_source_articles(filtered_raw))
+                for source_id, (filtered_raw, _collect_trace, _filter_trace) in process_inputs.items()
+            }
+            pending_process_jobs = dict(process_jobs)
+
+            while pending_process_jobs:
+                done, _pending = await asyncio.wait(
+                    set(pending_process_jobs.values()),
+                    timeout=1.0,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                completed_source_ids: list[uuid.UUID] = []
+                for source_id, job in list(pending_process_jobs.items()):
+                    if job in done:
+                        pending_process_jobs.pop(source_id, None)
+                        completed_source_ids.append(source_id)
+
+                if pending_process_jobs and await self._is_monitor_run_cancelling(db, monitor_task_id=monitor_task_id):
+                    run_cancelled = True
+                    for job in pending_process_jobs.values():
+                        job.cancel()
+                    await asyncio.gather(*pending_process_jobs.values(), return_exceptions=True)
+                    break
+
+                for source_id in completed_source_ids:
+                    source = source_by_id[source_id]
+                    task = task_rows[source_id]
+                    _filtered_raw, collect_trace, filter_trace = process_inputs[source_id]
+                    job = process_jobs[source_id]
+
+                    try:
+                        process_result = job.result()
+                    except Exception as exc:  # pragma: no cover - defensive path
+                        error_text = self._error_message(exc, limit=1000)
+                        task.status = "failed"
+                        task.error_message = error_text
+                        task.finished_at = datetime.now(timezone.utc)
+                        existing_trace = task.stage_trace or []
+                        task.stage_trace = [
+                            *existing_trace,
+                            {
+                                "stage": "process",
+                                "provider": "pipeline",
+                                "status": "failed",
+                                "error": self._error_message(exc, limit=300),
+                            },
+                            {
+                                "stage": "pipeline",
+                                "provider": "orchestrator",
+                                "status": "failed",
+                                "error": self._error_message(exc, limit=300),
+                            },
+                        ]
+                        db.add(task)
+                        await append_task_event(
+                            db,
+                            run_id=pipeline_run_id,
+                            monitor_id=monitor_id,
+                            task_id=task.id,
+                            source_id=source.id,
+                            stage="process",
+                            level="error",
+                            event_type="source_failed",
+                            message=f"[{source.name}] source task failed",
+                            payload={"error": error_text},
+                        )
+                        if pending_process_jobs:
+                            for pending_job in pending_process_jobs.values():
+                                pending_job.cancel()
+                            await asyncio.gather(*pending_process_jobs.values(), return_exceptions=True)
+                        await self._cancel_unfinished_sources_after_failure(
+                            db=db,
+                            task_rows=task_rows,
+                            source_name_by_id=source_name_by_id,
+                            failed_source_id=source.id,
+                            run_id=pipeline_run_id,
+                            monitor_id=monitor_id,
+                            reason=f"Run aborted because [{source.name}] processing failed",
+                        )
+                        await db.commit()
+                        raise
+
+                    relevant_raw = process_result.relevant_articles
+                    candidate_clusters = process_result.candidate_clusters
+                    processed = process_result.processed_articles
+                    processing_trace = process_result.stage_trace
+                    compat_mode = process_result.compat_mode
+                    filter_stage_trace = self._find_stage_trace(processing_trace, "filter")
+                    candidate_cluster_trace = self._find_stage_trace(processing_trace, "candidate_cluster")
+                    keywords_trace = self._find_stage_trace(processing_trace, "summarizer")
+                    task.stage_trace = [
+                        *collect_trace,
+                        filter_trace,
+                        {"stage": "process", "provider": "pipeline", "status": "running", "articles": len(processed)},
+                        {"stage": "persist", "provider": "database", "status": "running"},
+                    ]
+                    db.add(task)
+                    pipeline_kept_items, pipeline_dropped_items = partition_article_log_items(
+                        _filtered_raw,
+                        relevant_raw,
+                        dropped_reason="filtered_out_by_provider",
+                    )
+                    pipeline_kept_artifact = write_run_debug_artifact(
+                        run_id=pipeline_run_id,
+                        source_id=source.id,
+                        filename="03_pipeline_filter_kept.json",
+                        payload=pipeline_kept_items,
+                    )
+                    pipeline_dropped_artifact = write_run_debug_artifact(
+                        run_id=pipeline_run_id,
+                        source_id=source.id,
+                        filename="03_pipeline_filter_dropped.json",
+                        payload=pipeline_dropped_items,
+                    )
+                    await append_task_event(
+                        db,
+                        run_id=pipeline_run_id,
+                        monitor_id=monitor_id,
+                        task_id=task.id,
+                        source_id=source.id,
+                        stage="process",
+                        event_type="pipeline_filter_completed",
+                        message=f"[{source.name}] pipeline filter kept {len(pipeline_kept_items)}/{len(_filtered_raw)}",
+                        payload=build_transparent_log_payload(
+                            summary={
+                                "provider": filter_stage_trace.get("provider"),
+                                "model": filter_stage_trace.get("model"),
+                                "kept": len(pipeline_kept_items),
+                                "dropped": len(pipeline_dropped_items),
+                            },
+                            sections=[
+                                build_section(
+                                    title="Kept Items",
+                                    section_type="article_items",
+                                    items=pipeline_kept_items,
+                                    artifact_path=pipeline_kept_artifact,
+                                ),
+                                build_section(
+                                    title="Dropped Items",
+                                    section_type="article_items",
+                                    items=pipeline_dropped_items,
+                                    artifact_path=pipeline_dropped_artifact,
+                                ),
+                            ],
+                        ),
+                    )
+                    cluster_items = build_candidate_cluster_log_items(candidate_clusters)
+                    cluster_artifact_path = write_run_debug_artifact(
+                        run_id=pipeline_run_id,
+                        source_id=source.id,
+                        filename="04_candidate_clusters.json",
+                        payload=cluster_items,
+                    )
+                    await append_task_event(
+                        db,
+                        run_id=pipeline_run_id,
+                        monitor_id=monitor_id,
+                        task_id=task.id,
+                        source_id=source.id,
+                        stage="process",
+                        event_type="candidate_cluster_completed",
+                        message=f"[{source.name}] candidate clustering produced {len(candidate_clusters)} clusters",
+                        payload=build_transparent_log_payload(
+                            summary={
+                                "provider": candidate_cluster_trace.get("provider", "candidate_rule"),
+                                "clusters": len(candidate_clusters),
+                                "articles": len(relevant_raw),
+                                "largest_cluster": int(candidate_cluster_trace.get("largest_cluster", 0) or 0),
+                            },
+                            sections=[
+                                build_section(
+                                    title="Clusters",
+                                    section_type="candidate_clusters",
+                                    items=cluster_items,
+                                    artifact_path=cluster_artifact_path,
+                                )
+                            ],
+                        ),
+                    )
+                    processed_items = build_processed_article_log_items(processed)
+                    processed_artifact_path = write_run_debug_artifact(
+                        run_id=pipeline_run_id,
+                        source_id=source.id,
+                        filename="05_keywords_output.json",
+                        payload=processed_items,
+                    )
+                    await append_task_event(
+                        db,
+                        run_id=pipeline_run_id,
+                        monitor_id=monitor_id,
+                        task_id=task.id,
+                        source_id=source.id,
+                        stage="process",
+                        event_type="keywords_completed",
+                        message=f"[{source.name}] keywords stage produced {len(processed_items)} processed items",
+                        payload=build_transparent_log_payload(
+                            summary={
+                                "provider": keywords_trace.get("provider"),
+                                "model": keywords_trace.get("model"),
+                                "processed": len(processed_items),
+                                "compact_output": int(keywords_trace.get("compact_output", 0) or 0),
+                            },
+                            sections=[
+                                build_section(
+                                    title="Processed Items",
+                                    section_type="processed_articles",
+                                    items=processed_items,
+                                    artifact_path=processed_artifact_path,
+                                )
+                            ],
+                        ),
+                    )
+                    await append_task_event(
+                        db,
+                        run_id=pipeline_run_id,
+                        monitor_id=monitor_id,
+                        task_id=task.id,
+                        source_id=source.id,
+                        stage="process",
+                        event_type="process_completed",
+                        message=f"[{source.name}] processing completed",
+                        payload={"output": len(processed), "trace": processing_trace},
+                    )
+                    await append_task_event(
+                        db,
+                        run_id=pipeline_run_id,
+                        monitor_id=monitor_id,
+                        task_id=task.id,
+                        source_id=source.id,
+                        stage="persist",
+                        event_type="persist_started",
+                        message=f"[{source.name}] persisting processed articles",
+                        payload={"input": len(processed)},
+                    )
+                    await db.commit()
+
+                    if await self._is_monitor_run_cancelling(db, monitor_task_id=monitor_task_id):
+                        await self._mark_source_cancelled(
+                            db=db,
+                            task=task,
+                            source=source,
+                            run_id=pipeline_run_id,
+                            monitor_id=monitor_id,
+                            reason=cancel_reason,
+                            stage="process",
+                        )
+                        run_cancelled = True
+                        if pending_process_jobs:
+                            for pending_job in pending_process_jobs.values():
+                                pending_job.cancel()
+                            await asyncio.gather(*pending_process_jobs.values(), return_exceptions=True)
+                        break
+
+                    article_ids: list[uuid.UUID] = []
+                    if not compat_mode:
+                        article_ids = await self._persist_processed_articles(
+                            db,
+                            source,
+                            processed,
+                            processing_trace=processing_trace,
+                        )
+                        persisted_article_ids.extend(article_ids)
+                        processed_articles.extend(processed)
+
+                    source.last_collected = datetime.now(timezone.utc)
+                    task.status = "success"
+                    task.articles_count = len(article_ids)
+                    task.finished_at = datetime.now(timezone.utc)
+                    task.stage_trace = [
+                        *collect_trace,
+                        filter_trace,
+                        *processing_trace,
+                        {"stage": "process", "provider": "pipeline", "status": "success", "articles": len(processed)},
+                        {"stage": "persist", "provider": "database", "status": "success", "articles": len(article_ids)},
+                    ]
+                    db.add(source)
+                    db.add(task)
+                    await append_task_event(
+                        db,
+                        run_id=pipeline_run_id,
+                        monitor_id=monitor_id,
+                        task_id=task.id,
+                        source_id=source.id,
+                        stage="persist",
+                        event_type="source_completed",
+                        message=f"[{source.name}] source task completed",
+                        payload={
+                            "articles_persisted": len(article_ids),
+                            "processed_articles": len(processed),
+                            "status": task.status,
+                        },
+                    )
+                    await db.commit()
+
+                if run_cancelled:
+                    break
 
         if run_cancelled:
             await self._finalize_cancelled_run(
@@ -575,21 +1050,18 @@ class Orchestrator:
                 "window_end": window_end.isoformat(),
             }
 
-        if trigger_type == "test":
-            report_ids, publish_status, publish_reports = [], "success", []
-        else:
-            report_ids, publish_status, publish_reports = await self._render_and_persist_reports(
-                db=db,
-                user_id=user_id,
-                processed_articles=processed_articles,
-                article_ids=persisted_article_ids,
-                destination_ids=destination_ids,
-                destination_settings=destination_settings,
-                report_type=report_type,
-                run_id=pipeline_run_id,
-                monitor_id=monitor_id,
-                monitor_task_id=monitor_task_id,
-            )
+        report_ids, publish_status, publish_reports = await self._render_and_persist_reports(
+            db=db,
+            user_id=user_id,
+            processed_articles=processed_articles,
+            article_ids=persisted_article_ids,
+            destination_ids=destination_ids,
+            destination_settings=destination_settings,
+            report_type=report_type,
+            run_id=pipeline_run_id,
+            monitor_id=monitor_id,
+            monitor_task_id=monitor_task_id,
+        )
 
         source_tasks = self._build_source_tasks(subscribed_sources=subscribed_sources, task_rows=task_rows)
         if monitor_task_id is not None:
@@ -907,95 +1379,29 @@ class Orchestrator:
         window_end: datetime,
         window_hours: int,
     ) -> tuple[list[RawArticle], dict]:
-        if not raw_articles:
-            return [], {
-                "stage": "window_filter",
-                "provider": "monitor_window",
-                "status": "success",
-                "window_hours": window_hours,
-                "window_start": window_start.isoformat(),
-                "window_end": window_end.isoformat(),
-                "before": 0,
-                "after": 0,
-                "outside_window": 0,
-                "first_seen_fallback": 0,
-                "missing_event_time": 0,
-                "allow_first_seen_fallback": False,
-            }
-
-        kept: list[RawArticle] = []
-        pending_first_seen: list[RawArticle] = []
-        outside_window = 0
-        snapshot_after_window_end = 0
-        missing_event_time = 0
-        now_utc = datetime.now(timezone.utc)
         source_config = source.config if isinstance(source.config, dict) else {}
         allow_first_seen_fallback = bool(source_config.get("window_allow_first_seen_fallback", False))
 
-        for raw in raw_articles:
-            published_event_time = self._normalize_datetime(raw.published_at)
-            snapshot_event_time = None
-            if published_event_time is None:
-                metadata = raw.metadata if isinstance(raw.metadata, dict) else {}
-                snapshot_event_time = self._normalize_datetime(metadata.get("snapshot_at"))
-            event_time = published_event_time or snapshot_event_time
-            if event_time is None:
-                if allow_first_seen_fallback:
-                    pending_first_seen.append(raw)
-                else:
-                    outside_window += 1
-                    missing_event_time += 1
-                continue
-            if window_start <= event_time <= window_end:
-                kept.append(raw)
-            elif (
-                published_event_time is None
-                and snapshot_event_time is not None
-                and window_start <= snapshot_event_time <= now_utc
-            ):
-                # Sources like GitHub Trending / HF Daily use snapshot_at as event time.
-                # When run window_end is captured at run start, source collection that
-                # happens later should still be considered in-window for this run.
-                kept.append(raw)
-                snapshot_after_window_end += 1
-            else:
-                outside_window += 1
-
-        first_seen_kept = 0
-        if pending_first_seen:
-            existing_external_ids: set[str] = set()
-            candidate_ids = [item.external_id for item in pending_first_seen if item.external_id]
-            if candidate_ids:
-                stmt = select(Article.external_id).where(
-                    and_(
-                        Article.source_id == source.id,
-                        Article.external_id.in_(candidate_ids),
-                    )
+        async def _existing_external_ids(candidate_ids: list[str]) -> set[str]:
+            if not candidate_ids:
+                return set()
+            stmt = select(Article.external_id).where(
+                and_(
+                    Article.source_id == source.id,
+                    Article.external_id.in_(candidate_ids),
                 )
-                result = await db.execute(stmt)
-                existing_external_ids = {str(item) for item in result.scalars().all() if item}
+            )
+            result = await db.execute(stmt)
+            return {str(item) for item in result.scalars().all() if item}
 
-            for item in pending_first_seen:
-                if not item.external_id or item.external_id not in existing_external_ids:
-                    kept.append(item)
-                    first_seen_kept += 1
-
-        trace = {
-            "stage": "window_filter",
-            "provider": "monitor_window",
-            "status": "success",
-            "window_hours": window_hours,
-            "window_start": window_start.isoformat(),
-            "window_end": window_end.isoformat(),
-            "before": len(raw_articles),
-            "after": len(kept),
-            "outside_window": outside_window,
-            "first_seen_fallback": first_seen_kept,
-            "snapshot_after_window_end": snapshot_after_window_end,
-            "missing_event_time": missing_event_time,
-            "allow_first_seen_fallback": allow_first_seen_fallback,
-        }
-        return kept, trace
+        return await filter_raw_articles_by_window(
+            raw_articles=raw_articles,
+            window_start=window_start,
+            window_end=window_end,
+            window_hours=window_hours,
+            allow_first_seen_fallback=allow_first_seen_fallback,
+            existing_external_ids_resolver=_existing_external_ids,
+        )
 
     @staticmethod
     def _raw_event_time(raw: RawArticle) -> datetime | None:
@@ -1034,12 +1440,7 @@ class Orchestrator:
         source: Source,
         processed_articles: list[ProcessedArticle],
         processing_trace: list[dict] | None = None,
-        trigger_type: str = "scheduled",
     ) -> list[uuid.UUID]:
-        if trigger_type == "test":
-            # For test runs, do not persist to database, return dummy UUIDs
-            return [uuid.uuid4() for _ in processed_articles]
-
         article_ids: list[uuid.UUID] = []
         now = datetime.now(timezone.utc)
         for item in processed_articles:
@@ -1094,7 +1495,7 @@ class Orchestrator:
         self,
         db: AsyncSession,
         user_id: uuid.UUID,
-        processed_articles: list[ProcessedArticle],
+        processed_articles: list[ProcessedArticle] | list[ProcessedEvent],
         article_ids: list[uuid.UUID],
         destination_ids: list[str] | None = None,
         destination_settings: dict[str, dict] | None = None,
@@ -1107,46 +1508,120 @@ class Orchestrator:
             return [], "success", []
 
         today = date.today()
+        selected_report_type = _normalize_report_type(report_type)
         context = RenderContext(date=today.isoformat(), user_id=str(user_id))
-        daily_report = await self.daily_renderer.render(processed_articles, context)
+        report_events = build_daily_events(processed_articles)
+        if run_id is not None:
+            report_event_items = build_report_event_log_items(report_events)
+            report_events_artifact_path = write_run_debug_artifact(
+                run_id=run_id,
+                source_id=None,
+                filename="06_report_events.json",
+                payload=report_event_items,
+            )
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="report",
+                event_type="report_events_generated",
+                message=f"[{selected_report_type}] assembled {len(report_event_items)} report events",
+                payload=build_transparent_log_payload(
+                    summary={
+                        "events": len(report_event_items),
+                        "categories": sorted(
+                            {
+                                str(item.get("category") or "").strip()
+                                for item in report_event_items
+                                if str(item.get("category") or "").strip()
+                            }
+                        ),
+                    },
+                    sections=[
+                        build_section(
+                            title="Events",
+                            section_type="report_events",
+                            items=report_event_items,
+                            artifact_path=report_events_artifact_path,
+                        )
+                    ],
+                ),
+            )
+            await db.commit()
+        summary_route = self.runtime_routing_profile.stages.global_summary or self.runtime_routing_profile.stages.report
+        global_summary: GlobalSummary = await run_global_summary_stage(
+            events=report_events,
+            runner=lambda payload: self._run_global_summary_with_retry(summary_route, payload),
+        )
+        daily_report = render_daily_report(
+            events=report_events,
+            context=context,
+            global_summary=global_summary.global_tldr,
+        )
 
         categories = sorted(
             {
-                str(item.raw.metadata.get("source_category"))
+                category
                 for item in processed_articles
-                if item.raw.metadata.get("source_category")
+                for category in _item_source_categories(item)
             }
         )
         topic_counts: Counter[str] = Counter()
         for item in processed_articles:
-            for keyword in item.keywords[:3]:
+            for keyword in _item_keywords(item)[:3]:
                 topic_counts[keyword] += 1
         topics = [{"name": topic, "weight": weight} for topic, weight in topic_counts.most_common(10)]
-        fallback_tldr = [item.summary for item in processed_articles[:8] if item.summary]
+        fallback_tldr = [_item_summary(item) for item in processed_articles[:8] if _item_summary(item)]
         daily_metadata = dict(daily_report.metadata or {})
+        daily_metadata["global_summary_provider"] = global_summary.provider
+        daily_metadata["global_summary_fallback_used"] = global_summary.fallback_used
+        daily_metadata["global_summary_metrics"] = global_summary.prompt_metrics
+        daily_report.metadata = daily_metadata
         global_tldr = str(daily_metadata.get("global_tldr") or "").strip()
-        report_output, report_provider = await self._run_report_with_retry(
-            route=self.routing_profile.stages.report,
-            payload={
+        report_input_content = str(daily_report.content or "")
+        report_input_events = daily_metadata.get("events")
+        report_input_event_count = len(report_input_events) if isinstance(report_input_events, list) else 0
+        report_provider = "renderer_compose"
+        report_metrics = {
+            "input_content_chars": len(report_input_content),
+            "prompt_content_chars": 0,
+            "prompt_content_truncated": False,
+            "output_content_chars": len(report_input_content),
+        }
+        report_route = self.runtime_routing_profile.stages.report
+        if str(report_route.primary or "").strip():
+            report_payload = {
                 "title": daily_report.title,
                 "content": daily_report.content,
-                "events": daily_metadata.get("events", []),
+                "events": report_input_events if isinstance(report_input_events, list) else [],
                 "global_tldr": global_tldr,
-                "date": context.date,
-            },
-        )
-        generated_title = str(report_output.get("title") or "").strip()
-        generated_content = str(report_output.get("content") or "").strip()
-        generated_tldr = str(report_output.get("global_tldr") or "").strip()
-        if generated_title:
-            daily_report.title = generated_title
-        if generated_content:
-            daily_report.content = generated_content
-        if generated_tldr:
-            global_tldr = generated_tldr
-            daily_metadata["global_tldr"] = generated_tldr
-            daily_metadata["tldr"] = [generated_tldr]
+                "date": today.isoformat(),
+            }
+            try:
+                report_output, report_provider = await self._run_report_with_retry(report_route, report_payload)
+                raw_metrics = report_output.get("report_metrics")
+                if isinstance(raw_metrics, dict):
+                    report_metrics.update(raw_metrics)
+                else:
+                    report_metrics["prompt_content_chars"] = len(str(report_payload["events"]))
+
+                generated_tldr = str(report_output.get("global_tldr") or "").strip()
+                if generated_tldr:
+                    global_tldr = generated_tldr
+                    daily_metadata["global_tldr"] = generated_tldr
+                    daily_metadata["tldr"] = [generated_tldr]
+                    daily_report.metadata = daily_metadata
+            except Exception as exc:  # pragma: no cover - runtime fallback
+                logger.warning(
+                    "report_provider_fallback_to_renderer",
+                    provider=report_route.primary,
+                    error=self._error_message(exc),
+                )
+
         daily_metadata["report_provider"] = report_provider
+        daily_metadata["report_metrics"] = report_metrics
         daily_report.metadata = daily_metadata
         deep_tldr = [global_tldr] if global_tldr else fallback_tldr
         deep_categories = daily_metadata.get("categories")
@@ -1156,12 +1631,34 @@ class Orchestrator:
         if not isinstance(deep_events, list):
             deep_events = []
         article_id_strings = [str(item) for item in article_ids]
-        selected_report_type = _normalize_report_type(report_type)
         selected_time_period = "daily"
         if selected_report_type == "weekly":
             selected_time_period = "weekly"
         elif selected_report_type == "research":
             selected_time_period = "custom"
+        report_payload = {
+            "provider": report_provider,
+            "report_type": selected_report_type,
+            "input_events": report_input_event_count,
+            "output_heading3_count": _count_markdown_heading_level(str(daily_report.content or ""), 3),
+            "input_content_chars": int(report_metrics.get("input_content_chars", len(report_input_content))),
+            "prompt_content_chars": int(report_metrics.get("prompt_content_chars", 0)),
+            "prompt_content_truncated": bool(report_metrics.get("prompt_content_truncated", False)),
+            "output_content_chars": int(report_metrics.get("output_content_chars", len(str(daily_report.content or "")))),
+        }
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="report",
+                event_type="report_generated",
+                message=f"[{selected_report_type}] report generated via {report_provider}",
+                payload=report_payload,
+            )
+            await db.commit()
 
         report_rows = [
             Report(
@@ -1179,6 +1676,11 @@ class Orchestrator:
                     "report_type": selected_report_type,
                     "events": deep_events,
                     "global_tldr": global_tldr,
+                    "global_tldr_source": daily_metadata.get("global_tldr_source"),
+                    "global_summary_provider": daily_metadata.get("global_summary_provider"),
+                    "global_summary_fallback_used": daily_metadata.get("global_summary_fallback_used"),
+                    "global_summary_metrics": daily_metadata.get("global_summary_metrics"),
+                    "report_provider": report_provider,
                 },
                 published_to=[],
                 publish_trace=[],
@@ -1190,7 +1692,7 @@ class Orchestrator:
         await db.commit()
 
         rendered_reports = [daily_report]
-        publish_stage = self.routing_profile.stages.publish
+        publish_stage = self.runtime_routing_profile.stages.publish
         targets = self._resolve_publish_targets(
             default_targets=publish_stage.targets or ["database"],
             destination_ids=destination_ids,
@@ -1325,6 +1827,13 @@ class Orchestrator:
         return ordered
 
     @staticmethod
+    def _find_stage_trace(trace: list[dict], stage: str) -> dict:
+        for item in trace:
+            if str(item.get("stage") or "") == stage:
+                return item
+        return {}
+
+    @staticmethod
     def _extract_destination_settings(user_settings: dict | None) -> dict[str, dict]:
         if not isinstance(user_settings, dict):
             return {}
@@ -1360,6 +1869,145 @@ class Orchestrator:
                 continue
             normalized[str(provider_name)] = config
         return normalized
+
+    @staticmethod
+    def _normalize_monitor_ai_routing(monitor_ai_routing: dict | None) -> dict:
+        if not isinstance(monitor_ai_routing, dict):
+            return {}
+
+        normalized_stages: dict[str, dict] = {}
+        raw_stages = monitor_ai_routing.get("stages")
+        if isinstance(raw_stages, dict):
+            for stage_name, allowed in _AI_STAGE_ALLOWED_PROVIDERS.items():
+                raw_stage = raw_stages.get(stage_name)
+                if not isinstance(raw_stage, dict):
+                    continue
+                primary = str(raw_stage.get("primary") or "").strip()
+                if primary in allowed:
+                    normalized_stages[stage_name] = {"primary": primary}
+
+        normalized_providers: dict[str, dict] = {}
+        raw_providers = monitor_ai_routing.get("providers")
+        if isinstance(raw_providers, dict):
+            for raw_name, raw_config in raw_providers.items():
+                provider_name = str(raw_name).strip()
+                if provider_name not in _AI_PROVIDER_NAMES or not isinstance(raw_config, dict):
+                    continue
+
+                cleaned: dict[str, object] = {}
+                model = str(raw_config.get("model") or "").strip()
+                if model:
+                    cleaned["model"] = model
+
+                timeout = raw_config.get("timeout_sec")
+                if isinstance(timeout, str):
+                    timeout = timeout.strip()
+                    if timeout.isdigit():
+                        timeout = int(timeout)
+                if isinstance(timeout, int) and 1 <= timeout <= 600:
+                    cleaned["timeout_sec"] = timeout
+
+                max_retry = raw_config.get("max_retry")
+                if isinstance(max_retry, str):
+                    max_retry = max_retry.strip()
+                    if max_retry.isdigit():
+                        max_retry = int(max_retry)
+                if isinstance(max_retry, int) and 0 <= max_retry <= 10:
+                    cleaned["max_retry"] = max_retry
+
+                if cleaned:
+                    normalized_providers[provider_name] = cleaned
+
+        normalized: dict[str, dict] = {}
+        if normalized_stages:
+            normalized["stages"] = normalized_stages
+        if normalized_providers:
+            normalized["providers"] = normalized_providers
+        return normalized
+
+    def _build_runtime_routing_profile(self, monitor_ai_routing: dict | None) -> RoutingProfile:
+        normalized = self._normalize_monitor_ai_routing(monitor_ai_routing)
+        stages_override = normalized.get("stages", {})
+        base = self.routing_profile
+
+        stages = RoutingStages(
+            collect=StageRoute(
+                primary=base.stages.collect.primary,
+                fallback=list(base.stages.collect.fallback),
+            ),
+            filter=StageRoute(
+                primary=base.stages.filter.primary,
+                fallback=list(base.stages.filter.fallback),
+            ),
+            keywords=StageRoute(
+                primary=base.stages.keywords.primary,
+                fallback=list(base.stages.keywords.fallback),
+            ),
+            report=StageRoute(
+                primary=base.stages.report.primary,
+                fallback=list(base.stages.report.fallback),
+            ),
+            publish=PublishRoute(
+                targets=list(base.stages.publish.targets),
+                on_failure=dict(base.stages.publish.on_failure),
+            ),
+            global_summary=StageRoute(
+                primary=(
+                    base.stages.global_summary.primary
+                    if base.stages.global_summary is not None
+                    else base.stages.report.primary
+                ),
+                fallback=list(
+                    base.stages.global_summary.fallback
+                    if base.stages.global_summary is not None
+                    else base.stages.report.fallback
+                ),
+            ),
+        )
+
+        for stage_name in ("filter", "keywords", "global_summary", "report"):
+            stage_override = stages_override.get(stage_name, {})
+            primary = str(stage_override.get("primary") or "").strip()
+            if not primary:
+                continue
+            allowed = _AI_STAGE_ALLOWED_PROVIDERS.get(stage_name, set())
+            if primary not in allowed:
+                continue
+            getattr(stages, stage_name).primary = primary
+
+        return RoutingProfile(
+            name=base.name,
+            stages=stages,
+            providers={name: dict(cfg) if isinstance(cfg, dict) else {} for name, cfg in base.providers.items()},
+        )
+
+    @staticmethod
+    def _extract_monitor_provider_overrides(monitor_ai_routing: dict | None) -> dict[str, dict]:
+        if not isinstance(monitor_ai_routing, dict):
+            return {}
+        providers = monitor_ai_routing.get("providers")
+        if not isinstance(providers, dict):
+            return {}
+        normalized: dict[str, dict] = {}
+        for provider_name, config in providers.items():
+            if not isinstance(config, dict):
+                continue
+            normalized[str(provider_name)] = dict(config)
+        return normalized
+
+    @staticmethod
+    def _merge_provider_overrides(user_overrides: dict[str, dict], monitor_overrides: dict[str, dict]) -> dict[str, dict]:
+        merged: dict[str, dict] = {}
+        for provider_name, config in user_overrides.items():
+            if isinstance(config, dict):
+                merged[provider_name] = dict(config)
+        for provider_name, config in monitor_overrides.items():
+            if not isinstance(config, dict):
+                continue
+            current = merged.get(provider_name, {})
+            current.update(config)
+            merged[provider_name] = current
+        return merged
 
     @staticmethod
     def _resolve_publish_targets(
@@ -1473,33 +2121,32 @@ class Orchestrator:
         return {}
 
     async def _run_report_with_retry(self, route: StageRoute, payload: dict) -> tuple[dict, str]:
-        provider_name = str(route.primary or "").strip()
-        if not provider_name:
-            raise RuntimeError("No report provider configured")
+        return await run_report_with_retry(
+            route=route,
+            providers=self.runtime_routing_profile.providers,
+            provider_overrides=self.runtime_provider_overrides,
+            payload=payload,
+            provider_getter=get_provider,
+        )
 
-        provider = get_provider(stage="report", name=provider_name)
-        provider_config = self._provider_config(provider_name)
-        max_retry = self._max_retry(provider_config)
-        last_exc: Exception | None = None
-
-        for _ in range(max_retry + 1):
-            try:
-                result = await provider.run(payload=payload, config=provider_config)
-                return result, provider_name
-            except Exception as exc:  # pragma: no cover - retry guard
-                last_exc = exc
-                continue
-
-        if last_exc:
-            raise last_exc
-        raise RuntimeError("Report provider failed without explicit exception")
+    async def _run_global_summary_with_retry(self, route: StageRoute, payload: dict) -> tuple[dict, str]:
+        return await run_global_summary_with_retry(
+            route=route,
+            providers=self.runtime_routing_profile.providers,
+            provider_overrides=self.runtime_provider_overrides,
+            payload=payload,
+            provider_getter=get_provider,
+        )
 
     def _provider_config(self, provider_name: str) -> dict:
-        raw_config = self.routing_profile.providers.get(provider_name, {})
+        raw_config = self.runtime_routing_profile.providers.get(provider_name, {})
         merged: dict = dict(raw_config) if isinstance(raw_config, dict) else {}
-        override_config = self.provider_overrides.get(provider_name, {})
-        if isinstance(override_config, dict):
-            merged.update(override_config)
+        user_override_config = self.provider_overrides.get(provider_name, {})
+        if isinstance(user_override_config, dict):
+            merged.update(user_override_config)
+        monitor_override_config = self.monitor_provider_overrides.get(provider_name, {})
+        if isinstance(monitor_override_config, dict):
+            merged.update(monitor_override_config)
         return merged
 
     @staticmethod
@@ -1511,9 +2158,35 @@ class Orchestrator:
             value = 0
         return max(value, 0)
 
+    @staticmethod
+    def _is_timeout_exception(exc: Exception) -> bool:
+        return isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException))
+
 
 def _normalize_report_type(value: str | None) -> str:
     candidate = str(value or "").strip().lower()
     if candidate in {"daily", "weekly", "research"}:
         return candidate
     return "daily"
+
+
+def _count_markdown_heading_level(content: str, level: int) -> int:
+    normalized_level = max(int(level), 1)
+    prefix = f'{"#" * normalized_level} '
+    return sum(1 for line in str(content or "").splitlines() if line.lstrip().startswith(prefix))
+
+
+def _item_source_categories(item: ProcessedArticle | ProcessedEvent) -> list[str]:
+    if isinstance(item, ProcessedEvent):
+        category = str(item.category or "").strip()
+        return [category] if category else []
+    value = str(item.raw.metadata.get("source_category") or "").strip()
+    return [value] if value else []
+
+
+def _item_keywords(item: ProcessedArticle | ProcessedEvent) -> list[str]:
+    return [str(keyword).strip() for keyword in item.keywords if str(keyword).strip()]
+
+
+def _item_summary(item: ProcessedArticle | ProcessedEvent) -> str:
+    return str(item.summary or "").strip()

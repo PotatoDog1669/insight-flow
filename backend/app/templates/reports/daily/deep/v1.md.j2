@@ -20,6 +20,7 @@
 {% if event.metrics %}
 关键指标：{{ event.metrics | join(" / ") }}
 {% endif %}
+
 相关链接：
 {% if event.source_links %}
 {% for link in event.source_links %}

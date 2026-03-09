@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from app.providers.keywords import _extract_summary, _prepare_content_for_prompt
+from app.collectors.base import RawArticle
+from app.processors.event_models import CandidateCluster, EventExtractionInput
+from app.providers.keywords import _event_input_to_prompt_article, _extract_summary, _prepare_content_for_prompt
 
 
 def test_prepare_content_for_prompt_removes_navigation_noise() -> None:
@@ -100,3 +102,33 @@ GPT‑5.3 Instant improves conversational flow and answer quality for ChatGPT us
     summary = _extract_summary(article)
 
     assert "GPT‑5.3 Instant" in summary or "GPT-5.3 Instant" in summary
+
+
+def test_event_input_to_prompt_article_combines_primary_and_supporting_sources() -> None:
+    event_input = EventExtractionInput(
+        cluster=CandidateCluster(
+            cluster_id="cluster-1",
+            articles=[],
+        ),
+        primary_article=RawArticle(
+            external_id="primary",
+            title="OpenAI 发布 GPT-5",
+            url="https://openai.com/blog/gpt-5",
+            content="OpenAI 发布 GPT-5，并解释其推理与代码能力提升。",
+        ),
+        supporting_articles=[
+            RawArticle(
+                external_id="support-1",
+                title="GPT-5 launch coverage",
+                url="https://news.example.com/gpt-5",
+                content="媒体补充了发布时间与可用范围。",
+            )
+        ],
+    )
+
+    prompt_article = _event_input_to_prompt_article(event_input)
+
+    assert prompt_article.title == "OpenAI 发布 GPT-5"
+    assert "Primary Source" in prompt_article.content
+    assert "Supporting Source 1" in prompt_article.content
+    assert "媒体补充了发布时间与可用范围" in prompt_article.content

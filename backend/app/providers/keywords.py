@@ -60,6 +60,13 @@ _DASH_TRANSLATION = str.maketrans(
         "―": "-",
     }
 )
+VALID_EVENT_CATEGORIES = {"要闻", "模型发布", "开发生态", "产品应用", "技术与洞察", "行业动态", "前瞻与传闻", "其他"}
+
+
+class _PromptArticle:
+    def __init__(self, *, title: str, content: str):
+        self.title = title
+        self.content = content
 
 
 def _extract_keywords(article: object) -> list[str]:
@@ -113,6 +120,27 @@ def _normalize_summary(raw: object) -> str:
     return summary[:400]
 
 
+def _normalize_short_text(raw: object, *, max_len: int = 240) -> str:
+    text = _WHITESPACE_PATTERN.sub(" ", str(raw or "").strip())
+    return text[:max_len]
+
+
+def _normalize_metrics(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    metrics: list[str] = []
+    for item in raw:
+        metric = _normalize_short_text(item, max_len=64)
+        if not metric:
+            continue
+        if metric in metrics:
+            continue
+        metrics.append(metric)
+        if len(metrics) >= 12:
+            break
+    return metrics
+
+
 async def _run_ai_keywords(article: object, config: dict | None = None, prompt_scope: str = "agent") -> dict:
     title = str(getattr(article, "title", "") or "").strip()
     content = _prepare_content_for_prompt(getattr(article, "content", ""))
@@ -136,13 +164,87 @@ async def _run_ai_keywords(article: object, config: dict | None = None, prompt_s
     if not summary:
         raise ValueError("Missing summary from AI provider")
     result: dict = {"keywords": keywords, "summary": summary}
+    event_title = _normalize_short_text(output.get("event_title"), max_len=96)
+    if event_title:
+        result["event_title"] = event_title
     importance = str(output.get("importance") or "").strip().lower()
     if importance in ("high", "normal"):
         result["importance"] = importance
+    category = _normalize_short_text(output.get("category"), max_len=24)
+    if category in VALID_EVENT_CATEGORIES:
+        result["category"] = category
     detail = str(output.get("detail") or "").strip()
     if detail:
         result["detail"] = detail[:1400]
+    who = _normalize_short_text(output.get("who"), max_len=120)
+    if who:
+        result["who"] = who
+    what = _normalize_short_text(output.get("what"), max_len=180)
+    if what:
+        result["what"] = what
+    when = _normalize_short_text(output.get("when"), max_len=120)
+    if when:
+        result["when"] = when
+    metrics = _normalize_metrics(output.get("metrics"))
+    if metrics:
+        result["metrics"] = metrics
+    availability = _normalize_short_text(output.get("availability"), max_len=240)
+    if availability:
+        result["availability"] = availability
+    unknowns = _normalize_short_text(output.get("unknowns"), max_len=240)
+    if unknowns:
+        result["unknowns"] = unknowns
+    evidence = _normalize_short_text(output.get("evidence"), max_len=360)
+    if evidence:
+        result["evidence"] = evidence
     return result
+
+
+def _resolve_article_from_payload(payload: dict) -> object | None:
+    article = payload.get("article")
+    if article is not None:
+        return article
+    event_input = payload.get("event_input")
+    if event_input is None:
+        return None
+    return _event_input_to_prompt_article(event_input)
+
+
+def _event_input_to_prompt_article(event_input: object) -> _PromptArticle:
+    primary = getattr(event_input, "primary_article", None)
+    supporting_articles = getattr(event_input, "supporting_articles", []) or []
+    title = str(getattr(primary, "title", "") or "").strip()
+
+    blocks: list[str] = []
+    primary_block = _format_prompt_article_block("Primary Source", primary)
+    if primary_block:
+        blocks.append(primary_block)
+
+    for index, article in enumerate(supporting_articles[:3], start=1):
+        block = _format_prompt_article_block(f"Supporting Source {index}", article)
+        if block:
+            blocks.append(block)
+
+    return _PromptArticle(
+        title=title[:240],
+        content="\n\n".join(blocks)[:5000],
+    )
+
+
+def _format_prompt_article_block(label: str, article: object) -> str:
+    if article is None:
+        return ""
+    title = str(getattr(article, "title", "") or "").strip()
+    url = str(getattr(article, "url", "") or "").strip()
+    content = _prepare_content_for_prompt(getattr(article, "content", ""), max_chars=1600)
+    lines = [label]
+    if title:
+        lines.append(f"Title: {title}")
+    if url:
+        lines.append(f"URL: {url}")
+    if content:
+        lines.append(f"Content: {content}")
+    return "\n".join(lines).strip()
 
 
 def _prepare_content_for_prompt(raw_content: object, max_chars: int = 4000) -> str:
@@ -244,8 +346,14 @@ class RuleKeywordProvider(BaseStageProvider):
     name = "rule"
 
     async def run(self, payload: dict, config: dict | None = None) -> dict:
-        article = payload.get("article")
-        return {"keywords": _extract_keywords(article), "summary": _extract_summary(article)}
+        article = _resolve_article_from_payload(payload)
+        title = str(getattr(article, "title", "") or "").strip()
+        summary = _extract_summary(article)
+        return {
+            "keywords": _extract_keywords(article),
+            "summary": summary,
+            "event_title": title[:96] if title else summary[:96],
+        }
 
 
 @register(stage="keywords", name="llm_openai")
@@ -254,7 +362,7 @@ class LLMKeywordProvider(BaseStageProvider):
     name = "llm_openai"
 
     async def run(self, payload: dict, config: dict | None = None) -> dict:
-        article = payload.get("article")
+        article = _resolve_article_from_payload(payload)
         if article is None:
             return {"keywords": [], "summary": ""}
         return await _run_ai_keywords(article=article, config=config, prompt_scope="llm")
@@ -266,7 +374,7 @@ class AgentKeywordProvider(BaseStageProvider):
     name = "agent_codex"
 
     async def run(self, payload: dict, config: dict | None = None) -> dict:
-        article = payload.get("article")
+        article = _resolve_article_from_payload(payload)
         if article is None:
             return {"keywords": [], "summary": ""}
         return await _run_ai_keywords(article=article, config=config, prompt_scope="agent")

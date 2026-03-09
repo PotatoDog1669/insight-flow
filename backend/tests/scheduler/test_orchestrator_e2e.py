@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import select
 
 from app.collectors.base import BaseCollector, RawArticle
-from app.models import Article, CollectTask, Report, Source, User, UserSubscription
+from app.models import Article, CollectTask, Report, Source, TaskEvent, User, UserSubscription
+from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.scheduler import orchestrator as orchestrator_module
 from app.scheduler.orchestrator import Orchestrator
 from app.sinks.base import PublishResult
@@ -82,6 +83,8 @@ def _stub_ai_processing_calls(monkeypatch: pytest.MonkeyPatch):
         return {}
 
     monkeypatch.setattr("app.providers.filter.run_codex_json", _mock_run_codex_json)
+    monkeypatch.setattr("app.providers.global_summary.run_codex_json", _mock_run_codex_json)
+    monkeypatch.setattr("app.providers.global_summary.run_llm_json", _mock_run_codex_json)
     monkeypatch.setattr("app.providers.keywords.run_codex_json", _mock_run_codex_json)
     monkeypatch.setattr("app.providers.report.run_codex_json", _mock_run_codex_json)
 
@@ -133,6 +136,70 @@ async def test_orchestrator_run_daily_pipeline_persists_articles_tasks_reports(d
     assert article_count >= 1
     assert task_count >= 1
     assert report_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_emits_transparent_run_detail_events(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+    monkeypatch.setattr("app.scheduler.run_debug.RUN_ARTIFACT_DIR", tmp_path)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+        assert result["processed_articles"] >= 1
+
+    async with session_factory() as session:
+        events = (
+            await session.execute(
+                select(TaskEvent)
+                .where(
+                    TaskEvent.event_type.in_(
+                        (
+                            "source_collected_detail",
+                            "pipeline_filter_completed",
+                            "candidate_cluster_completed",
+                            "keywords_completed",
+                            "report_events_generated",
+                        )
+                    )
+                )
+                .order_by(TaskEvent.created_at.asc())
+            )
+        ).scalars().all()
+
+        event_types = [event.event_type for event in events]
+        assert "source_collected_detail" in event_types
+        assert "pipeline_filter_completed" in event_types
+        assert "candidate_cluster_completed" in event_types
+        assert "keywords_completed" in event_types
+        assert "report_events_generated" in event_types
+
+        collected_event = next(event for event in events if event.event_type == "source_collected_detail")
+        payload = collected_event.payload or {}
+        assert payload["kind"] == "transparent_log"
+        assert payload["sections"][0]["title"] == "Raw Items"
+        assert payload["sections"][0]["items"][0]["title"] == "AI breakthrough today"
+        assert payload["sections"][0]["artifact_path"].endswith("01_collect_raw_items.json")
 
 
 @pytest.mark.asyncio
@@ -485,7 +552,7 @@ async def test_orchestrator_honors_source_and_destination_overrides_with_user_de
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_applies_report_provider_output_before_publish(
+async def test_orchestrator_keeps_renderer_content_structure_before_publish(
     db_session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -514,6 +581,7 @@ async def test_orchestrator_applies_report_provider_output_before_publish(
             return {
                 "title": "Codex Rewritten Daily",
                 "content": "This deep report was rewritten by codex agent.",
+                "global_tldr": "provider-level tldr",
             }
 
     def _fake_get_provider(stage: str, name: str):
@@ -556,12 +624,13 @@ async def test_orchestrator_applies_report_provider_output_before_publish(
         result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
         assert result["status"] == "success"
 
-    assert any(title == "Codex Rewritten Daily" for title, _ in published_payloads)
-    assert any(content == "This deep report was rewritten by codex agent." for _, content in published_payloads)
+    assert all(title.startswith("AI 早报 ") for title, _ in published_payloads)
+    assert all("## 概览" in content for _, content in published_payloads)
+    assert all("This deep report was rewritten by codex agent." not in content for _, content in published_payloads)
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_merges_user_provider_overrides_into_report_provider_config(
+async def test_orchestrator_calls_report_provider_with_user_overrides(
     db_session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -601,17 +670,22 @@ async def test_orchestrator_merges_user_provider_overrides_into_report_provider_
     await _prepare_subscription_and_provider_settings()
     monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
 
-    captured_configs: list[dict] = []
+    calls = {"count": 0}
+    captured_config: dict = {}
+    captured_payload: dict = {}
 
     class _ReportProvider:
         stage = "report"
         name = "agent_codex"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
-            captured_configs.append(dict(config or {}))
+            calls["count"] += 1
+            captured_config.update(config or {})
+            captured_payload.update(payload or {})
             return {
-                "title": payload.get("title", "AI Daily Report"),
-                "content": payload.get("content", ""),
+                "title": "Codex Daily Summary",
+                "content": str(payload.get("content") or ""),
+                "global_tldr": "provider summary",
             }
 
     def _fake_get_provider(stage: str, name: str):
@@ -649,15 +723,126 @@ async def test_orchestrator_merges_user_provider_overrides_into_report_provider_
         result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
         assert result["status"] == "success"
 
-    assert captured_configs
-    assert captured_configs[0]["auth_mode"] == "oauth"
-    assert captured_configs[0]["oauth_token"] == "oauth-from-ui"
-    assert captured_configs[0]["base_url"] == "https://gmn.chuangzuoli.com"
-    assert captured_configs[0]["model"] == "gpt-5.3-codex"
+    assert calls["count"] == 1
+    assert captured_config["auth_mode"] == "oauth"
+    assert captured_config["oauth_token"] == "oauth-from-ui"
+    assert captured_config["base_url"] == "https://gmn.chuangzuoli.com"
+    assert captured_config["model"] == "gpt-5.3-codex"
+    assert captured_payload["events"]
+
+    async with session_factory() as session:
+        report = (
+            await session.execute(
+                select(Report)
+                .where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+                .order_by(Report.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert (report.metadata_ or {})["global_tldr"] == "provider summary"
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_report_stage_retries_and_raises_after_exhausted(
+async def test_orchestrator_generates_global_summary_before_report_rewrite(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    captured_payloads: dict[str, dict] = {}
+
+    class _GlobalSummaryProvider:
+        stage = "global_summary"
+        name = "llm_openai"
+
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            captured_payloads["global_summary"] = dict(payload)
+            return {
+                "global_tldr": "先生成的全局摘要。",
+                "summary_metrics": {"input_event_count": len(payload.get("events") or []), "output_chars": 9},
+            }
+
+    class _ReportProvider:
+        stage = "report"
+        name = "agent_codex"
+
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            captured_payloads["report"] = dict(payload)
+            return {
+                "title": str(payload.get("title") or "AI Daily Report"),
+                "content": str(payload.get("content") or ""),
+                "global_tldr": str(payload.get("global_tldr") or ""),
+            }
+
+    def _fake_get_provider(stage: str, name: str):
+        if stage == "global_summary":
+            return _GlobalSummaryProvider()
+        if stage == "report":
+            return _ReportProvider()
+        raise KeyError(name)
+
+    monkeypatch.setattr(orchestrator_module, "get_provider", _fake_get_provider)
+
+    class _DatabaseSink:
+        name = "database"
+
+        async def publish(self, report, config):
+            return PublishResult(success=True, sink_name=self.name, url="database://ok")
+
+    monkeypatch.setattr(orchestrator_module, "get_sink", lambda target: _DatabaseSink())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    if orchestrator.routing_profile.stages.global_summary is not None:
+        orchestrator.routing_profile.stages.global_summary.primary = "llm_openai"
+        orchestrator.routing_profile.stages.global_summary.fallback = []
+    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.fallback = []
+    orchestrator.routing_profile.stages.publish.targets = ["database"]
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+        assert result["status"] == "success"
+
+    assert captured_payloads["global_summary"]["events"]
+    assert captured_payloads["report"]["global_tldr"] == "先生成的全局摘要。"
+
+    async with session_factory() as session:
+        report = (
+            await session.execute(
+                select(Report)
+                .where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+                .order_by(Report.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        metadata = report.metadata_ or {}
+        assert metadata["global_tldr"] == "先生成的全局摘要。"
+        assert metadata["global_summary_provider"] == "llm_openai"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_report_stage_falls_back_to_renderer_when_provider_fails(
     db_session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -701,11 +886,186 @@ async def test_orchestrator_report_stage_retries_and_raises_after_exhausted(
     orchestrator.routing_profile.providers["agent_codex"] = {"max_retry": 1}
 
     async with session_factory() as session:
-        with pytest.raises(RuntimeError, match="report provider down"):
-            await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+        result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+        assert result["status"] in {"success", "partial_success"}
+        assert result["reports_created"] == 1
 
-    # Initial call + 1 retry. No fallback to secondary provider.
     assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_report_timeout_falls_back_to_renderer(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    attempts = {"count": 0}
+
+    class _TimeoutReportProvider:
+        stage = "report"
+        name = "agent_codex"
+
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["count"] += 1
+            raise TimeoutError("ReadTimeout")
+
+    def _fake_get_provider(stage: str, name: str):
+        if stage == "report" and name == "agent_codex":
+            return _TimeoutReportProvider()
+        raise KeyError(name)
+
+    monkeypatch.setattr(orchestrator_module, "get_provider", _fake_get_provider)
+
+    class _DatabaseSink:
+        name = "database"
+
+        async def publish(self, report, config):
+            return PublishResult(success=True, sink_name=self.name, url="database://ok")
+
+    monkeypatch.setattr(orchestrator_module, "get_sink", lambda target: _DatabaseSink())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.publish.targets = ["database"]
+    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.fallback = []
+    orchestrator.routing_profile.providers["agent_codex"] = {"max_retry": 3}
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+        assert result["status"] == "success"
+        assert result["reports_created"] == 1
+
+    assert attempts["count"] == 4
+
+    async with session_factory() as session:
+        timeout_event = (
+            await session.execute(
+                select(TaskEvent)
+                .where(TaskEvent.stage == "report", TaskEvent.event_type == "report_provider_timeout")
+                .order_by(TaskEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert timeout_event is None
+
+        report_generated_event = (
+            await session.execute(
+                select(TaskEvent)
+                .where(TaskEvent.stage == "report", TaskEvent.event_type == "report_generated")
+                .order_by(TaskEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        generated_payload = report_generated_event.payload or {}
+        assert generated_payload["provider"] == "renderer_compose"
+        assert generated_payload["prompt_content_chars"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_records_report_stage_metrics_event(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+    attempts = {"count": 0}
+
+    class _ReportProvider:
+        stage = "report"
+        name = "agent_codex"
+
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["count"] += 1
+            return {
+                "title": "Condensed Daily",
+                "content": "### Event 1\n- compact item",
+                "global_tldr": "condensed",
+            }
+
+    def _fake_get_provider(stage: str, name: str):
+        if stage == "report" and name == "agent_codex":
+            return _ReportProvider()
+        raise KeyError(name)
+
+    monkeypatch.setattr(orchestrator_module, "get_provider", _fake_get_provider)
+
+    class _DatabaseSink:
+        name = "database"
+
+        async def publish(self, report, config):
+            return PublishResult(success=True, sink_name=self.name, url="database://ok")
+
+    monkeypatch.setattr(orchestrator_module, "get_sink", lambda target: _DatabaseSink())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.publish.targets = ["database"]
+    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.fallback = []
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+        assert result["status"] == "success"
+    assert attempts["count"] == 1
+
+    async with session_factory() as session:
+        events = (
+            await session.execute(
+                select(TaskEvent)
+                .where(TaskEvent.stage == "report", TaskEvent.event_type == "report_generated")
+                .order_by(TaskEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().all()
+        assert events
+        payload = events[0].payload or {}
+        assert payload["provider"] == "agent_codex"
+        assert payload["input_content_chars"] == payload["output_content_chars"]
+        assert payload["input_events"] >= 1
+        assert "output_heading3_count" in payload
+        assert payload["prompt_content_chars"] > 0
+
+        report = (
+            await session.execute(
+                select(Report)
+                .where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+                .order_by(Report.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert (report.metadata_ or {})["global_tldr"] == "condensed"
 
 
 @pytest.mark.asyncio
@@ -780,10 +1140,180 @@ async def test_orchestrator_collects_sources_concurrently_before_processing(
         result = await orchestrator.run_daily_pipeline(
             db=session,
             user_id=DEFAULT_USER_ID,
-            trigger_type="test",
+            trigger_type="manual",
             source_ids=[SOURCE_ID, SECOND_SOURCE_ID],
         )
         assert result["status"] == "success"
         assert result["sources"] == 2
 
     assert in_flight["max"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_processes_sources_concurrently_after_collection(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_two_sources() -> None:
+        async with session_factory() as session:
+            session.add(
+                Source(
+                    id=SECOND_SOURCE_ID,
+                    name="Second Source",
+                    category="blog",
+                    collect_method="rss",
+                    config={"feed_url": "https://example.com/second"},
+                    enabled=True,
+                )
+            )
+            session.add_all(
+                [
+                    UserSubscription(
+                        user_id=DEFAULT_USER_ID,
+                        source_id=SOURCE_ID,
+                        enabled=True,
+                        custom_config={},
+                    ),
+                    UserSubscription(
+                        user_id=DEFAULT_USER_ID,
+                        source_id=SECOND_SOURCE_ID,
+                        enabled=True,
+                        custom_config={},
+                    ),
+                ]
+            )
+            await session.commit()
+
+    await _prepare_two_sources()
+
+    class _FastCollector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "fast"
+
+        @property
+        def category(self) -> str:
+            return "blog"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            marker = str(config.get("feed_url") or "unknown")
+            return [
+                RawArticle(
+                    external_id=f"{marker}-ext-1",
+                    title=f"title:{marker}",
+                    url=f"{marker}/1",
+                    content=f"full content from {marker}",
+                    published_at=datetime.now(timezone.utc),
+                )
+            ]
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _FastCollector())
+
+    in_flight = {"count": 0, "max": 0}
+
+    async def _slow_process(self: ProcessingPipeline, articles: list[RawArticle]) -> list[ProcessedArticle]:
+        in_flight["count"] += 1
+        in_flight["max"] = max(in_flight["max"], in_flight["count"])
+        try:
+            await asyncio.sleep(0.05)
+            return [
+                ProcessedArticle(
+                    raw=item,
+                    summary="summary",
+                    keywords=["ai"],
+                )
+                for item in articles
+            ]
+        finally:
+            in_flight["count"] -= 1
+
+    monkeypatch.setattr(ProcessingPipeline, "process", _slow_process)
+
+    orchestrator = Orchestrator(max_concurrency=4)
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            source_ids=[SOURCE_ID, SECOND_SOURCE_ID],
+            window_hours=24,
+        )
+        assert result["status"] == "success"
+        assert result["sources"] == 2
+
+    assert in_flight["max"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_records_exception_type_when_message_is_empty(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+
+    class _Collector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "collector"
+
+        @property
+        def category(self) -> str:
+            return "blog"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            return [
+                RawArticle(
+                    external_id="timeout-ext-1",
+                    title="timeout article",
+                    url="https://example.com/timeout",
+                    content="content",
+                    published_at=datetime.now(timezone.utc),
+                )
+            ]
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _Collector())
+
+    async def _raise_empty_timeout(self: ProcessingPipeline, articles: list[RawArticle]) -> list[ProcessedArticle]:
+        raise TimeoutError()
+
+    monkeypatch.setattr(ProcessingPipeline, "process", _raise_empty_timeout)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    async with session_factory() as session:
+        with pytest.raises(TimeoutError):
+            await orchestrator.run_daily_pipeline(
+                db=session,
+                user_id=DEFAULT_USER_ID,
+                trigger_type="manual",
+                source_ids=[SOURCE_ID],
+                window_hours=24,
+            )
+
+    async with session_factory() as session:
+        task = (
+            await session.execute(
+                select(CollectTask)
+                .where(CollectTask.source_id == SOURCE_ID)
+                .order_by(CollectTask.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert task.status == "failed"
+        assert task.error_message
+        assert "TimeoutError" in task.error_message

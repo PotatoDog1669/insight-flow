@@ -9,7 +9,7 @@ import { ArticleCard, type Article as ArticleCardModel } from "@/components/Arti
 import { ReportDocument } from "@/components/report/ReportDocument";
 import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
-import { extractOutline, parseReportContent } from "@/lib/report-content-parser";
+import { canonicalizeReportContent, extractOutline, parseReportContent } from "@/lib/report-content-parser";
 import { getArticleById, getReportById, type Article as APIArticle, type Report as APIReport } from "@/lib/api";
 
 const MAX_DAILY_REPORT_EVENTS = 15;
@@ -52,8 +52,13 @@ export default function ReportDetailPage() {
         const reportData = await getReportById(id);
         if (cancelled) return;
         setReport(reportData);
-        const parsedReport = parseReportContent(reportData.content ?? "");
-        const canUseTemplateContent = Boolean(reportData.content?.trim() && parsedReport.sections.length > 0);
+        const effectiveContent = canonicalizeReportContent(
+          reportData.content ?? "",
+          reportData.events ?? [],
+          reportData.global_tldr ?? ""
+        );
+        const parsedReport = parseReportContent(effectiveContent);
+        const canUseTemplateContent = Boolean(effectiveContent.trim() && parsedReport.sections.length > 0);
 
         if (!canUseTemplateContent) {
           const articleData = await Promise.all(
@@ -96,15 +101,23 @@ export default function ReportDetailPage() {
     return groups;
   }, [articles]);
 
-  const parsedReport = useMemo(() => {
-    if (!report) return { sections: [] };
-    return parseReportContent(report.content ?? "");
+  const effectiveReportContent = useMemo(() => {
+    if (!report) return "";
+    return canonicalizeReportContent(report.content ?? "", report.events, report.global_tldr ?? "");
   }, [report]);
-  const hasTemplateContent = Boolean(report?.content?.trim() && parsedReport.sections.length > 0);
+  const parsedReport = useMemo(() => parseReportContent(effectiveReportContent), [effectiveReportContent]);
+  const hasTemplateContent = Boolean(effectiveReportContent.trim() && parsedReport.sections.length > 0);
 
   const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
   const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
   const displayEventCount = report?.events.length ?? 0;
+  const displayTitle = useMemo(() => {
+    if (!report) return "";
+    if (report.report_type === "daily" && report.report_date) {
+      return `AI 早报 ${report.report_date}`;
+    }
+    return report.title;
+  }, [report]);
 
   const sourceCount = useMemo(() => {
     if (!report) return 0;
@@ -143,12 +156,12 @@ export default function ReportDetailPage() {
         <span>Back to Discover</span>
       </Link>
 
-      <div className={`relative flex flex-col lg:flex-row gap-10 items-start ${hasTemplateContent ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_240px]' : ''}`}>
+      <div className={`relative flex flex-col gap-10 items-start ${hasTemplateContent ? 'lg:pr-[210px]' : ''}`}>
         <div className="order-1 min-w-0 w-full">
           <header className="mb-14 mt-2">
             <div className="flex flex-wrap items-center gap-3 mb-6">
               <Badge variant="secondary" className="bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-none font-medium px-3 py-1">
-                {REPORT_TYPE_LABELS[report.report_type]} • <span className="capitalize ml-1">{report.time_period}</span>
+                {REPORT_TYPE_LABELS[report.report_type]}
               </Badge>
               <div className="flex items-center space-x-1.5 text-sm font-medium text-muted-foreground/80">
                 <Calendar className="w-4 h-4" />
@@ -161,10 +174,10 @@ export default function ReportDetailPage() {
             </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-5xl font-extrabold tracking-tight leading-[1.15] mb-6 text-foreground">
-              {report.title}
+              {displayTitle}
             </h1>
 
-            {report.tldr.length > 0 && (
+            {report.tldr.length > 0 && !hasTemplateContent && (
               <div className="text-xl sm:text-2xl font-medium text-foreground/70 max-w-3xl leading-relaxed border-l-4 border-blue-500/30 pl-5 py-1">
                 {report.tldr[0]}
               </div>
@@ -174,7 +187,7 @@ export default function ReportDetailPage() {
           {hasTemplateContent ? (
             <section className="bg-background rounded-2xl border-none sm:border sm:border-border/40 sm:shadow-sm sm:p-8 md:p-10">
               <ReportDocument
-                content={report.content}
+                content={effectiveReportContent}
                 events={report.events}
                 globalTldr={report.global_tldr}
                 topics={report.topics}
@@ -208,8 +221,8 @@ export default function ReportDetailPage() {
         </div>
 
         {hasTemplateContent && (
-          <aside className="order-2 lg:sticky lg:top-10 lg:self-start lg:max-h-[calc(100vh-4rem)] overflow-y-auto hidden lg:block scrollbar-none w-full lg:w-auto">
-            <div className="pl-2">
+          <aside className="hidden lg:block lg:fixed lg:top-24 lg:right-4 lg:w-[220px] lg:max-h-[calc(100vh-7rem)] overflow-y-auto scrollbar-none">
+            <div className="pl-2 pr-1">
               <ReportOutline items={outlineItems} activeId={activeHeadingId} onNavigate={handleNavigate} />
             </div>
           </aside>

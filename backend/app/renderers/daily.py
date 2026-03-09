@@ -6,11 +6,14 @@ from collections import Counter
 from datetime import datetime
 import re
 
+from app.processors.content_quality_gate import apply_event_content_quality_gate
+from app.processors.event_aggregator import aggregate_events
+from app.processors.event_models import ProcessedEvent
 from app.processors.pipeline import ProcessedArticle
 from app.renderers.base import BaseRenderer, RenderContext, Report
 from app.template_engine.renderer import render_report_template
 
-CATEGORY_ORDER = ["要闻", "模型发布", "开发生态", "产品应用", "技术与洞察", "行业动态", "前瞻与传闻"]
+CATEGORY_ORDER = ["要闻", "模型发布", "开发生态", "产品应用", "技术与洞察", "行业动态", "前瞻与传闻", "其他"]
 
 _CATEGORY_KEYWORDS = {
     "前瞻与传闻": (
@@ -96,7 +99,10 @@ _CATEGORY_KEYWORDS = {
 _METRIC_PATTERN = re.compile(r"\b\d+(?:\.\d+)?(?:%|x|k|m|b|亿|万)?\b", re.IGNORECASE)
 _MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+_TITLE_END_PUNCT_PATTERN = re.compile(r"[。！？!?；;:：、，,.…]+$")
+_TITLE_SPLIT_PATTERN = re.compile(r"[，,；;。!?！？]")
 _MODEL_SIGNAL_PATTERN = re.compile(r"\b(gpt|gemini|claude|llama|qwen|mistral|deepseek)\b", re.IGNORECASE)
+_MODEL_VERSION_PATTERN = re.compile(r"\b(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?|\d+[bk])\b", re.IGNORECASE)
 _DETAIL_NOISE_MARKERS = (
     "skip to main content",
     "share",
@@ -107,21 +113,82 @@ _DETAIL_NOISE_MARKERS = (
     "terms",
     "subscribe",
 )
-_MODEL_CONTEXT_TOKENS = (
-    "model",
+_MODEL_RELEASE_TOKENS = (
+    "模型",
+    "system card",
+    "checkpoint",
+    "weights",
+    "weight",
+    "base model",
+    "基座",
+    "权重",
+    "参数量",
+)
+_MODEL_RELEASE_ACTION_TOKENS = (
     "release",
     "launch",
-    "system card",
-    "available",
-    "api",
-    "preview",
-    "instant",
-    "flash",
-    "pro",
-    "mini",
-    "turbo",
+    "introduce",
+    "introduced",
+    "shipping",
+    "推出",
     "发布",
     "上线",
+    "开源",
+)
+_MODEL_VARIANT_TOKENS = (
+    "instant",
+    "flash",
+    "flash-lite",
+    "sonnet",
+    "haiku",
+    "opus",
+    "turbo",
+    "mini",
+    "nano",
+    "reasoner",
+    "coder",
+    "codex",
+)
+_DEV_ECOSYSTEM_SIGNALS = (
+    "sdk",
+    "framework",
+    "library",
+    "tool",
+    "plugin",
+    "extension",
+    "github",
+    "repo",
+    "template",
+    "open source",
+    "开源",
+    "框架",
+    "工具",
+    "插件",
+    "技能",
+    "课程",
+    "教程",
+    "agent",
+    "claude code",
+    "cursor",
+    "cli",
+)
+_RESEARCH_PRIMARY_SIGNALS = (
+    "paper",
+    "arxiv",
+    "dataset",
+    "study",
+    "research",
+    "preprint",
+    "论文",
+    "研究",
+    "数据集",
+)
+_RESEARCH_SECONDARY_SIGNALS = (
+    "benchmark",
+    "evaluation",
+    "基准",
+    "评测",
+    "实验",
 )
 MAX_DAILY_EVENTS = 20
 
@@ -131,64 +198,88 @@ class DailyRenderer(BaseRenderer):
     def level(self) -> str:
         return "L2"
 
-    async def render(self, articles: list[ProcessedArticle], context: RenderContext) -> Report:
+    async def render(self, articles: list[ProcessedArticle] | list[ProcessedEvent], context: RenderContext) -> Report:
         """渲染日报（按事件动态输出，最多 15 条）。"""
-        selected_articles = articles[:MAX_DAILY_EVENTS]
-        events = [_build_event(item=item, index=idx) for idx, item in enumerate(selected_articles, start=1)]
-        global_tldr = _build_global_tldr(events)
+        events = build_daily_events(articles)
+        return render_daily_report(events=events, context=context)
 
-        overview: list[dict] = []
-        for category in CATEGORY_ORDER:
-            in_category = [event for event in events if event["category"] == category]
-            if not in_category:
-                continue
-            overview.append(
-                {
-                    "category": category,
-                    "events": [
-                        {
-                            "title": str(event["title"]),
-                            "index": int(event["index"]),
-                            "first_link": event["source_links"][0] if event["source_links"] else "",
-                        }
-                        for event in in_category
-                    ],
-                }
-            )
 
-        content = render_report_template(
-            report_type="daily",
-            version="v1",
-            context={"date": context.date, "overview": overview, "events": events},
+def build_daily_events(articles: list[ProcessedArticle] | list[ProcessedEvent]) -> list[dict]:
+    raw_events = [_build_event(item=item, index=idx) for idx, item in enumerate(articles, start=1)]
+    return aggregate_events(raw_events)[:MAX_DAILY_EVENTS]
+
+
+def render_daily_report(*, events: list[dict], context: RenderContext, global_summary: str | None = None) -> Report:
+    global_tldr = str(global_summary or "").strip() or _build_global_tldr(events)
+    overview = _build_overview(events)
+    content = render_report_template(
+        report_type="daily",
+        version="v1",
+        context={
+            "date": context.date,
+            "summary": global_tldr,
+            "overview": overview,
+            "events": events,
+        },
+    )
+    category_counts = Counter(event["category"] for event in events)
+    categories = [category for category in CATEGORY_ORDER if category_counts.get(category)]
+    return Report(
+        level="L2",
+        title=f"AI 早报 {context.date}",
+        content=content,
+        article_ids=_flatten_article_ids(events),
+        metadata={
+            "events": events,
+            "categories": categories,
+            "global_tldr": global_tldr,
+            "tldr": [global_tldr] if global_tldr else [],
+            "global_tldr_source": "stage" if str(global_summary or "").strip() else "renderer_fallback",
+            "time_period": "daily",
+            "report_type": "daily",
+        },
+    )
+
+
+def _build_overview(events: list[dict]) -> list[dict]:
+    overview: list[dict] = []
+    for category in CATEGORY_ORDER:
+        in_category = [event for event in events if event["category"] == category]
+        if not in_category:
+            continue
+        overview.append(
+            {
+                "category": category,
+                "events": [
+                    {
+                        "title": str(event["title"]),
+                        "index": int(event["index"]),
+                        "first_link": event["source_links"][0] if event["source_links"] else "",
+                    }
+                    for event in in_category
+                ],
+            }
         )
-
-        category_counts = Counter(event["category"] for event in events)
-        categories = [category for category in CATEGORY_ORDER if category_counts.get(category)]
-
-        return Report(
-            level="L2",
-            title=f"AI Daily Report — {context.date}",
-            content=content,
-            article_ids=[item.raw.external_id for item in selected_articles],
-            metadata={
-                "events": events,
-                "categories": categories,
-                "global_tldr": global_tldr,
-                "tldr": [global_tldr] if global_tldr else [],
-                "time_period": "daily",
-                "report_type": "daily",
-            },
-        )
+    return overview
 
 
-def _build_event(item: ProcessedArticle, index: int) -> dict:
+def _build_event(item: ProcessedArticle | ProcessedEvent, index: int) -> dict:
+    if isinstance(item, ProcessedEvent):
+        return _build_event_from_processed_event(item=item, index=index)
+
     source_name = str(item.raw.metadata.get("source_name") or "Unknown Source")
     source_category = str(item.raw.metadata.get("source_category") or "").strip().lower()
     one_line_tldr = (item.summary or item.raw.title or "N/A").strip()
+    event_title = _build_event_title(
+        raw_title=item.raw.title,
+        one_line_tldr=one_line_tldr,
+        explicit_title=getattr(item, "event_title", ""),
+    )
     detail = _build_detail(item)
     keywords = [str(keyword).strip() for keyword in item.keywords if str(keyword).strip()]
     entities = _extract_entities(source_name=source_name, title=item.raw.title, keywords=keywords)
-    metrics = _extract_metrics(f"{item.raw.title}\n{item.summary}\n{item.raw.content or ''}")
+    llm_metrics = [str(metric).strip() for metric in getattr(item, "metrics", []) if str(metric).strip()]
+    metrics = llm_metrics if llm_metrics else _extract_metrics(f"{item.raw.title}\n{item.summary}\n{item.raw.content or ''}")
     links = _extract_links(item)
     published_at = _event_time_to_iso(
         item.raw.published_at
@@ -199,8 +290,10 @@ def _build_event(item: ProcessedArticle, index: int) -> dict:
 
     return {
         "event_id": item.raw.external_id,
+        "article_ids": [item.raw.external_id] if item.raw.external_id else [],
         "index": index,
-        "title": item.raw.title,
+        "title": event_title,
+        "event_title": event_title,
         "category": _classify_event(item=item, source_category=source_category),
         "one_line_tldr": one_line_tldr,
         "detail": detail,
@@ -212,45 +305,101 @@ def _build_event(item: ProcessedArticle, index: int) -> dict:
         "source_name": source_name,
         "published_at": published_at,
         "importance": importance,
+        "who": str(getattr(item, "who", "") or "").strip(),
+        "what": str(getattr(item, "what", "") or "").strip(),
+        "when": str(getattr(item, "when", "") or "").strip(),
+        "availability": str(getattr(item, "availability", "") or "").strip(),
+        "unknowns": str(getattr(item, "unknowns", "") or "").strip(),
+        "evidence": str(getattr(item, "evidence", "") or "").strip(),
     }
 
 
-def _classify_event(item: ProcessedArticle, source_category: str) -> str:
-    # importance=high overrides to 要闻
-    importance = getattr(item, "importance", "normal") or "normal"
-    if importance == "high":
-        return "要闻"
+def _build_event_from_processed_event(item: ProcessedEvent, index: int) -> dict:
+    gated = apply_event_content_quality_gate(item)
+    title = _build_event_title(
+        raw_title=gated.title,
+        one_line_tldr=gated.summary,
+        explicit_title=gated.title,
+    )
+    entities = [value for value in [gated.source_name, gated.who, *gated.keywords[:4]] if str(value or "").strip()][:8]
+    return {
+        "event_id": gated.event_id,
+        "article_ids": list(gated.article_ids),
+        "index": index,
+        "title": title,
+        "event_title": title,
+        "category": gated.category or "其他",
+        "one_line_tldr": gated.summary,
+        "detail": gated.detail,
+        "keywords": list(gated.keywords[:12]),
+        "entities": entities,
+        "metrics": list(gated.metrics[:12]),
+        "source_links": list(gated.source_links),
+        "source_count": gated.normalized_source_count(),
+        "source_name": gated.source_name or "Unknown Source",
+        "published_at": gated.published_at,
+        "importance": gated.importance or "normal",
+        "who": gated.who,
+        "what": gated.what,
+        "when": gated.when,
+        "availability": gated.availability,
+        "unknowns": gated.unknowns,
+        "evidence": gated.evidence,
+    }
 
-    text = " ".join(
-        [
-            item.raw.title or "",
-            item.summary or "",
-            " ".join(item.keywords or []),
-            str(item.raw.metadata.get("source_name") or ""),
-            source_category,
-        ]
-    ).lower()
-    normalized_text = _normalize_match_text(text)
-    if _looks_like_model_release(normalized_text):
-        return "模型发布"
-    for category in CATEGORY_ORDER:
-        if category == "要闻":
-            continue  # 要闻 is only assigned via importance
-        for keyword in _CATEGORY_KEYWORDS.get(category, ()):
-            if keyword in normalized_text:
-                return category
-    if source_category in {"academic", "research"}:
-        return "技术与洞察"
-    if source_category in {"open_source"}:
-        return "开发生态"
-    return "行业动态"
+
+def _flatten_article_ids(events: list[dict]) -> list[str]:
+    article_ids: list[str] = []
+    for event in events:
+        values = event.get("article_ids")
+        if not isinstance(values, list):
+            values = [event.get("event_id")]
+        for value in values:
+            article_id = str(value or "").strip()
+            if not article_id or article_id in article_ids:
+                continue
+            article_ids.append(article_id)
+    return article_ids
+
+
+def _build_event_title(raw_title: str, one_line_tldr: str, explicit_title: str = "") -> str:
+    explicit = _WHITESPACE_PATTERN.sub(" ", str(explicit_title or "").strip())
+    if explicit:
+        explicit = _TITLE_END_PUNCT_PATTERN.sub("", explicit).strip()
+        if explicit:
+            return explicit[:96].rstrip()
+
+    # Fallback to concise TL;DR-derived title.
+    tldr = _WHITESPACE_PATTERN.sub(" ", str(one_line_tldr or "").strip())
+    if tldr:
+        compact = _TITLE_END_PUNCT_PATTERN.sub("", tldr).strip()
+        if compact:
+            first_clause = _TITLE_SPLIT_PATTERN.split(compact, maxsplit=1)[0].strip()
+            if 8 <= len(first_clause) <= 72:
+                return first_clause
+            return compact[:90].rstrip()
+
+    fallback = _WHITESPACE_PATTERN.sub(" ", str(raw_title or "").strip())
+    if fallback:
+        return fallback[:160].rstrip()
+    return "未命名事件"
+
+
+def _classify_event(item: ProcessedArticle, source_category: str) -> str:
+    # Pure LLM category mode: use the keywords-stage category directly.
+    _ = source_category
+    llm_cat = str(getattr(item, "category", "") or "").strip()
+    if llm_cat in CATEGORY_ORDER:
+        return llm_cat
+    return "其他"
 
 
 def _build_detail(item: ProcessedArticle) -> str:
     # Prefer LLM-generated detail from keywords stage
     llm_detail = getattr(item, "detail", "") or ""
     llm_detail = llm_detail.strip()
-    if llm_detail and len(llm_detail) >= 50:
+    detail_mode = str(getattr(item, "detail_mode", "full") or "full").strip().lower()
+    if llm_detail and (len(llm_detail) >= 50 or detail_mode == "compact"):
         return llm_detail
 
     # Fallback: use cleaned raw content truncated
@@ -354,27 +503,44 @@ def _build_global_tldr(events: list[dict]) -> str:
     if not events:
         return ""
 
-    count = len(events)
     category_counts = Counter(str(event.get("category", "行业动态")) for event in events)
-    category_summary = "，".join([f"{name}{category_counts[name]}条" for name in CATEGORY_ORDER if category_counts.get(name)])
-
-    key_titles = [str(event.get("title", "")).strip() for event in events[:3] if str(event.get("title", "")).strip()]
-    keyline = "；".join(key_titles) if key_titles else "暂无可展示重点事件"
-    summary = f"今日共整理 {count} 条 AI 事件，按主题分布为：{category_summary}。重点包括：{keyline}。"
-
     dominant = category_counts.most_common(1)[0][0]
-    if dominant == "模型发布":
-        comment = "模型发布仍是主轴，性能数字继续内卷，下一阶段比拼将转向工程化成本与真实场景转化率。"
-    elif dominant == "产品应用":
-        comment = "产品层动作最密集，说明能力红利正快速向交付与流程整合迁移。"
-    elif dominant == "技术与洞察":
-        comment = "研究与评测信息密集出现，短期要警惕“指标领先但落地滞后”的叙事偏差。"
-    elif dominant == "前瞻与传闻":
-        comment = "传闻占比提升时，信息噪音会同步上升，需优先追踪可验证的官方与代码证据。"
-    else:
-        comment = "行业侧信号偏强，策略上应同步跟踪资本、政策与平台入口变化带来的二阶影响。"
+    lead_map = {
+        "模型发布": "今日 AI 主线是模型能力与交付效率同步升级。",
+        "产品应用": "今日 AI 主线是产品化落地继续提速。",
+        "技术与洞察": "今日 AI 主线是评测与方法论并行演进。",
+        "开发生态": "今日 AI 主线是开发工具链进一步完善。",
+        "前瞻与传闻": "今日 AI 主线是前瞻信号增多但仍需证据验证。",
+        "要闻": "今日 AI 主线是头部事件密集释放。",
+        "行业动态": "今日 AI 主线是平台与生态位变化持续放大。",
+    }
+    lead = lead_map.get(dominant, lead_map["行业动态"])
 
-    return f"总结：{summary}\n锐评：{comment}"
+    key_titles = [str(event.get("title", "")).strip() for event in events if str(event.get("title", "")).strip()]
+    compact_titles: list[str] = []
+    for title in key_titles[:2]:
+        cleaned = _TITLE_END_PUNCT_PATTERN.sub("", title).strip()
+        if len(cleaned) > 18:
+            compact_titles.append(f"{cleaned[:18].rstrip()}…")
+        elif cleaned:
+            compact_titles.append(cleaned)
+    if compact_titles:
+        trend_line = f"代表性动态包括{'、'.join(compact_titles)}。"
+    else:
+        trend_line = "重点仍是验证技术能否稳定落地到真实业务。"
+
+    comment_map = {
+        "模型发布": "后续更值得关注真实采用速度与单位成本改善。",
+        "产品应用": "后续更值得关注流程深度整合与持续留存。",
+        "技术与洞察": "后续更值得关注结论在生产环境的可复现性。",
+        "前瞻与传闻": "后续更值得关注可验证的官方与代码证据。",
+        "开发生态": "后续更值得关注生态兼容性与团队协作效率。",
+        "要闻": "后续更值得关注企业侧落地节奏与反馈质量。",
+        "行业动态": "后续更值得关注平台策略变化带来的二阶影响。",
+    }
+    comment = comment_map.get(dominant, comment_map["行业动态"])
+
+    return f"{lead}{trend_line}{comment}"
 
 
 def _event_time_to_iso(raw: object) -> str | None:
@@ -389,9 +555,32 @@ def _event_time_to_iso(raw: object) -> str | None:
 
 
 def _looks_like_model_release(normalized_text: str) -> bool:
-    if not _MODEL_SIGNAL_PATTERN.search(normalized_text):
-        return False
-    return any(token in normalized_text for token in _MODEL_CONTEXT_TOKENS)
+    has_marker = _has_explicit_model_marker(normalized_text)
+    has_model_signal = _MODEL_SIGNAL_PATTERN.search(normalized_text) is not None
+    has_version = _MODEL_VERSION_PATTERN.search(normalized_text) is not None
+    has_variant = any(token in normalized_text for token in _MODEL_VARIANT_TOKENS)
+    if has_marker and (has_model_signal or has_version):
+        return True
+    if has_model_signal and has_version and has_variant:
+        return True
+    if has_model_signal and has_version and any(token in normalized_text for token in _MODEL_RELEASE_ACTION_TOKENS):
+        return True
+    return False
+
+
+def _looks_like_dev_ecosystem_event(normalized_text: str) -> bool:
+    return any(token in normalized_text for token in _DEV_ECOSYSTEM_SIGNALS)
+
+
+def _has_explicit_model_marker(normalized_text: str) -> bool:
+    return any(token in normalized_text for token in _MODEL_RELEASE_TOKENS)
+
+
+def _looks_like_research_event(normalized_text: str) -> bool:
+    if any(token in normalized_text for token in _RESEARCH_PRIMARY_SIGNALS):
+        return True
+    secondary_hits = sum(1 for token in _RESEARCH_SECONDARY_SIGNALS if token in normalized_text)
+    return secondary_hits >= 2
 
 
 def _normalize_match_text(text: str) -> str:

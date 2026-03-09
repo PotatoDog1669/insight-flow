@@ -13,6 +13,13 @@ from app.scheduler.task_events import append_task_event
 from app.scheduler.task_events import cleanup_expired_task_events
 
 
+def _format_error(exc: Exception, *, limit: int = 1000) -> str:
+    message = str(exc).strip()
+    if not message:
+        message = type(exc).__name__
+    return message[:limit]
+
+
 async def run_monitor_once(
     *,
     db: AsyncSession,
@@ -27,13 +34,14 @@ async def run_monitor_once(
     monitor.last_run = now
     monitor.updated_at = now
     run_id = uuid.uuid4()
+    normalized_trigger_type = "scheduled" if trigger_type == "scheduled" else "manual"
 
     task = CollectTask(
         id=uuid.uuid4(),
         run_id=run_id,
         monitor_id=monitor.id,
         source_id=None,
-        trigger_type=trigger_type,
+        trigger_type=normalized_trigger_type,
         status="running",
         started_at=now,
         created_at=now,
@@ -49,8 +57,8 @@ async def run_monitor_once(
         source_id=None,
         stage="monitor_run",
         event_type="run_started",
-        message=f"Monitor run started ({trigger_type})",
-        payload={"trigger_type": trigger_type},
+        message=f"Monitor run started ({normalized_trigger_type})",
+        payload={"trigger_type": normalized_trigger_type},
     )
     await db.commit()
 
@@ -74,7 +82,7 @@ async def run_monitor_once(
         result = await orchestrator.run_daily_pipeline(
             db=db,
             user_id=monitor.user_id,
-            trigger_type=trigger_type,
+            trigger_type=normalized_trigger_type,
             run_id=run_id,
             monitor_id=monitor.id,
             monitor_task_id=task.id,
@@ -84,6 +92,7 @@ async def run_monitor_once(
             default_source_max_items=default_source_max_items,
             report_type=monitor.report_type,
             window_hours=window_hours,
+            monitor_ai_routing=monitor.ai_routing or {},
         )
         pipeline_status = str(result.get("status", "success"))
         if pipeline_status == "partial_success":
@@ -115,15 +124,16 @@ async def run_monitor_once(
         await db.commit()
         return task
     except Exception as exc:
+        error_text = _format_error(exc, limit=1000)
         task.status = "failed"
         task.finished_at = datetime.now(timezone.utc)
-        task.error_message = str(exc)[:1000]
+        task.error_message = error_text
         task.stage_trace = [
             {
                 "stage": "monitor_run",
                 "provider": "orchestrator",
                 "status": "failed",
-                "error": str(exc)[:300],
+                "error": _format_error(exc, limit=300),
             }
         ]
         db.add(task)
@@ -137,7 +147,7 @@ async def run_monitor_once(
             level="error",
             event_type="run_failed",
             message="Monitor run failed",
-            payload={"error": str(exc)[:1000]},
+            payload={"error": error_text},
         )
         await db.commit()
         raise

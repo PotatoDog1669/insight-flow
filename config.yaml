@@ -65,8 +65,8 @@ routing:
           primary: rss
           fallback: [blog_scraper, deepbrowse]
         filter:
-          primary: rule
-          fallback: [llm_openai]
+          primary: llm_openai
+          fallback: [rule]
         keywords:
           primary: llm_openai
           fallback: [rule]
@@ -82,7 +82,7 @@ routing:
         llm_openai:
           type: llm
           model: gpt-4o-mini
-          timeout_sec: 30
+          timeout_sec: 120
           max_retry: 2
         agent_codex:
           type: agent
@@ -116,7 +116,7 @@ routing:
         llm_openai:
           type: llm
           model: gpt-4o-mini
-          timeout_sec: 30
+          timeout_sec: 120
           max_retry: 2
         agent_codex:
           type: agent

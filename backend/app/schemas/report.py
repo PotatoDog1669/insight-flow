@@ -17,12 +17,19 @@ class ReportEvent(BaseModel):
     event_id: str
     index: int = Field(ge=1)
     title: str
+    event_title: str = ""
     category: str
     one_line_tldr: str = ""
     detail: str = ""
+    who: str = ""
+    what: str = ""
+    when: str = ""
     keywords: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
+    availability: str = ""
+    unknowns: str = ""
+    evidence: str = ""
     source_links: list[str] = Field(default_factory=list)
     source_count: int = Field(default=0, ge=0)
     source_name: str = ""

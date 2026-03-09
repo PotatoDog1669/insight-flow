@@ -25,7 +25,7 @@ async def run_llm_json(prompt: str, config: dict | None = None) -> dict:
     cfg = dict(config or {})
     base_url = str(cfg.get("base_url") or "https://api.openai.com/v1").rstrip("/")
     model = str(cfg.get("model") or settings.llm_primary_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
-    timeout_sec = float(cfg.get("timeout_sec") or 30)
+    timeout_sec = float(cfg.get("timeout_sec") or 120)
     max_tokens = int(cfg.get("max_output_tokens") or settings.llm_max_tokens or 2048)
     temperature = float(cfg.get("temperature") if cfg.get("temperature") is not None else settings.llm_temperature)
 

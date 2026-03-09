@@ -47,3 +47,18 @@ def test_infer_collect_method_keeps_usernames_list_for_twitter_snaplytics() -> N
     assert method == "twitter_snaplytics"
     assert config.get("usernames") == ["OpenAI", "AnthropicAI"]
     assert config.get("max_items") == 50
+
+
+def test_infer_collect_method_uses_blog_scraper_for_site_profile_strategy() -> None:
+    method, config = _infer_collect_method(
+        {
+            "key": "cursor",
+            "strategy": "site_profile_scraper",
+            "urls": ["https://cursor.com/blog"],
+        }
+    )
+
+    assert method == "blog_scraper"
+    assert config.get("site_key") == "cursor"
+    assert config.get("max_items") == 20
+    assert config.get("fallback_chain") == ["blog_scraper", "deepbrowse"]

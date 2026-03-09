@@ -43,6 +43,7 @@ export interface Monitor {
     report_type: "daily" | "weekly" | "research";
     source_ids: string[];
     source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    ai_routing?: MonitorAIRouting;
     destination_ids: string[];
     window_hours: number;
     custom_schedule: string | null;
@@ -51,6 +52,29 @@ export interface Monitor {
     last_run: string | null;
     created_at: string;
     updated_at: string;
+}
+
+export type MonitorAIProviderName = "rule" | "llm_openai" | "agent_codex";
+export type MonitorAIStageName = "filter" | "keywords" | "report";
+
+export interface MonitorAIStageRoute {
+    primary: MonitorAIProviderName;
+}
+
+export interface MonitorAIProviderConfig {
+    model?: string;
+    timeout_sec?: number;
+    max_retry?: number;
+}
+
+export interface MonitorAIRouting {
+    stages?: Partial<Record<MonitorAIStageName, MonitorAIStageRoute>>;
+    providers?: Partial<Record<MonitorAIProviderName, MonitorAIProviderConfig>>;
+}
+
+export interface MonitorAIRoutingDefaults {
+    profile_name: string;
+    stages: Record<MonitorAIStageName, string>;
 }
 
 export interface Destination {
@@ -110,6 +134,7 @@ export interface MonitorCreate {
     report_type?: "daily" | "weekly" | "research";
     source_ids: string[];
     source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    ai_routing?: MonitorAIRouting;
     destination_ids?: string[];
     window_hours?: number;
     custom_schedule?: string | null;
@@ -122,6 +147,7 @@ export interface MonitorUpdate {
     report_type?: "daily" | "weekly" | "research";
     source_ids?: string[];
     source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    ai_routing?: MonitorAIRouting | null;
     destination_ids?: string[];
     window_hours?: number;
     custom_schedule?: string | null;
@@ -178,12 +204,19 @@ export interface ReportEvent {
     event_id: string;
     index: number;
     title: string;
+    event_title?: string;
     category: string;
     one_line_tldr: string;
     detail: string;
+    who?: string;
+    what?: string;
+    when?: string;
     keywords: string[];
     entities: string[];
     metrics: string[];
+    availability?: string;
+    unknowns?: string;
+    evidence?: string;
     source_links: string[];
     source_count: number;
     source_name: string;
@@ -332,6 +365,8 @@ export const getArticleById = (articleId: string) => fetchAPI<Article>(`/api/v1/
 
 // ---- Monitors ----
 export const getMonitors = () => fetchAPI<Monitor[]>("/api/v1/monitors");
+export const getMonitorAIRoutingDefaults = () =>
+    fetchAPI<MonitorAIRoutingDefaults>("/api/v1/monitors/ai-routing/defaults");
 
 export async function createMonitor(data: MonitorCreate): Promise<Monitor> {
     return fetchAPI<Monitor>("/api/v1/monitors", {
@@ -340,7 +375,7 @@ export async function createMonitor(data: MonitorCreate): Promise<Monitor> {
     });
 }
 
-export const runMonitor = (monitorId: string, body?: { window_hours?: number; trigger_type?: "manual" | "test" }) =>
+export const runMonitor = (monitorId: string, body?: { window_hours?: number }) =>
     fetchAPI<MonitorRunResponse>(`/api/v1/monitors/${monitorId}/run`, {
         method: "POST",
         body: JSON.stringify(body ?? {}),

@@ -39,7 +39,7 @@ async def list_reports(
     stmt = stmt.order_by(Report.report_date.desc(), Report.created_at.desc()).offset((page - 1) * limit).limit(limit)
     result = await db.execute(stmt)
     reports = result.scalars().all()
-    return [_to_report_response(report) for report in reports]
+    return [_to_report_response(report, include_full_content=False) for report in reports]
 
 
 @router.get("/filters", response_model=ReportFiltersResponse)
@@ -60,7 +60,7 @@ async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
     """查看单份报告详情"""
     report = await db.get(Report, _parse_uuid(report_id))
     if report:
-        return _to_report_response(report)
+        return _to_report_response(report, include_full_content=True)
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
 
@@ -83,7 +83,7 @@ def _parse_uuid(raw_id: str) -> uuid.UUID:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid UUID") from exc
 
 
-def _to_report_response(report: Report) -> ReportResponse:
+def _to_report_response(report: Report, *, include_full_content: bool = True) -> ReportResponse:
     metadata = report.metadata_ or {}
     topics = [
         ReportTopic(name=item.get("name", ""), weight=max(int(item.get("weight", 1)), 1))
@@ -93,8 +93,11 @@ def _to_report_response(report: Report) -> ReportResponse:
     tldr = metadata.get("tldr", [])
     if not isinstance(tldr, list):
         tldr = []
-    raw_events = metadata.get("events", [])
     events: list[ReportEvent] = []
+    global_tldr = ""
+    response_metadata: dict = {}
+    response_content = ""
+    raw_events = metadata.get("events", [])
     if isinstance(raw_events, list):
         for raw_event in raw_events:
             if not isinstance(raw_event, dict):
@@ -103,7 +106,11 @@ def _to_report_response(report: Report) -> ReportResponse:
                 events.append(ReportEvent.model_validate(raw_event))
             except Exception:
                 continue
-    global_tldr = str(metadata.get("global_tldr") or "")
+
+    if include_full_content:
+        global_tldr = str(metadata.get("global_tldr") or "")
+        response_metadata = metadata
+        response_content = report.content or ""
     return ReportResponse(
         id=report.id,
         user_id=report.user_id,
@@ -115,11 +122,11 @@ def _to_report_response(report: Report) -> ReportResponse:
         topics=topics,
         events=events,
         global_tldr=global_tldr,
-        content=report.content or "",
+        content=response_content,
         article_ids=[uuid.UUID(item) if isinstance(item, str) else item for item in (report.article_ids or [])],
         published_to=report.published_to or [],
         publish_trace=report.publish_trace or [],
-        metadata=metadata,
+        metadata=response_metadata,
         report_date=report.report_date if isinstance(report.report_date, date) else date.today(),
         created_at=report.created_at,
     )

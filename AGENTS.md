@@ -3,8 +3,8 @@
 ## Spec & Planning Files
 
 - **Before implementing any feature**, read the relevant docs:
-  - `.spec/PRD.md` — product priorities (P0/P1/P2)
-  - `.spec/TEC.md` — DB schema, API contracts, module design
+  - `.spec/core/product-requirements-spec.md` — product priorities (P0/P1/P2)
+  - `.spec/core/technical-architecture-spec.md` — DB schema, API contracts, module design
   - `.spec/plans/` — per-feature design & implementation plans
 - Only implement **P0 features fully**. P1+ only warrant schema/interface stubs.
 
@@ -63,13 +63,13 @@ class MyCollector(BaseCollector):
 
 ### Database
 - All schema changes via **Alembic migrations** — never alter tables directly.
-- Follow the naming and field conventions in TEC.md § 3.
+- Follow the naming and field conventions in `technical-architecture-spec.md` § 3.
 - New optional columns should have `DEFAULT` values to avoid migration pain.
 
 ### API
 - Prefix: `/api/v1/`
 - Always use Pydantic schemas in `backend/app/schemas/` for request/response.
-- Enums (category, depth, time_period) must match TEC.md § 5.1 constants.
+- Enums (category, depth, time_period) must match `technical-architecture-spec.md` § 5.1 constants.
 - Changes to an API response shape require updating the corresponding frontend `api.ts` type.
 
 ---

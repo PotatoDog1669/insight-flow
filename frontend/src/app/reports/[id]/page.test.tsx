@@ -59,7 +59,7 @@ describe("ReportDetailPage", () => {
 
     render(<ReportDetailPage />);
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "全局总结与锐评" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "概览" })).toBeInTheDocument());
     expect(screen.getByRole("navigation", { name: "Report outline" })).toBeInTheDocument();
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });

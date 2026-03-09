@@ -16,6 +16,7 @@ def _ensure_loaded() -> None:
     if _LOADED:
         return
     __import__("app.providers.filter")
+    __import__("app.providers.global_summary")
     __import__("app.providers.keywords")
     __import__("app.providers.report")
     _LOADED = True

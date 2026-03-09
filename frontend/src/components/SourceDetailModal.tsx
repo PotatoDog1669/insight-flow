@@ -98,16 +98,42 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
         }
     };
 
-    const handleAddTwitterUsername = () => {
+    const persistTwitterUsernames = async (nextUsernames: string[]): Promise<boolean> => {
+        setSubmitting(true);
+        setError(null);
+        try {
+            const currentConfig: ConfigObject = { ...(asObject(source.config) ?? {}) };
+            currentConfig.usernames = nextUsernames;
+            delete currentConfig.username;
+            await updateSource(source.id, { config: currentConfig });
+            setTwitterUsernames(nextUsernames);
+            onUpdated();
+            return true;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to update source");
+            return false;
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleAddTwitterUsername = async () => {
         const normalized = normalizeTwitterUsername(usernameDraft);
         if (!normalized) return;
         const deduped = Array.from(new Set([...twitterUsernames, normalized]));
-        setTwitterUsernames(deduped);
-        setUsernameDraft("");
+        if (deduped.length === twitterUsernames.length) {
+            setUsernameDraft("");
+            return;
+        }
+        const saved = await persistTwitterUsernames(deduped);
+        if (saved) {
+            setUsernameDraft("");
+        }
     };
 
-    const handleRemoveTwitterUsername = (username: string) => {
-        setTwitterUsernames((prev) => prev.filter((item) => item !== username));
+    const handleRemoveTwitterUsername = async (username: string) => {
+        const nextUsernames = twitterUsernames.filter((item) => item !== username);
+        await persistTwitterUsernames(nextUsernames);
     };
 
     const handleTest = async () => {
@@ -196,16 +222,16 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                     onKeyDown={(e) => {
                                         if (e.key === "Enter") {
                                             e.preventDefault();
-                                            handleAddTwitterUsername();
+                                            void handleAddTwitterUsername();
                                         }
                                     }}
                                     placeholder="@OpenAI"
                                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                                 />
                                 <button
-                                    onClick={handleAddTwitterUsername}
-                                    disabled={!normalizeTwitterUsername(usernameDraft)}
-                                    className="flex shrink-0 h-10 items-center justify-center rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
+                                    onClick={() => void handleAddTwitterUsername()}
+                                    disabled={!normalizeTwitterUsername(usernameDraft) || submitting}
+                                    className="flex shrink-0 h-10 items-center justify-center rounded-md border border-border/60 bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-all hover:-translate-y-px hover:border-foreground/40 hover:bg-foreground hover:text-background hover:shadow-sm disabled:opacity-50"
                                 >
                                     Add
                                 </button>
@@ -215,7 +241,8 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                     <div key={username} className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs">
                                         <span>@{username}</span>
                                         <button
-                                            onClick={() => handleRemoveTwitterUsername(username)}
+                                            onClick={() => void handleRemoveTwitterUsername(username)}
+                                            disabled={submitting}
                                             className="text-muted-foreground hover:text-foreground"
                                             aria-label={`Remove ${username}`}
                                         >
@@ -225,18 +252,8 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                 ))}
                             </div>
                             <p className="text-xs text-muted-foreground">Current watchlist: {twitterUsernames.length}</p>
-                            <div className="flex justify-end">
-                                <button
-                                    onClick={handleSave}
-                                    disabled={submitting}
-                                    className="flex shrink-0 h-10 items-center justify-center rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-                                >
-                                    <Save className="w-4 h-4 mr-2" />
-                                    Save
-                                </button>
-                            </div>
                             <p className="text-xs text-muted-foreground mt-1">
-                                Type `@xxx` then click Add. Save to persist the watch list. Empty list is allowed.
+                                Type `@xxx` then click Add. Changes are saved immediately. Empty list is allowed.
                             </p>
                         </div>
                     )}

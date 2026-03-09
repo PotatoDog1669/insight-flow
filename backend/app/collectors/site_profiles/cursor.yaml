@@ -1,0 +1,24 @@
+site_key: cursor
+profile_version: v1
+start_urls:
+  - https://cursor.com/blog
+list_page:
+  item_selector: article
+  url_selector: "a[href*='/blog/']"
+  url_attr: href
+  title_selector: p
+  published_selector: "time[datetime]"
+  published_attr: datetime
+detail_page:
+  content_selector: article, main, [role='main']
+  remove_selectors:
+    - script
+    - style
+    - nav
+    - footer
+    - header
+    - aside
+    - form
+normalization:
+  url_prefix: https://cursor.com
+  min_content_chars: 300

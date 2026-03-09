@@ -22,6 +22,7 @@ class RoutingStages:
     keywords: StageRoute
     report: StageRoute
     publish: PublishRoute
+    global_summary: StageRoute | None = None
 
 
 @dataclass(slots=True)

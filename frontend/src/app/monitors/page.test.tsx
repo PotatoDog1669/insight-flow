@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import MonitorsPage from "@/app/monitors/page";
 import {
   cancelMonitorRun,
   createMonitor,
   deleteMonitor,
+  getMonitorAIRoutingDefaults,
   getDestinations,
   getMonitorLogs,
   getMonitorRunEvents,
@@ -18,6 +19,7 @@ vi.mock("@/lib/api", () => ({
   getMonitors: vi.fn(),
   getSources: vi.fn(),
   getDestinations: vi.fn(),
+  getMonitorAIRoutingDefaults: vi.fn(),
   getMonitorLogs: vi.fn(),
   getMonitorRuns: vi.fn(),
   getMonitorRunEvents: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock("@/lib/api", () => ({
 const mockedGetMonitors = vi.mocked(getMonitors);
 const mockedGetSources = vi.mocked(getSources);
 const mockedGetDestinations = vi.mocked(getDestinations);
+const mockedGetMonitorAIRoutingDefaults = vi.mocked(getMonitorAIRoutingDefaults);
 const mockedGetMonitorLogs = vi.mocked(getMonitorLogs);
 const mockedGetMonitorRuns = vi.mocked(getMonitorRuns);
 const mockedGetMonitorRunEvents = vi.mocked(getMonitorRunEvents);
@@ -136,6 +139,14 @@ describe("MonitorsPage", () => {
         enabled: true,
       },
     ]);
+    mockedGetMonitorAIRoutingDefaults.mockResolvedValue({
+      profile_name: "codex_mvp_v1",
+      stages: {
+        filter: "agent_codex",
+        keywords: "agent_codex",
+        report: "agent_codex",
+      },
+    });
     mockedGetMonitorLogs.mockResolvedValue([
       {
         id: "task-1",
@@ -152,7 +163,7 @@ describe("MonitorsPage", () => {
       {
         run_id: "run-1",
         task_id: "task-1",
-        trigger_type: "test",
+        trigger_type: "manual",
         status: "running",
         articles_count: 0,
         source_total: 1,
@@ -330,6 +341,113 @@ describe("MonitorsPage", () => {
     });
   });
 
+  it("sends monitor ai_routing when advanced routing is configured", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
+    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
+      target: { value: "Routing Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+
+    fireEvent.change(screen.getByLabelText("Filter stage provider"), {
+      target: { value: "agent_codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Keywords stage provider"), {
+      target: { value: "llm_openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Report stage provider"), {
+      target: { value: "agent_codex" },
+    });
+
+    fireEvent.change(screen.getByLabelText("Model for agent_codex"), {
+      target: { value: "gpt-5-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Model for llm_openai"), {
+      target: { value: "gpt-4o-mini" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Routing Monitor",
+          ai_routing: {
+            stages: {
+              filter: { primary: "agent_codex" },
+              keywords: { primary: "llm_openai" },
+              report: { primary: "agent_codex" },
+            },
+            providers: {
+              agent_codex: { model: "gpt-5-codex" },
+              llm_openai: { model: "gpt-4o-mini" },
+            },
+          },
+        })
+      );
+    });
+  });
+
+  it("shows inherit option with current default provider", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
+
+    const inheritOptions = screen.getAllByRole("option", {
+      name: "inherit (current: agent_codex)",
+    });
+    expect(inheritOptions.length).toBeGreaterThan(0);
+  });
+
+  it("sends ai_routing null on edit when advanced routing is cleared", async () => {
+    mockedGetMonitors.mockResolvedValueOnce([
+      {
+        id: "monitor-1",
+        name: "Daily AI Brief",
+        time_period: "daily",
+        report_type: "daily",
+        source_ids: ["source-1"],
+        destination_ids: ["notion"],
+        window_hours: 24,
+        custom_schedule: null,
+        source_overrides: {},
+        ai_routing: {
+          stages: {
+            filter: { primary: "agent_codex" },
+          },
+        },
+        enabled: true,
+        status: "active",
+        last_run: null,
+        created_at: "2026-03-02T10:00:00Z",
+        updated_at: "2026-03-02T10:00:00Z",
+      },
+    ]);
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Daily AI Brief"));
+    expect(await screen.findByRole("heading", { name: "Edit Monitor" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter stage provider"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateMonitor).toHaveBeenCalledWith(
+        "monitor-1",
+        expect.objectContaining({
+          ai_routing: null,
+        })
+      );
+    });
+  });
+
   it("sends arxiv keywords and max_results override when creating monitor", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
@@ -385,41 +503,147 @@ describe("MonitorsPage", () => {
     expect(createButton).not.toBeDisabled();
   });
 
-  it("supports test run with temporary window override", async () => {
+  it("does not show deprecated test action", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Test" }));
-    expect(await screen.findByRole("heading", { name: "Test Run: Daily AI Brief" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
-    fireEvent.change(screen.getByPlaceholderText("24"), {
-      target: { value: "6" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start Test Run" }));
-
-    await waitFor(() => {
-      expect(mockedRunMonitor).toHaveBeenCalledWith("monitor-1", { window_hours: 6, trigger_type: "test" });
-    });
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Test Console: Daily AI Brief" })).toBeInTheDocument();
-    });
+    expect(screen.queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
   });
 
-  it("supports terminating a running live debug run", async () => {
+  it("allows terminating a running run from logs history", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Test" }));
-    expect(await screen.findByRole("heading", { name: "Test Run: Daily AI Brief" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Start Test Run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+    expect(await screen.findByRole("heading", { name: "Run History: Daily AI Brief" })).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Test Console: Daily AI Brief" })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Terminate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Terminate Run" }));
 
     await waitFor(() => {
       expect(mockedCancelMonitorRun).toHaveBeenCalledWith("monitor-1", "run-1");
     });
+  });
+
+  it("shows pending state when manual run is starting", async () => {
+    let resolveRun: ((value: { task_id: string; run_id: string; status: "running"; monitor_id: string }) => void) | null = null;
+    mockedRunMonitor.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        })
+    );
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    const runButton = screen.getByRole("button", { name: "Run" });
+    fireEvent.click(runButton);
+
+    expect(mockedRunMonitor).toHaveBeenCalledWith("monitor-1");
+    expect(runButton).toBeDisabled();
+
+    resolveRun?.({
+      task_id: "task-1",
+      run_id: "run-1",
+      status: "running",
+      monitor_id: "monitor-1",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+    });
+  });
+
+  it("shows visible success hint after manual run starts", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(await screen.findByText(/Run started\./)).toBeInTheDocument();
+    expect(screen.getByText(/run-1/)).toBeInTheDocument();
+  });
+
+  it("shows run feedback without auto-opening logs and keeps actions usable during refresh", async () => {
+    let resolveRefresh: ((value: Parameters<typeof mockedGetMonitors.mockResolvedValue>[0]) => void) | null = null;
+    mockedGetMonitors
+      .mockResolvedValueOnce([
+        {
+          id: "monitor-1",
+          name: "Daily AI Brief",
+          time_period: "daily",
+          report_type: "daily",
+          source_ids: ["source-1"],
+          destination_ids: ["notion"],
+          window_hours: 24,
+          custom_schedule: null,
+          enabled: true,
+          status: "active",
+          last_run: null,
+          created_at: "2026-03-02T10:00:00Z",
+          updated_at: "2026-03-02T10:00:00Z",
+        },
+      ])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(await screen.findByText(/Run started\./)).toBeInTheDocument();
+    expect(screen.getByText(/Open Logs to follow progress\./)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+    });
+    expect(screen.queryByRole("heading", { name: /Run History:/ })).not.toBeInTheDocument();
+    expect(mockedGetMonitorLogs).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRefresh?.([
+        {
+          id: "monitor-1",
+          name: "Daily AI Brief",
+          time_period: "daily",
+          report_type: "daily",
+          source_ids: ["source-1"],
+          destination_ids: ["notion"],
+          window_hours: 24,
+          custom_schedule: null,
+          enabled: true,
+          status: "active",
+          last_run: null,
+          created_at: "2026-03-02T10:00:00Z",
+          updated_at: "2026-03-02T10:00:00Z",
+        },
+      ]);
+    });
+  });
+
+  it("uses a wider logs modal layout", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+
+    const modal = await screen.findByTestId("monitor-logs-modal");
+    expect(modal).toHaveClass("w-[96vw]");
+    expect(modal).toHaveClass("max-w-[1800px]");
+    expect(modal).toHaveClass("h-[90vh]");
+  });
+
+  it("shows visible error when opening logs fails", async () => {
+    mockedGetMonitorLogs.mockRejectedValueOnce(new Error("Logs fetch failed"));
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+
+    expect(await screen.findByText("Logs fetch failed")).toBeInTheDocument();
   });
 });

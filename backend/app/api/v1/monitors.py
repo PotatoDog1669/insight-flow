@@ -10,12 +10,16 @@ from fastapi import status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import get_db
 from app.models.monitor import Monitor
 from app.models.task import CollectTask
 from app.models.task_event import TaskEvent
+from app.routing.loader import load_routing_profile
 from app.scheduler.monitor_runner import run_monitor_once
 from app.scheduler.task_events import append_task_event
+from app.schemas.monitor import MonitorAIRouting
+from app.schemas.monitor import MonitorAIRoutingDefaultsResponse
 from app.schemas.monitor import MonitorCreate
 from app.schemas.monitor import MonitorRunCancelResponse
 from app.schemas.monitor import MonitorRunRequest
@@ -55,6 +59,7 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
             _normalize_source_overrides(payload.source_overrides),
             normalized_source_ids,
         ),
+        ai_routing=_normalize_ai_routing(payload.ai_routing),
         destination_ids=payload.destination_ids or [],
         window_hours=payload.window_hours,
         custom_schedule=payload.custom_schedule,
@@ -69,6 +74,40 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
     return _to_monitor_response(monitor)
 
 
+@router.get("/ai-routing/defaults", response_model=MonitorAIRoutingDefaultsResponse)
+async def get_monitor_ai_routing_defaults():
+    profile = load_routing_profile(settings.routing_default_profile)
+    return MonitorAIRoutingDefaultsResponse(
+        profile_name=profile.name,
+        stages={
+            "filter": _resolve_default_stage_provider(
+                candidate=profile.stages.filter.primary,
+                allowed={"rule", "llm_openai", "agent_codex"},
+                fallback="rule",
+            ),
+            "keywords": _resolve_default_stage_provider(
+                candidate=profile.stages.keywords.primary,
+                allowed={"rule", "llm_openai", "agent_codex"},
+                fallback="rule",
+            ),
+            "global_summary": _resolve_default_stage_provider(
+                candidate=(
+                    profile.stages.global_summary.primary
+                    if profile.stages.global_summary is not None
+                    else profile.stages.report.primary
+                ),
+                allowed={"llm_openai", "agent_codex"},
+                fallback="agent_codex",
+            ),
+            "report": _resolve_default_stage_provider(
+                candidate=profile.stages.report.primary,
+                allowed={"llm_openai", "agent_codex"},
+                fallback="agent_codex",
+            ),
+        },
+    )
+
+
 @router.post("/{monitor_id}/run", response_model=MonitorRunResponse)
 async def run_monitor(
     monitor_id: str,
@@ -81,15 +120,11 @@ async def run_monitor(
     if not monitor or monitor.user_id != DEFAULT_USER_ID:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
 
-    trigger_type = "manual"
-    if payload and payload.trigger_type == "test":
-        trigger_type = "test"
-
     try:
         task = await run_monitor_once(
             db=db,
             monitor=monitor,
-            trigger_type=trigger_type,
+            trigger_type="manual",
             window_hours_override=payload.window_hours if payload else None,
         )
     except Exception as exc:
@@ -307,6 +342,8 @@ async def update_monitor(monitor_id: str, payload: MonitorUpdate, db: AsyncSessi
             _normalize_source_overrides(payload.source_overrides),
             active_source_ids,
         )
+    if "ai_routing" in payload.model_fields_set:
+        monitor.ai_routing = _normalize_ai_routing(payload.ai_routing)
     if payload.destination_ids is not None:
         monitor.destination_ids = payload.destination_ids
     if payload.window_hours is not None:
@@ -354,6 +391,7 @@ def _to_monitor_response(monitor: Monitor) -> MonitorResponse:
         report_type=monitor.report_type,  # type: ignore[arg-type]
         source_ids=[uuid.UUID(item) for item in (monitor.source_ids or [])],
         source_overrides=_normalize_source_overrides(monitor.source_overrides),
+        ai_routing=_safe_ai_routing(monitor.ai_routing),
         destination_ids=[str(item) for item in (monitor.destination_ids or [])],
         window_hours=monitor.window_hours,
         custom_schedule=monitor.custom_schedule,
@@ -430,6 +468,28 @@ def _filter_source_overrides_by_source_ids(payload: dict[str, dict], source_ids:
     return {source_id: config for source_id, config in payload.items() if source_id in allowed_ids}
 
 
+def _normalize_ai_routing(payload: MonitorAIRouting | dict | None) -> dict:
+    if payload is None:
+        return {}
+    if isinstance(payload, MonitorAIRouting):
+        return payload.model_dump(exclude_none=True)
+    if not isinstance(payload, dict):
+        return {}
+    try:
+        return MonitorAIRouting.model_validate(payload).model_dump(exclude_none=True)
+    except Exception:
+        return {}
+
+
+def _safe_ai_routing(payload: dict | None) -> MonitorAIRouting:
+    if not isinstance(payload, dict):
+        return MonitorAIRouting()
+    try:
+        return MonitorAIRouting.model_validate(payload)
+    except Exception:
+        return MonitorAIRouting()
+
+
 def _resolve_report_type(
     *,
     time_period: str,
@@ -450,3 +510,10 @@ def _resolve_report_type(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         detail="report_type is required when time_period is custom",
     )
+
+
+def _resolve_default_stage_provider(*, candidate: str, allowed: set[str], fallback: str) -> str:
+    normalized = str(candidate or "").strip()
+    if normalized in allowed:
+        return normalized
+    return fallback

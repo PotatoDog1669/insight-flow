@@ -74,3 +74,4 @@ docs/.mintlify/
 .spec/
 test_data/
 rss-sample/
+output/

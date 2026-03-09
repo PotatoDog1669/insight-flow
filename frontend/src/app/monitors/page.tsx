@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Play, Plus, Trash2, Activity, Clock, Server, ChevronDown, ChevronRight, History } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Play, Plus, Trash2, Activity, Clock, Server, ChevronDown, ChevronRight, History, Calendar, Loader2 } from "lucide-react";
 import {
   cancelMonitorRun,
   createMonitor,
   deleteMonitor,
+  getMonitorAIRoutingDefaults,
   getMonitors,
   getSources,
   runMonitor,
@@ -19,11 +20,27 @@ import {
   type CollectTask,
   type MonitorRunSummary,
   type TaskEvent,
+  type MonitorAIRouting,
+  type MonitorAIRoutingDefaults,
+  type MonitorAIProviderName,
+  type MonitorAIStageName,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { RunEventPayload } from "@/components/monitor/RunEventPayload";
 import { cn } from "@/lib/utils";
 import type { Destination } from "@/lib/api";
+
+const STAGE_PROVIDER_OPTIONS: Record<MonitorAIStageName, MonitorAIProviderName[]> = {
+  filter: ["rule", "llm_openai", "agent_codex"],
+  keywords: ["rule", "llm_openai", "agent_codex"],
+  report: ["llm_openai", "agent_codex"],
+};
+
+const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["agent_codex", "llm_openai"];
+const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
+const isActiveRunStatus = (status: string) =>
+  ACTIVE_RUN_STATUSES.includes(status as (typeof ACTIVE_RUN_STATUSES)[number]);
 
 export default function MonitorsPage() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -45,26 +62,9 @@ export default function MonitorsPage() {
   >({});
   const [expandedSourceCategories, setExpandedSourceCategories] = useState<Record<string, boolean>>({});
   const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
+  const [aiRouting, setAiRouting] = useState<MonitorAIRouting>({ stages: {}, providers: {} });
+  const [aiRoutingDefaults, setAiRoutingDefaults] = useState<MonitorAIRoutingDefaults | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  // Test Run modal state
-  const [isTestModalOpen, setIsTestModalOpen] = useState(false);
-  const [testMonitor, setTestMonitor] = useState<Monitor | null>(null);
-  const [testWindowPreset, setTestWindowPreset] = useState<"24h" | "72h" | "168h" | "custom">("24h");
-  const [testWindowCustomValue, setTestWindowCustomValue] = useState("24");
-  const [testWindowCustomUnit, setTestWindowCustomUnit] = useState<"hours" | "days">("hours");
-
-  // Dedicated Test Console state
-  const [isTestConsoleOpen, setIsTestConsoleOpen] = useState(false);
-  const [testConsoleMonitor, setTestConsoleMonitor] = useState<Monitor | null>(null);
-  const [testRunId, setTestRunId] = useState<string | null>(null);
-  const [testRun, setTestRun] = useState<MonitorRunSummary | null>(null);
-  const [testRunEvents, setTestRunEvents] = useState<TaskEvent[]>([]);
-  const [testLoading, setTestLoading] = useState(false);
-  const [testAutoRefresh, setTestAutoRefresh] = useState(false);
-  const [testLastProgressAt, setTestLastProgressAt] = useState<number | null>(null);
-  const [testNow, setTestNow] = useState<number>(Date.now());
-  const testFingerprintRef = useRef<string>("");
 
   // Logs modal state
   const [isLogsModalOpen, setIsLogsModalOpen] = useState(false);
@@ -74,6 +74,12 @@ export default function MonitorsPage() {
   const [runEvents, setRunEvents] = useState<TaskEvent[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [logsFocusRunId, setLogsFocusRunId] = useState<string | null>(null);
+  const [terminatingRunIds, setTerminatingRunIds] = useState<Record<string, boolean>>({});
+  const [startingRunIds, setStartingRunIds] = useState<Record<string, boolean>>({});
+  const [togglingMonitorIds, setTogglingMonitorIds] = useState<Record<string, boolean>>({});
+  const [deletingMonitorIds, setDeletingMonitorIds] = useState<Record<string, boolean>>({});
+  const [openingLogsMonitorId, setOpeningLogsMonitorId] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const sourceMap = useMemo(() => {
     const map = new Map<string, Source>();
@@ -92,74 +98,129 @@ export default function MonitorsPage() {
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [sources]);
 
-  const focusedRun = useMemo(() => {
-    if (monitorRuns.length === 0) return null;
-    if (logsFocusRunId) {
-      return monitorRuns.find((item) => item.run_id === logsFocusRunId) ?? monitorRuns[0];
-    }
-    return monitorRuns[0];
-  }, [monitorRuns, logsFocusRunId]);
-
   const focusedTrace = useMemo(() => {
     return runEvents.filter((event) => Boolean(event));
   }, [runEvents]);
-  const testOverallProgress = useMemo(() => {
-    if (!testRun || testRun.source_total <= 0) return 0;
-    return Math.min(100, Math.round((testRun.source_done / testRun.source_total) * 100));
-  }, [testRun]);
-  const testStageProgress = useMemo(() => {
-    const totalSources = testRun?.source_total ?? 0;
-    if (totalSources <= 0) return [] as Array<{ stage: string; done: number; total: number }>;
 
-    const stages = ["collect", "window_filter", "process", "persist"];
-    const result: Array<{ stage: string; done: number; total: number }> = [];
-    for (const stage of stages) {
-      const doneIds = new Set<string>();
-      for (const event of testRunEvents) {
-        if (event.stage !== stage || !event.source_id) continue;
-        if (
-          event.event_type.endsWith("_success") ||
-          event.event_type.endsWith("_failed") ||
-          event.event_type.endsWith("_completed") ||
-          event.event_type === "source_completed" ||
-          event.event_type === "source_failed" ||
-          event.event_type === "window_filter_completed"
-        ) {
-          doneIds.add(event.source_id);
-        }
-      }
-      result.push({ stage, done: doneIds.size, total: totalSources });
+  const loadData = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
     }
-    return result;
-  }, [testRun, testRunEvents]);
-  const testSecondsSinceProgress = testLastProgressAt ? Math.floor((testNow - testLastProgressAt) / 1000) : null;
-  const isTestStalled = Boolean(
-    testAutoRefresh &&
-    testRun?.status === "running" &&
-    testLastProgressAt &&
-    testNow - testLastProgressAt > 60_000
-  );
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
     try {
-      const [monitorData, sourceData, destData] = await Promise.all([getMonitors(), getSources(), getDestinations()]);
+      const [monitorData, sourceData, destData, defaultRoutingData] = await Promise.all([
+        getMonitors(),
+        getSources(),
+        getDestinations(),
+        getMonitorAIRoutingDefaults().catch(() => null),
+      ]);
       setMonitors(monitorData);
       setSources(sourceData);
 
       // We expect the mock API to return the new Notion & Obsidian objects
       setDestinations(destData || []);
+      setAiRoutingDefaults(defaultRoutingData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      if (!silent) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timer = window.setTimeout(() => {
+      setActionNotice(null);
+    }, 5000);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [actionNotice]);
+
+  const normalizeAiRoutingForForm = useCallback((raw: MonitorAIRouting | undefined): MonitorAIRouting => {
+    const stages: Partial<Record<MonitorAIStageName, { primary: MonitorAIProviderName }>> = {};
+    const providers: Partial<Record<MonitorAIProviderName, { model?: string; timeout_sec?: number; max_retry?: number }>> = {};
+
+    const stagePayload = raw?.stages ?? {};
+    for (const stage of Object.keys(STAGE_PROVIDER_OPTIONS) as MonitorAIStageName[]) {
+      const value = stagePayload[stage]?.primary;
+      if (value && STAGE_PROVIDER_OPTIONS[stage].includes(value)) {
+        stages[stage] = { primary: value };
+      }
+    }
+
+    const providerPayload = raw?.providers ?? {};
+    for (const providerName of Object.keys(providerPayload) as MonitorAIProviderName[]) {
+      const config = providerPayload[providerName];
+      if (!config) continue;
+      const cleaned: { model?: string; timeout_sec?: number; max_retry?: number } = {};
+      const model = typeof config.model === "string" ? config.model.trim() : "";
+      if (model) cleaned.model = model;
+      if (typeof config.timeout_sec === "number" && Number.isFinite(config.timeout_sec) && config.timeout_sec >= 1) {
+        cleaned.timeout_sec = Math.floor(config.timeout_sec);
+      }
+      if (typeof config.max_retry === "number" && Number.isFinite(config.max_retry) && config.max_retry >= 0) {
+        cleaned.max_retry = Math.floor(config.max_retry);
+      }
+      if (Object.keys(cleaned).length > 0) {
+        providers[providerName] = cleaned;
+      }
+    }
+
+    return { stages, providers };
+  }, []);
+
+  const cleanAiRoutingForSubmit = useCallback((raw: MonitorAIRouting): MonitorAIRouting | undefined => {
+    const normalized = normalizeAiRoutingForForm(raw);
+    const stageEntries = Object.entries(normalized.stages ?? {}).filter(([, value]) => Boolean(value?.primary));
+    const providerEntries = Object.entries(normalized.providers ?? {}).filter(([, value]) => {
+      if (!value) return false;
+      return Boolean((value.model && value.model.trim()) || typeof value.timeout_sec === "number" || typeof value.max_retry === "number");
+    });
+
+    if (stageEntries.length === 0 && providerEntries.length === 0) {
+      return undefined;
+    }
+    return {
+      stages: Object.fromEntries(stageEntries),
+      providers: Object.fromEntries(providerEntries),
+    };
+  }, [normalizeAiRoutingForForm]);
+
+  const selectedAiProviders = useMemo(() => {
+    const stageValues = aiRouting.stages ?? {};
+    const providers = new Set<Exclude<MonitorAIProviderName, "rule">>();
+    for (const stageName of Object.keys(stageValues) as MonitorAIStageName[]) {
+      const provider = stageValues[stageName]?.primary;
+      if (provider && provider !== "rule") {
+        providers.add(provider);
+      }
+    }
+    for (const providerName of Object.keys(aiRouting.providers ?? {}) as MonitorAIProviderName[]) {
+      if (providerName !== "rule") {
+        providers.add(providerName);
+      }
+    }
+    return Array.from(providers);
+  }, [aiRouting]);
+
+  const aiRoutingInheritLabel = useCallback((stage: MonitorAIStageName) => {
+    const current = aiRoutingDefaults?.stages?.[stage];
+    const normalized = typeof current === "string" ? current.trim() : "";
+    if (normalized && STAGE_PROVIDER_OPTIONS[stage].includes(normalized as MonitorAIProviderName)) {
+      return `inherit (current: ${normalized})`;
+    }
+    return "inherit default";
+  }, [aiRoutingDefaults]);
 
   const resetForm = () => {
     setName("");
@@ -173,6 +234,7 @@ export default function MonitorsPage() {
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
     setSelectedDestinations([]);
+    setAiRouting({ stages: {}, providers: {} });
   };
 
   const openCreateModal = () => {
@@ -194,38 +256,8 @@ export default function MonitorsPage() {
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
     setSelectedDestinations(monitor.destination_ids);
+    setAiRouting(normalizeAiRoutingForForm(monitor.ai_routing));
     setIsModalOpen(true);
-  };
-
-  const _applyTestWindowFromHours = (hours: number) => {
-    const normalized = Math.max(1, Math.min(168, Math.floor(hours || 24)));
-    if (normalized === 24) {
-      setTestWindowPreset("24h");
-      setTestWindowCustomValue("24");
-      setTestWindowCustomUnit("hours");
-      return;
-    }
-    if (normalized === 72) {
-      setTestWindowPreset("72h");
-      setTestWindowCustomValue("72");
-      setTestWindowCustomUnit("hours");
-      return;
-    }
-    if (normalized === 168) {
-      setTestWindowPreset("168h");
-      setTestWindowCustomValue("7");
-      setTestWindowCustomUnit("days");
-      return;
-    }
-    setTestWindowPreset("custom");
-    setTestWindowCustomValue(String(normalized));
-    setTestWindowCustomUnit("hours");
-  };
-
-  const openTestConfigModal = (monitor: Monitor) => {
-    setTestMonitor(monitor);
-    _applyTestWindowFromHours(Number(monitor.window_hours || 24));
-    setIsTestModalOpen(true);
   };
 
   const closeLogsModal = () => {
@@ -255,38 +287,6 @@ export default function MonitorsPage() {
     []
   );
 
-  const refreshTestConsole = useCallback(
-    async (monitorId: string, targetRunId: string) => {
-      const runs = await getMonitorRuns(monitorId, 40);
-      const active = runs.find((item) => item.run_id === targetRunId) ?? null;
-      setTestRun(active);
-      if (!active) {
-        setTestRunEvents([]);
-        return;
-      }
-      const events = await getMonitorRunEvents(monitorId, active.run_id);
-      setTestRunEvents(events);
-
-      const fingerprint = JSON.stringify({
-        status: active.status,
-        error: active.error_message,
-        articles: active.articles_count,
-        source_done: active.source_done,
-        source_total: active.source_total,
-        events: events.map((item) => [item.id, item.event_type, item.level]),
-      });
-      if (fingerprint !== testFingerprintRef.current) {
-        testFingerprintRef.current = fingerprint;
-        setTestLastProgressAt(Date.now());
-      }
-
-      if (!["pending", "running", "cancelling"].includes(active.status)) {
-        setTestAutoRefresh(false);
-      }
-    },
-    []
-  );
-
   const openLogsModal = async (monitor: Monitor, focusRunId: string | null = null) => {
     setLogsMonitor(monitor);
     setMonitorLogs([]);
@@ -299,124 +299,26 @@ export default function MonitorsPage() {
       const [logs] = await Promise.all([fetchLogs(monitor.id), fetchRunsAndEvents(monitor.id, focusRunId)]);
       void logs;
     } catch (err) {
-      console.error("Failed to fetch logs", err);
+      setError(err instanceof Error ? err.message : "Failed to fetch logs");
+      setActionNotice({
+        type: "error",
+        message: "Failed to open logs. Please try again.",
+      });
     } finally {
       setLoadingLogs(false);
     }
   };
 
-  const closeTestConsole = () => {
-    setIsTestConsoleOpen(false);
-    setTestConsoleMonitor(null);
-    setTestRunId(null);
-    setTestRun(null);
-    setTestRunEvents([]);
-    setTestLoading(false);
-    setTestAutoRefresh(false);
-    setTestLastProgressAt(null);
-    testFingerprintRef.current = "";
-  };
-
-  const openTestConsoleForRun = async (monitor: Monitor, runId: string) => {
-    setIsTestModalOpen(false);
-    setIsLogsModalOpen(false);
-    setTestConsoleMonitor(monitor);
-    setTestRunId(runId);
-    setTestRun(null);
-    setTestRunEvents([]);
-    setTestLoading(true);
-    setTestAutoRefresh(true);
-    setTestLastProgressAt(Date.now());
-    testFingerprintRef.current = "";
-    setIsTestConsoleOpen(true);
+  const handleOpenLogs = async (monitor: Monitor) => {
+    setOpeningLogsMonitorId(monitor.id);
+    setError(null);
+    setActionNotice(null);
     try {
-      await refreshTestConsole(monitor.id, runId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to open test console");
-      setTestAutoRefresh(false);
+      await openLogsModal(monitor);
     } finally {
-      setTestLoading(false);
+      setOpeningLogsMonitorId((current) => (current === monitor.id ? null : current));
     }
   };
-
-  const _resolveTestWindowHours = () => {
-    if (testWindowPreset === "24h") return 24;
-    if (testWindowPreset === "72h") return 72;
-    if (testWindowPreset === "168h") return 168;
-
-    const parsed = Number(testWindowCustomValue);
-    if (!Number.isFinite(parsed)) return null;
-    const normalizedValue = Math.max(1, Math.floor(parsed));
-    const hours = testWindowCustomUnit === "days" ? normalizedValue * 24 : normalizedValue;
-    return Math.max(1, Math.min(168, hours));
-  };
-
-  const handleStartTestRun = async () => {
-    if (!testMonitor) return;
-    const hours = _resolveTestWindowHours();
-    if (!hours) {
-      setError("Invalid test window. Please enter a valid value.");
-      return;
-    }
-    setIsTestModalOpen(false);
-    setTestConsoleMonitor(testMonitor);
-    setTestRunId(null);
-    setTestRun(null);
-    setTestRunEvents([]);
-    setTestLoading(true);
-    setTestAutoRefresh(true);
-    setTestLastProgressAt(Date.now());
-    testFingerprintRef.current = "";
-    setIsTestConsoleOpen(true);
-
-    try {
-      const runResponse = await runMonitor(testMonitor.id, {
-        window_hours: hours,
-        trigger_type: "test",
-      });
-      setTestRunId(runResponse.run_id);
-      await refreshTestConsole(testMonitor.id, runResponse.run_id);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Test run failed");
-      setTestAutoRefresh(false);
-    } finally {
-      setTestLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!isTestConsoleOpen || !testConsoleMonitor || !testRunId || !testAutoRefresh) return;
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        await refreshTestConsole(testConsoleMonitor.id, testRunId);
-      } catch (err) {
-        if (!cancelled) {
-          console.error("Failed to refresh test console", err);
-        }
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [isTestConsoleOpen, testConsoleMonitor, testRunId, testAutoRefresh, refreshTestConsole]);
-
-  useEffect(() => {
-    if (!isTestConsoleOpen || !testAutoRefresh) return;
-    const timer = window.setInterval(() => {
-      setTestNow(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [isTestConsoleOpen, testAutoRefresh]);
 
   useEffect(() => {
     if (!isLogsModalOpen || !logsMonitor) return;
@@ -431,7 +333,7 @@ export default function MonitorsPage() {
         void logs;
       } catch (err) {
         if (!cancelled) {
-          console.error("Failed to refresh logs", err);
+          setError(err instanceof Error ? err.message : "Failed to refresh logs");
         }
       }
     };
@@ -455,6 +357,58 @@ export default function MonitorsPage() {
       ...prev,
       [category]: !(prev[category] ?? true),
     }));
+  };
+
+  const handleAiStageProviderChange = (stage: MonitorAIStageName, nextValue: string) => {
+    setAiRouting((prev) => {
+      const nextStages = { ...(prev.stages ?? {}) };
+      const provider = nextValue as MonitorAIProviderName;
+      if (!nextValue) {
+        delete nextStages[stage];
+      } else if (STAGE_PROVIDER_OPTIONS[stage].includes(provider)) {
+        nextStages[stage] = { primary: provider };
+      }
+      return { ...prev, stages: nextStages };
+    });
+  };
+
+  const handleAiProviderConfigChange = (
+    provider: Exclude<MonitorAIProviderName, "rule">,
+    key: "model" | "timeout_sec" | "max_retry",
+    rawValue: string
+  ) => {
+    setAiRouting((prev) => {
+      const nextProviders = { ...(prev.providers ?? {}) };
+      const current = { ...(nextProviders[provider] ?? {}) };
+
+      if (key === "model") {
+        const normalized = rawValue.trim();
+        if (normalized) {
+          current.model = normalized;
+        } else {
+          delete current.model;
+        }
+      } else {
+        const text = rawValue.trim();
+        if (!text) {
+          delete current[key];
+        } else {
+          const parsed = Number(text);
+          if (!Number.isFinite(parsed)) {
+            return prev;
+          }
+          const bounded = key === "timeout_sec" ? Math.max(1, Math.floor(parsed)) : Math.max(0, Math.floor(parsed));
+          current[key] = bounded;
+        }
+      }
+
+      if (Object.keys(current).length === 0) {
+        delete nextProviders[provider];
+      } else {
+        nextProviders[provider] = current;
+      }
+      return { ...prev, providers: nextProviders };
+    });
   };
 
   const handleSubmit = async () => {
@@ -508,12 +462,14 @@ export default function MonitorsPage() {
         })
         .filter(([, override]) => Object.keys(override).length > 0)
     ) as Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    const cleanedAiRouting = cleanAiRoutingForSubmit(aiRouting);
     const payload = {
       name,
       time_period: timePeriod,
       report_type: effectiveReportType,
       source_ids: selectedSources,
       source_overrides: cleanedSourceOverrides,
+      ai_routing: cleanedAiRouting,
       destination_ids: selectedDestinations,
       window_hours: (() => {
         const parsed = Number(windowHours);
@@ -527,6 +483,7 @@ export default function MonitorsPage() {
         const target = monitors.find((item) => item.id === editingMonitorId);
         await updateMonitor(editingMonitorId, {
           ...payload,
+          ai_routing: cleanedAiRouting ?? null,
           enabled: target?.enabled ?? true,
         });
       } else {
@@ -544,49 +501,104 @@ export default function MonitorsPage() {
     }
   };
 
-  const handleRunNow = async (
-    monitor: Monitor,
-    options?: { windowHoursOverride?: number },
-  ) => {
+  const handleRunNow = async (monitor: Monitor) => {
+    setError(null);
+    setActionNotice(null);
+    setStartingRunIds((prev) => ({ ...prev, [monitor.id]: true }));
     try {
-      const windowHoursOverride = options?.windowHoursOverride;
-      const payload =
-        typeof windowHoursOverride === "number" && Number.isFinite(windowHoursOverride)
-          ? { window_hours: Math.max(1, Math.min(168, Math.floor(windowHoursOverride))), trigger_type: "manual" as const }
-          : undefined;
-      await runMonitor(monitor.id, payload);
-      await loadData();
+      const runResponse = await runMonitor(monitor.id);
+      setStartingRunIds((prev) => {
+        const next = { ...prev };
+        delete next[monitor.id];
+        return next;
+      });
+      setActionNotice({
+        type: "success",
+        message: `Run started. Open Logs to follow progress. Run ID: ${runResponse.run_id}`,
+      });
+      void loadData({ silent: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Run failed");
+      const message = err instanceof Error ? err.message : "Run failed";
+      setError(message);
+      setActionNotice({
+        type: "error",
+        message: "Failed to start run.",
+      });
+      setStartingRunIds((prev) => {
+        const next = { ...prev };
+        delete next[monitor.id];
+        return next;
+      });
     }
   };
 
-  const handleTerminateTestRun = async () => {
-    if (!testConsoleMonitor || !testRunId || !testRun) return;
-    if (!["pending", "running", "cancelling"].includes(testRun.status)) return;
+  const handleTerminateRunFromLogs = async (monitorId: string, runId: string) => {
+    setTerminatingRunIds((prev) => ({ ...prev, [runId]: true }));
     try {
-      await cancelMonitorRun(testConsoleMonitor.id, testRunId);
-      await refreshTestConsole(testConsoleMonitor.id, testRunId);
+      await cancelMonitorRun(monitorId, runId);
+      await fetchRunsAndEvents(monitorId, runId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Terminate test run failed");
+      setError(err instanceof Error ? err.message : "Terminate run failed");
+    } finally {
+      setTerminatingRunIds((prev) => {
+        const next = { ...prev };
+        delete next[runId];
+        return next;
+      });
     }
   };
 
   const handleToggle = async (monitor: Monitor) => {
+    setError(null);
+    setActionNotice(null);
+    setTogglingMonitorIds((prev) => ({ ...prev, [monitor.id]: true }));
     try {
       await updateMonitor(monitor.id, { enabled: !monitor.enabled });
       await loadData();
+      setActionNotice({
+        type: "success",
+        message: monitor.enabled ? "Monitor paused." : "Monitor resumed.",
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Update failed");
+      const message = err instanceof Error ? err.message : "Update failed";
+      setError(message);
+      setActionNotice({
+        type: "error",
+        message: "Failed to update monitor status.",
+      });
+    } finally {
+      setTogglingMonitorIds((prev) => {
+        const next = { ...prev };
+        delete next[monitor.id];
+        return next;
+      });
     }
   };
 
   const handleDelete = async (monitorId: string) => {
+    setError(null);
+    setActionNotice(null);
+    setDeletingMonitorIds((prev) => ({ ...prev, [monitorId]: true }));
     try {
       await deleteMonitor(monitorId);
       await loadData();
+      setActionNotice({
+        type: "success",
+        message: "Monitor deleted.",
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed");
+      const message = err instanceof Error ? err.message : "Delete failed";
+      setError(message);
+      setActionNotice({
+        type: "error",
+        message: "Failed to delete monitor.",
+      });
+    } finally {
+      setDeletingMonitorIds((prev) => {
+        const next = { ...prev };
+        delete next[monitorId];
+        return next;
+      });
     }
   };
 
@@ -610,6 +622,18 @@ export default function MonitorsPage() {
 
       {loading && <div className="py-10 text-sm text-muted-foreground">Loading monitors...</div>}
       {error && <div className="py-4 text-sm text-red-500">{error}</div>}
+      {actionNotice && (
+        <div
+          className={cn(
+            "py-3 px-4 text-sm rounded-md border",
+            actionNotice.type === "success"
+              ? "text-green-700 bg-green-50 border-green-200 dark:text-green-300 dark:bg-green-900/20 dark:border-green-900/40"
+              : "text-red-700 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-900/20 dark:border-red-900/40"
+          )}
+        >
+          {actionNotice.message}
+        </div>
+      )}
 
       {!loading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -634,13 +658,8 @@ export default function MonitorsPage() {
                 <CardTitle className="text-lg font-semibold leading-snug">{monitor.name}</CardTitle>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant="secondary" className="capitalize bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-none">
-                    {monitor.time_period}
+                    {monitor.report_type}
                   </Badge>
-                  {monitor.time_period !== monitor.report_type && (
-                    <Badge variant="secondary" className="capitalize bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-none">
-                      {monitor.report_type} report
-                    </Badge>
-                  )}
                   <Badge variant="secondary" className={monitor.enabled ? "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}>
                     {monitor.enabled ? "active" : "paused"}
                   </Badge>
@@ -653,6 +672,16 @@ export default function MonitorsPage() {
                   <span>{monitor.source_ids.length} sources</span>
                 </div>
                 <div className="flex items-center space-x-2">
+                  <Calendar className="w-4 h-4" />
+                  <span>
+                    {monitor.time_period === "custom" && monitor.custom_schedule
+                      ? monitor.custom_schedule
+                      : monitor.time_period === "daily"
+                        ? "Daily schedule"
+                        : "Weekly schedule"}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
                   <Clock className="w-4 h-4" />
                   <span>{monitor.last_run ? new Date(monitor.last_run).toLocaleString() : "Never run"}</span>
                 </div>
@@ -661,61 +690,82 @@ export default function MonitorsPage() {
                 </div>
               </CardContent>
 
-              <CardFooter className="pt-0 justify-between items-center border-t border-border/40 pb-3 pt-3 mt-auto flex-wrap gap-y-2">
+              <CardFooter className="pt-0 justify-between items-center border-t border-border/40 pb-3 pt-3 mt-auto">
                 <button
+                  type="button"
                   onClick={(event) => {
+                    event.preventDefault();
                     event.stopPropagation();
                     void handleToggle(monitor);
                   }}
+                  disabled={Boolean(togglingMonitorIds[monitor.id]) || Boolean(deletingMonitorIds[monitor.id])}
                   className={cn(
-                    "text-xs px-3 py-1.5 rounded-md transition-colors cursor-pointer",
+                    "text-xs px-3 py-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed",
                     monitor.enabled
                       ? "bg-yellow-50 hover:bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:hover:bg-yellow-900/40 dark:text-yellow-300"
                       : "bg-green-50 hover:bg-green-100 text-green-700 dark:bg-green-900/30 dark:hover:bg-green-900/40 dark:text-green-300"
                   )}
                 >
-                  {monitor.enabled ? "Pause" : "Resume"}
+                  {togglingMonitorIds[monitor.id] ? "Updating..." : monitor.enabled ? "Pause" : "Resume"}
                 </button>
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex items-center justify-end gap-1.5 ml-2">
                   <button
+                    type="button"
                     onClick={(event) => {
+                      event.preventDefault();
                       event.stopPropagation();
-                      void openLogsModal(monitor);
+                      void handleOpenLogs(monitor);
                     }}
-                    className="text-xs font-medium text-foreground bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 px-3 py-1.5 rounded-md transition-colors flex items-center cursor-pointer"
+                    disabled={openingLogsMonitorId === monitor.id || Boolean(deletingMonitorIds[monitor.id])}
+                    className="text-xs font-medium text-foreground bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 px-2.5 py-1.5 rounded-md transition-colors flex items-center cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-neutral-100 disabled:dark:hover:bg-neutral-800"
                   >
-                    <History className="w-3.5 h-3.5 mr-1.5" />
-                    Logs
+                    {openingLogsMonitorId === monitor.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <>
+                        <History className="w-3.5 h-3.5 mr-1" />
+                        Logs
+                      </>
+                    )}
                   </button>
                   <button
+                    type="button"
                     onClick={(event) => {
+                      event.preventDefault();
                       event.stopPropagation();
                       void handleRunNow(monitor);
                     }}
-                    disabled={!monitor.enabled}
-                    className="text-xs font-medium text-foreground bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 rounded-md transition-colors flex items-center cursor-pointer disabled:hover:bg-neutral-100 disabled:dark:hover:bg-neutral-800"
+                    disabled={!monitor.enabled || Boolean(startingRunIds[monitor.id]) || Boolean(deletingMonitorIds[monitor.id])}
+                    className="text-xs font-medium text-foreground bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed px-2.5 py-1.5 rounded-md transition-colors flex items-center cursor-pointer disabled:hover:bg-neutral-100 disabled:dark:hover:bg-neutral-800"
                   >
-                    <Play className="w-3.5 h-3.5 mr-1.5" />
-                    Run
+                    {startingRunIds[monitor.id] ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                        Starting...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 mr-1" />
+                        Run
+                      </>
+                    )}
                   </button>
                   <button
+                    type="button"
                     onClick={(event) => {
-                      event.stopPropagation();
-                      openTestConfigModal(monitor);
-                    }}
-                    disabled={!monitor.enabled}
-                    className="text-xs font-medium text-foreground bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 rounded-md transition-colors flex items-center cursor-pointer disabled:hover:bg-neutral-100 disabled:dark:hover:bg-neutral-800"
-                  >
-                    Test
-                  </button>
-                  <button
-                    onClick={(event) => {
+                      event.preventDefault();
                       event.stopPropagation();
                       void handleDelete(monitor.id);
                     }}
-                    className="text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/40 dark:text-red-300 px-3 py-1.5 rounded-md transition-colors flex items-center cursor-pointer hover:opacity-80"
+                    disabled={Boolean(deletingMonitorIds[monitor.id])}
+                    className="text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/40 dark:text-red-300 px-2 py-1.5 rounded-md transition-colors flex items-center cursor-pointer hover:opacity-80 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="Delete Monitor"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {deletingMonitorIds[monitor.id] ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </CardFooter>
@@ -733,12 +783,12 @@ export default function MonitorsPage() {
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeModal} />
-          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-xl z-50">
-            <div className="px-6 py-4 border-b border-border/40">
+          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-xl z-50 flex flex-col max-h-[85vh]">
+            <div className="px-6 py-4 border-b border-border/40 shrink-0">
               <h2 className="text-xl font-semibold tracking-tight">{editingMonitorId ? "Edit Monitor" : "Create Monitor"}</h2>
             </div>
 
-            <div className="p-6 space-y-5">
+            <div className="p-6 space-y-5 overflow-y-auto">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Name</label>
                 <input
@@ -1036,6 +1086,102 @@ export default function MonitorsPage() {
                 </div>
               </div>
 
+              <div className="space-y-3 border border-border/40 rounded-md p-3">
+                <div>
+                  <label className="text-sm font-medium">AI Routing (Advanced)</label>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Override stage provider/model for this monitor. Empty values inherit global defaults
+                    {aiRoutingDefaults?.profile_name ? ` (${aiRoutingDefaults.profile_name}).` : "."}
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="space-y-1.5">
+                    <label htmlFor="monitor-ai-filter-provider" className="text-xs font-medium text-muted-foreground">Filter stage provider</label>
+                    <select
+                      id="monitor-ai-filter-provider"
+                      value={aiRouting.stages?.filter?.primary ?? ""}
+                      onChange={(e) => handleAiStageProviderChange("filter", e.target.value)}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
+                    >
+                      <option value="">{aiRoutingInheritLabel("filter")}</option>
+                      {STAGE_PROVIDER_OPTIONS.filter.map((provider) => (
+                        <option key={provider} value={provider}>{provider}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="monitor-ai-keywords-provider" className="text-xs font-medium text-muted-foreground">Keywords stage provider</label>
+                    <select
+                      id="monitor-ai-keywords-provider"
+                      value={aiRouting.stages?.keywords?.primary ?? ""}
+                      onChange={(e) => handleAiStageProviderChange("keywords", e.target.value)}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
+                    >
+                      <option value="">{aiRoutingInheritLabel("keywords")}</option>
+                      {STAGE_PROVIDER_OPTIONS.keywords.map((provider) => (
+                        <option key={provider} value={provider}>{provider}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="monitor-ai-report-provider" className="text-xs font-medium text-muted-foreground">Report stage provider</label>
+                    <select
+                      id="monitor-ai-report-provider"
+                      value={aiRouting.stages?.report?.primary ?? ""}
+                      onChange={(e) => handleAiStageProviderChange("report", e.target.value)}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
+                    >
+                      <option value="">{aiRoutingInheritLabel("report")}</option>
+                      {STAGE_PROVIDER_OPTIONS.report.map((provider) => (
+                        <option key={provider} value={provider}>{provider}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {selectedAiProviders.length > 0 && (
+                  <div className="space-y-3 pt-1">
+                    {MODEL_PROVIDER_OPTIONS.filter((provider) => selectedAiProviders.includes(provider)).map((provider) => (
+                      <div key={provider} className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <div className="space-y-1.5">
+                          <label htmlFor={`monitor-ai-model-${provider}`} className="text-xs font-medium text-muted-foreground">{`Model for ${provider}`}</label>
+                          <input
+                            id={`monitor-ai-model-${provider}`}
+                            value={aiRouting.providers?.[provider]?.model ?? ""}
+                            onChange={(e) => handleAiProviderConfigChange(provider, "model", e.target.value)}
+                            placeholder={provider === "agent_codex" ? "gpt-5-codex" : "gpt-4o-mini"}
+                            className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label htmlFor={`monitor-ai-timeout-${provider}`} className="text-xs font-medium text-muted-foreground">Timeout (sec)</label>
+                          <input
+                            id={`monitor-ai-timeout-${provider}`}
+                            type="number"
+                            min={1}
+                            value={typeof aiRouting.providers?.[provider]?.timeout_sec === "number" ? aiRouting.providers?.[provider]?.timeout_sec : ""}
+                            onChange={(e) => handleAiProviderConfigChange(provider, "timeout_sec", e.target.value)}
+                            placeholder={provider === "agent_codex" ? "90" : "30"}
+                            className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label htmlFor={`monitor-ai-retry-${provider}`} className="text-xs font-medium text-muted-foreground">Max retry</label>
+                          <input
+                            id={`monitor-ai-retry-${provider}`}
+                            type="number"
+                            min={0}
+                            value={typeof aiRouting.providers?.[provider]?.max_retry === "number" ? aiRouting.providers?.[provider]?.max_retry : ""}
+                            onChange={(e) => handleAiProviderConfigChange(provider, "max_retry", e.target.value)}
+                            placeholder="2"
+                            className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <label className="text-sm font-medium">Destinations (Optional)</label>
                 <div className="max-h-40 overflow-y-auto border border-border/40 rounded-md p-2 space-y-1">
@@ -1068,7 +1214,7 @@ export default function MonitorsPage() {
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-border/40 flex items-center justify-end gap-3">
+            <div className="px-6 py-4 border-t border-border/40 flex items-center justify-end gap-3 shrink-0">
               <button onClick={closeModal} className="px-4 py-2 text-sm font-medium hover:bg-muted rounded-md transition-colors">
                 Cancel
               </button>
@@ -1084,238 +1230,13 @@ export default function MonitorsPage() {
         </div>
       )}
 
-      {isTestModalOpen && testMonitor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={() => setIsTestModalOpen(false)} />
-          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-md z-50 animate-in fade-in zoom-in-95 duration-200">
-            <div className="px-6 py-4 border-b border-border/40">
-              <h2 className="text-lg font-semibold tracking-tight">Test Run: {testMonitor.name}</h2>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Time Window</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTestWindowPreset("24h")}
-                    className={cn(
-                      "h-9 rounded-md border text-xs font-medium",
-                      testWindowPreset === "24h" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border"
-                    )}
-                  >
-                    Last 24h
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTestWindowPreset("72h")}
-                    className={cn(
-                      "h-9 rounded-md border text-xs font-medium",
-                      testWindowPreset === "72h" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border"
-                    )}
-                  >
-                    Last 3d
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTestWindowPreset("168h")}
-                    className={cn(
-                      "h-9 rounded-md border text-xs font-medium",
-                      testWindowPreset === "168h" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border"
-                    )}
-                  >
-                    Last 7d
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTestWindowPreset("custom")}
-                    className={cn(
-                      "h-9 rounded-md border text-xs font-medium",
-                      testWindowPreset === "custom" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border"
-                    )}
-                  >
-                    Custom
-                  </button>
-                </div>
-                {testWindowPreset === "custom" && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      max={testWindowCustomUnit === "days" ? 7 : 168}
-                      value={testWindowCustomValue}
-                      onChange={(e) => setTestWindowCustomValue(e.target.value)}
-                      placeholder="24"
-                      className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                      autoFocus
-                    />
-                    <select
-                      value={testWindowCustomUnit}
-                      onChange={(e) => setTestWindowCustomUnit(e.target.value as "hours" | "days")}
-                      className="h-10 rounded-md border border-input bg-transparent px-2 text-sm"
-                    >
-                      <option value="hours">hours</option>
-                      <option value="days">days</option>
-                    </select>
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  For test runs, max range is 7 days (168 hours).
-                </p>
-              </div>
-            </div>
-
-            <div className="px-6 py-4 border-t border-border/40 flex items-center justify-end gap-3 bg-muted/20 rounded-b-xl">
-              <button
-                onClick={() => setIsTestModalOpen(false)}
-                className="px-4 py-2 text-sm font-medium hover:bg-muted rounded-md transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void handleStartTestRun()}
-                disabled={testWindowPreset === "custom" && (!testWindowCustomValue || Number(testWindowCustomValue) <= 0)}
-                className="px-4 py-2 text-sm font-medium bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors flex items-center"
-              >
-                Start Test Run
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isTestConsoleOpen && testConsoleMonitor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeTestConsole} />
-          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-2xl z-50 flex flex-col max-h-[85vh]">
-            <div className="px-6 py-4 border-b border-border/40 flex items-center justify-between shrink-0">
-              <h2 className="text-xl font-semibold tracking-tight">Test Console: {testConsoleMonitor.name}</h2>
-              <div className="flex items-center gap-2">
-                {testRun && ["pending", "running", "cancelling"].includes(testRun.status) && (
-                  <button
-                    type="button"
-                    onClick={() => void handleTerminateTestRun()}
-                    className="text-[11px] font-medium px-2 py-1 rounded border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:bg-red-900/20 dark:hover:bg-red-900/30"
-                  >
-                    Terminate
-                  </button>
-                )}
-                <button
-                  onClick={closeTestConsole}
-                  className="text-muted-foreground hover:text-foreground p-1 rounded-md transition-colors"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <div className="p-6 overflow-y-auto min-h-[300px]">
-              {testLoading && !testRun ? (
-                <div className="text-sm text-muted-foreground text-center py-10">Starting test run...</div>
-              ) : !testRun ? (
-                <div className="text-sm text-muted-foreground text-center py-10">No test run context found.</div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-xs space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="secondary" className="text-[10px] uppercase bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400">
-                        Test
-                      </Badge>
-                      <span className="font-mono text-muted-foreground break-all">run: {testRun.run_id}</span>
-                      <span className="text-muted-foreground">status: {testRun.status}</span>
-                      <span className="text-muted-foreground">
-                        progress: {testRun.source_done}/{testRun.source_total} ({testOverallProgress}%)
-                      </span>
-                      {testSecondsSinceProgress !== null && (
-                        <span className="text-muted-foreground">last progress: {testSecondsSinceProgress}s ago</span>
-                      )}
-                    </div>
-                    <div className="h-1.5 rounded bg-muted">
-                      <div
-                        className="h-1.5 rounded bg-emerald-500 transition-all"
-                        style={{ width: `${testOverallProgress}%` }}
-                      />
-                    </div>
-                    {testStageProgress.length > 0 && (
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                        {testStageProgress.map((item) => (
-                          <div key={item.stage} className="rounded border border-border/40 px-2 py-1">
-                            <div className="text-[10px] uppercase text-muted-foreground">{item.stage}</div>
-                            <div className="text-xs font-medium">
-                              {item.done}/{item.total}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {isTestStalled && (
-                      <div className="text-red-600 dark:text-red-400">
-                        No stage progress for over 60s. Likely stuck in current stage.
-                      </div>
-                    )}
-                    <div className="pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsTestConsoleOpen(false);
-                          void openLogsModal(testConsoleMonitor, testRun.run_id);
-                        }}
-                        className="text-[11px] font-medium px-2 py-1 rounded border border-border hover:bg-muted"
-                      >
-                        View In Logs
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="border border-border/40 rounded-lg p-4 bg-muted/10">
-                    <div className="text-xs font-medium mb-2">Event Timeline (Current Test Run)</div>
-                    {testRunEvents.length === 0 ? (
-                      <div className="text-xs text-muted-foreground">No event logs yet.</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {testRunEvents.map((event, idx) => {
-                          const stage = String(event.stage ?? "-");
-                          const level = String(event.level ?? "info");
-                          const eventType = String(event.event_type ?? "-");
-                          return (
-                            <div key={`${event.id}-${idx}`} className="rounded border border-border/30 bg-background/60 p-2">
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="font-mono text-muted-foreground">
-                                  {event.created_at ? new Date(event.created_at).toLocaleTimeString() : "--:--:--"}
-                                </span>
-                                <span className="font-medium">{stage}</span>
-                                <span className="text-muted-foreground">{eventType}</span>
-                                <Badge variant="secondary" className={cn(
-                                  "text-[10px] uppercase",
-                                  level === "info" && "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
-                                  level === "warning" && "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400",
-                                  level === "error" && "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
-                                )}>
-                                  {level}
-                                </Badge>
-                              </div>
-                              <div className="mt-1 text-xs break-all whitespace-pre-wrap">{event.message}</div>
-                              {event.payload && Object.keys(event.payload).length > 0 && (
-                                <pre className="mt-1 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
-                                  {JSON.stringify(event.payload, null, 2)}
-                                </pre>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {isLogsModalOpen && logsMonitor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeLogsModal} />
-          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-2xl z-50 flex flex-col max-h-[85vh]">
+          <div
+            data-testid="monitor-logs-modal"
+            className="relative bg-card border border-border rounded-xl shadow-lg z-50 flex flex-col w-[96vw] max-w-[1800px] h-[90vh]"
+          >
             <div className="px-6 py-4 border-b border-border/40 flex items-center justify-between shrink-0">
               <h2 className="text-xl font-semibold tracking-tight">Run History: {logsMonitor.name}</h2>
               <button
@@ -1325,7 +1246,7 @@ export default function MonitorsPage() {
                 ✕
               </button>
             </div>
-            <div className="p-6 overflow-y-auto min-h-[300px]">
+            <div className="p-6 md:p-8 overflow-y-auto flex-1 min-h-0">
               {loadingLogs ? (
                 <div className="text-sm text-muted-foreground text-center py-10">Loading logs...</div>
               ) : monitorRuns.length === 0 && monitorLogs.length === 0 ? (
@@ -1386,9 +1307,24 @@ export default function MonitorsPage() {
                                 </Badge>
                               )}
                             </div>
-                            <span className="text-xs font-mono text-muted-foreground break-all">
-                              {run.run_id.slice(0, 8)}... {run.articles_count} articles
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-mono text-muted-foreground break-all">
+                                {run.run_id.slice(0, 8)}... {run.articles_count} articles
+                              </span>
+                              {isActiveRunStatus(run.status) && (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void handleTerminateRunFromLogs(logsMonitor.id, run.run_id);
+                                  }}
+                                  disabled={Boolean(terminatingRunIds[run.run_id]) || run.status === "cancelling"}
+                                  className="text-[11px] font-medium px-2 py-1 rounded border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed dark:border-red-700 dark:text-red-300 dark:bg-red-900/20 dark:hover:bg-red-900/30"
+                                >
+                                  {run.status === "cancelling" || terminatingRunIds[run.run_id] ? "Cancelling..." : "Terminate Run"}
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="text-xs text-muted-foreground ml-6">
                             Sources: {run.source_done}/{run.source_total}
@@ -1399,20 +1335,6 @@ export default function MonitorsPage() {
                               {run.error_message}
                             </div>
                           )}
-                          {run.trigger_type === "test" && ["pending", "running", "cancelling"].includes(run.status) && (
-                            <div className="mt-2 ml-6">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void openTestConsoleForRun(logsMonitor, run.run_id);
-                                }}
-                                className="text-[11px] font-medium px-2 py-1 rounded border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300 dark:bg-blue-900/20 dark:hover:bg-blue-900/30"
-                              >
-                                Back To Test
-                              </button>
-                            </div>
-                          )}
                         </div>
 
                         {isRunExpanded && (
@@ -1420,7 +1342,7 @@ export default function MonitorsPage() {
                             {runTrace.length === 0 ? (
                               <div className="px-4 py-3 text-xs text-neutral-500 font-mono">Loading events...</div>
                             ) : (
-                              <div className="font-mono text-[12px] leading-relaxed max-h-[50vh] overflow-y-auto">
+                              <div className="font-mono text-[12px] leading-relaxed max-h-[68vh] overflow-y-auto">
                                 {runTrace.map((event, idx) => {
                                   const ts = event.created_at ? new Date(event.created_at).toLocaleTimeString() : "--:--:--";
                                   const stage = String(event.stage ?? "-");
@@ -1455,9 +1377,7 @@ export default function MonitorsPage() {
                                         </div>
                                       )}
                                       {hasPayload && (
-                                        <pre className="text-neutral-600 pl-[calc(8ch+10ch+2rem)] whitespace-pre-wrap break-all">
-                                          {JSON.stringify(event.payload, null, 2)}
-                                        </pre>
+                                        <RunEventPayload payload={event.payload} />
                                       )}
                                     </div>
                                   );

@@ -15,8 +15,6 @@ from pathlib import Path
 import sys
 import uuid
 
-from sqlalchemy import select
-
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT))
@@ -24,16 +22,36 @@ sys.path.insert(0, str(ROOT))
 from app.collectors.base import RawArticle
 from app.config import settings
 from app.models.database import async_session
-from app.models.source import Source
+from app.models.monitor import Monitor
+from app.models.user import User
+from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
+from app.processors.global_summary import run_global_summary_stage, run_global_summary_with_retry
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
-from app.providers.registry import get_provider
+from app.processors.report_stage import run_report_with_retry
+from app.processors.window_filter import filter_raw_articles_by_window
 from app.renderers.base import RenderContext
-from app.renderers.daily import DailyRenderer
+from app.renderers.daily import build_daily_events, render_daily_report
 from app.routing.loader import load_routing_profile
-from app.routing.schema import StageRoute
 
 FULL_CONTENT_MARKER = "----- FULL CONTENT -----"
 DEFAULT_OUTPUT_NAME = "_replay"
+DEFAULT_REPLAY_LLM_TIMEOUT_SEC = 120
+DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
+STAGE_ARTIFACTS = {
+    "raw": "01_raw_articles.json",
+    "window": "02_window_filtered.json",
+    "filter": "03_filter_output.json",
+    "keywords": "04_keywords_output.json",
+    "aggregate": "05_aggregated_events.json",
+    "global_summary": "06_global_summary.json",
+    "render": "07_rendered_report.md",
+    "report": "08_report_rewrite.json",
+}
+STAGE_ORDER = ("raw", "window", "filter", "keywords", "aggregate", "global_summary", "render", "report")
+SUPPLEMENTAL_ARTIFACTS = {
+    "candidate_cluster": "03_candidate_clusters.json",
+    "event_extract": "04_event_extract_output.json",
+}
 
 
 def _none_if_nullish(raw: object) -> str | None:
@@ -104,6 +122,70 @@ def _load_provider_overrides(raw: str | None) -> dict[str, dict]:
     return _normalize_provider_overrides(json.loads(raw))
 
 
+def _apply_replay_provider_defaults(provider_overrides: dict[str, dict]) -> dict[str, dict]:
+    normalized = _normalize_provider_overrides(provider_overrides)
+    llm_config = normalized.get("llm_openai")
+    if not isinstance(llm_config, dict):
+        return normalized
+
+    updated_llm_config = dict(llm_config)
+    timeout_raw = updated_llm_config.get("timeout_sec")
+    try:
+        timeout_sec = int(timeout_raw)
+    except Exception:
+        timeout_sec = 0
+    if timeout_sec < DEFAULT_REPLAY_LLM_TIMEOUT_SEC:
+        updated_llm_config["timeout_sec"] = DEFAULT_REPLAY_LLM_TIMEOUT_SEC
+    normalized["llm_openai"] = updated_llm_config
+    return normalized
+
+
+def _provider_overrides_from_user_settings(settings_data: dict | None) -> dict[str, dict]:
+    raw = (settings_data or {}).get("providers", {})
+    if not isinstance(raw, dict):
+        return {}
+
+    result: dict[str, dict] = {}
+    for provider_id, payload in raw.items():
+        if not isinstance(provider_id, str) or not isinstance(payload, dict):
+            continue
+        if not bool(payload.get("enabled")):
+            continue
+        config = payload.get("config")
+        if not isinstance(config, dict):
+            continue
+        result[provider_id] = dict(config)
+    return _apply_replay_provider_defaults(result)
+
+
+async def _load_provider_overrides_from_db(monitor_id: str | None) -> dict[str, dict]:
+    normalized_monitor_id = _none_if_nullish(monitor_id)
+    async with async_session() as session:
+        user: User | None = None
+        if normalized_monitor_id:
+            try:
+                monitor_uuid = uuid.UUID(normalized_monitor_id)
+            except ValueError:
+                monitor_uuid = None
+            if monitor_uuid is not None:
+                monitor = await session.get(Monitor, monitor_uuid)
+                if monitor is not None:
+                    user = await session.get(User, monitor.user_id)
+        if user is None:
+            user = await session.get(User, DEFAULT_USER_ID)
+        if user is None:
+            return {}
+        return _provider_overrides_from_user_settings(user.settings)
+
+
+async def _resolve_provider_overrides(provider_overrides_json: str | None, run_summary: dict) -> dict[str, dict]:
+    explicit = _load_provider_overrides(provider_overrides_json)
+    if explicit:
+        return _apply_replay_provider_defaults(explicit)
+    loaded = await _load_provider_overrides_from_db(_safe_str(run_summary.get("monitor_id")))
+    return _apply_replay_provider_defaults(loaded)
+
+
 def _fallback_category(collect_method: str) -> str:
     method = str(collect_method or "").strip().lower()
     if method in {"github_trending"}:
@@ -113,23 +195,11 @@ def _fallback_category(collect_method: str) -> str:
     return "blog"
 
 
-async def _load_source_categories(source_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
-    if not source_ids:
-        return {}
-    async with async_session() as session:
-        rows = (await session.execute(select(Source.id, Source.category).where(Source.id.in_(source_ids)))).all()
-    output: dict[uuid.UUID, str] = {}
-    for source_id, category in rows:
-        if isinstance(source_id, uuid.UUID) and isinstance(category, str):
-            output[source_id] = category
-    return output
-
-
 def _iter_source_dirs(export_dir: Path) -> list[Path]:
     dirs = [
         item
         for item in export_dir.iterdir()
-        if item.is_dir() and (item / "_summary.json").exists() and (item / "after_window").exists()
+        if item.is_dir() and (item / "_summary.json").exists() and (item / "raw").exists()
     ]
     return sorted(dirs, key=lambda item: item.name)
 
@@ -142,46 +212,45 @@ async def _collect_after_window_articles(
     *,
     export_dir: Path,
     run_summary: dict,
-) -> tuple[list[RawArticle], dict[str, dict]]:
+) -> tuple[list[RawArticle], dict[str, dict], dict[str, dict]]:
     source_dirs = _iter_source_dirs(export_dir)
-    source_ids: list[uuid.UUID] = []
     source_summaries: list[tuple[Path, dict]] = []
     for source_dir in source_dirs:
         summary = _load_json(source_dir / "_summary.json")
         source_id_text = _safe_str(summary.get("source_id"))
-        try:
-            source_id = uuid.UUID(source_id_text)
-        except ValueError:
+        if not source_id_text:
             continue
-        source_ids.append(source_id)
         source_summaries.append((source_dir, summary))
-
-    try:
-        category_map = await _load_source_categories(source_ids)
-    except Exception:
-        category_map = {}
 
     snapshot_fallback = _none_if_nullish(run_summary.get("window_end")) or datetime.now(timezone.utc).isoformat()
     raw_articles: list[RawArticle] = []
     per_source_stats: dict[str, dict] = {}
+    source_settings: dict[str, dict] = {}
 
     for source_dir, summary in source_summaries:
         source_id_text = _safe_str(summary.get("source_id"))
         source_name = _safe_str(summary.get("source_name")) or source_dir.name
         collect_method = _safe_str(summary.get("collect_method"))
-        source_uuid = uuid.UUID(source_id_text)
-        source_category = category_map.get(source_uuid) or _fallback_category(collect_method)
+        source_category = _safe_str(summary.get("source_category")) or _fallback_category(collect_method)
+        source_config = summary.get("source_config") if isinstance(summary.get("source_config"), dict) else {}
 
         per_source_stats[source_id_text] = {
             "source_id": source_id_text,
             "source_name": source_name,
             "collect_method": collect_method,
             "source_category": source_category,
+            "raw_total": 0,
             "raw_after_window": 0,
             "processed": 0,
         }
+        source_settings[source_id_text] = {
+            "source_name": source_name,
+            "collect_method": collect_method,
+            "source_category": source_category,
+            "source_config": source_config,
+        }
 
-        entries = summary.get("after_window_articles")
+        entries = summary.get("raw_articles")
         files: list[Path] = []
         if isinstance(entries, list) and entries:
             for entry in entries:
@@ -194,7 +263,7 @@ async def _collect_after_window_articles(
                 if path.exists() and path.is_file():
                     files.append(path)
         if not files:
-            files = sorted((source_dir / "after_window").glob("*.txt"))
+            files = sorted((source_dir / "raw").glob("*.txt"))
 
         for idx, file_path in enumerate(files, start=1):
             headers, content = _parse_article_file(file_path)
@@ -222,9 +291,167 @@ async def _collect_after_window_articles(
                     metadata=metadata,
                 )
             )
-            per_source_stats[source_id_text]["raw_after_window"] += 1
+            per_source_stats[source_id_text]["raw_total"] += 1
 
-    return raw_articles, per_source_stats
+    return raw_articles, per_source_stats, source_settings
+
+
+def _raw_article_to_dict(raw: RawArticle) -> dict:
+    return {
+        "external_id": raw.external_id,
+        "title": raw.title,
+        "url": raw.url,
+        "content": raw.content,
+        "published_at": raw.published_at.isoformat() if raw.published_at else None,
+        "metadata": raw.metadata if isinstance(raw.metadata, dict) else {},
+    }
+
+
+def _raw_article_from_dict(data: dict) -> RawArticle:
+    return RawArticle(
+        external_id=_none_if_nullish(data.get("external_id")),
+        title=_safe_str(data.get("title")),
+        url=_none_if_nullish(data.get("url")),
+        content=_safe_str(data.get("content")),
+        published_at=_parse_iso_datetime(data.get("published_at")),
+        metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+    )
+
+
+def _processed_article_to_dict(item: ProcessedArticle) -> dict:
+    return {
+        "raw": _raw_article_to_dict(item.raw),
+        "event_title": item.event_title,
+        "summary": item.summary,
+        "keywords": item.keywords,
+        "score": item.score,
+        "importance": item.importance,
+        "detail": item.detail,
+        "category": item.category,
+        "who": item.who,
+        "what": item.what,
+        "when": item.when,
+        "metrics": item.metrics,
+        "availability": item.availability,
+        "unknowns": item.unknowns,
+        "evidence": item.evidence,
+        "detail_mode": item.detail_mode,
+    }
+
+
+def _processed_article_from_dict(data: dict) -> ProcessedArticle:
+    return ProcessedArticle(
+        raw=_raw_article_from_dict(data.get("raw") if isinstance(data.get("raw"), dict) else {}),
+        event_title=_safe_str(data.get("event_title")),
+        summary=_safe_str(data.get("summary")),
+        keywords=data.get("keywords") if isinstance(data.get("keywords"), list) else [],
+        score=float(data.get("score", 1.0) or 1.0),
+        importance=_safe_str(data.get("importance")) or "normal",
+        detail=_safe_str(data.get("detail")),
+        category=_none_if_nullish(data.get("category")),
+        who=_safe_str(data.get("who")),
+        what=_safe_str(data.get("what")),
+        when=_safe_str(data.get("when")),
+        metrics=data.get("metrics") if isinstance(data.get("metrics"), list) else [],
+        availability=_safe_str(data.get("availability")),
+        unknowns=_safe_str(data.get("unknowns")),
+        evidence=_safe_str(data.get("evidence")),
+        detail_mode=_safe_str(data.get("detail_mode")) or "full",
+    )
+
+
+def _candidate_cluster_to_dict(cluster: CandidateCluster) -> dict:
+    return {
+        "cluster_id": cluster.cluster_id,
+        "articles": [_raw_article_to_dict(item) for item in cluster.articles],
+        "source_ids": list(cluster.source_ids),
+        "source_names": list(cluster.source_names),
+    }
+
+
+def _candidate_cluster_from_dict(data: dict) -> CandidateCluster:
+    return CandidateCluster(
+        cluster_id=_safe_str(data.get("cluster_id")) or "cluster-1",
+        articles=[_raw_article_from_dict(item) for item in data.get("articles", []) if isinstance(item, dict)],
+        source_ids=data.get("source_ids") if isinstance(data.get("source_ids"), list) else [],
+        source_names=data.get("source_names") if isinstance(data.get("source_names"), list) else [],
+    )
+
+
+def _processed_event_to_dict(item: ProcessedEvent) -> dict:
+    return {
+        "event_id": item.event_id,
+        "title": item.title,
+        "summary": item.summary,
+        "detail": item.detail,
+        "article_ids": list(item.article_ids),
+        "source_links": list(item.source_links),
+        "category": item.category,
+        "keywords": list(item.keywords),
+        "importance": item.importance,
+        "source_count": item.source_count,
+        "source_name": item.source_name,
+        "published_at": item.published_at,
+        "who": item.who,
+        "what": item.what,
+        "when": item.when,
+        "metrics": list(item.metrics),
+        "availability": item.availability,
+        "unknowns": item.unknowns,
+        "evidence": item.evidence,
+        "detail_mode": item.detail_mode,
+    }
+
+
+def _processed_event_from_dict(data: dict) -> ProcessedEvent:
+    return ProcessedEvent(
+        event_id=_safe_str(data.get("event_id")),
+        title=_safe_str(data.get("title")),
+        summary=_safe_str(data.get("summary")),
+        detail=_safe_str(data.get("detail")),
+        article_ids=data.get("article_ids") if isinstance(data.get("article_ids"), list) else [],
+        source_links=data.get("source_links") if isinstance(data.get("source_links"), list) else [],
+        category=_none_if_nullish(data.get("category")),
+        keywords=data.get("keywords") if isinstance(data.get("keywords"), list) else [],
+        importance=_safe_str(data.get("importance")) or "normal",
+        source_count=int(data.get("source_count", 0) or 0),
+        source_name=_safe_str(data.get("source_name")),
+        published_at=_none_if_nullish(data.get("published_at")),
+        who=_safe_str(data.get("who")),
+        what=_safe_str(data.get("what")),
+        when=_safe_str(data.get("when")),
+        metrics=data.get("metrics") if isinstance(data.get("metrics"), list) else [],
+        availability=_safe_str(data.get("availability")),
+        unknowns=_safe_str(data.get("unknowns")),
+        evidence=_safe_str(data.get("evidence")),
+        detail_mode=_safe_str(data.get("detail_mode")) or "full",
+    )
+
+
+def _global_summary_to_dict(item: GlobalSummary) -> dict:
+    return {
+        "global_tldr": item.global_tldr,
+        "provider": item.provider,
+        "fallback_used": item.fallback_used,
+        "prompt_metrics": item.prompt_metrics,
+    }
+
+
+def _global_summary_from_dict(data: dict) -> GlobalSummary:
+    return GlobalSummary(
+        global_tldr=_safe_str(data.get("global_tldr")),
+        provider=_safe_str(data.get("provider")),
+        fallback_used=bool(data.get("fallback_used", False)),
+        prompt_metrics=data.get("prompt_metrics") if isinstance(data.get("prompt_metrics"), dict) else {},
+    )
+
+
+def _write_json_artifact(path: Path, payload: object) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _read_json_artifact(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _avg(numbers: list[int]) -> float:
@@ -263,6 +490,7 @@ def _build_diagnostics(
     processed_total = 0
     stage_detailed_enough = 0
     rendered_detailed_enough = 0
+    compact_details = 0
 
     rendered_event_map: dict[str, list[dict]] = {}
     for event in rendered_events or []:
@@ -291,6 +519,7 @@ def _build_diagnostics(
         keywords_len = len(keywords or [])
         content_len = len(raw.content or "")
         importance = getattr(matched, "importance", None) if matched else None
+        detail_mode = str(getattr(matched, "detail_mode", "") or "").strip() if matched else ""
         event_bucket = rendered_event_map.get(raw.external_id or "", [])
         rendered_event = event_bucket.pop(0) if event_bucket else None
         rendered_detail = _safe_str((rendered_event or {}).get("detail"))
@@ -308,6 +537,8 @@ def _build_diagnostics(
             rendered_detail_lens.append(rendered_detail_len)
             if rendered_detail_len >= 200:
                 rendered_detailed_enough += 1
+            if detail_mode == "compact":
+                compact_details += 1
 
         rows.append(
             {
@@ -328,6 +559,7 @@ def _build_diagnostics(
                 "rendered_metrics_count": len(rendered_metrics) if isinstance(rendered_metrics, list) else 0,
                 "rendered_category": _safe_str((rendered_event or {}).get("category")),
                 "importance": _none_if_nullish(importance),
+                "detail_mode": detail_mode,
                 "debug_file": _safe_str(raw.metadata.get("debug_file")),
             }
         )
@@ -344,6 +576,7 @@ def _build_diagnostics(
         "avg_keywords_count": _avg(keywords_lens),
         "stage_detail_ge_200_ratio": _ratio(stage_detailed_enough, processed_total),
         "rendered_detail_ge_200_ratio": _ratio(rendered_detailed_enough, processed_total),
+        "compact_detail_ratio": _ratio(compact_details, processed_total),
     }
     return rows, metrics
 
@@ -371,31 +604,17 @@ def _max_retry(config: dict) -> int:
 
 async def _run_report_with_retry(
     *,
-    route: StageRoute,
+    route,
     providers: dict[str, dict],
     provider_overrides: dict[str, dict],
     payload: dict,
 ) -> tuple[dict, str]:
-    provider_chain = [route.primary, *(route.fallback or [])]
-    last_exc: Exception | None = None
-    for provider_name in provider_chain:
-        config = _merge_provider_config(
-            provider_name=provider_name,
-            profile_config=providers.get(provider_name, {}),
-            provider_overrides=provider_overrides,
-        )
-        max_retry = _max_retry(config)
-        provider = get_provider(stage="report", name=provider_name)
-        for _ in range(max_retry + 1):
-            try:
-                output = await provider.run(payload=payload, config=config)
-                return output, provider_name
-            except Exception as exc:  # pragma: no cover - network/runtime fallback
-                last_exc = exc
-                continue
-    if last_exc:
-        raise last_exc
-    raise RuntimeError("report stage has no available provider")
+    return await run_report_with_retry(
+        route=route,
+        providers=providers,
+        provider_overrides=provider_overrides,
+        payload=payload,
+    )
 
 
 def _event_metrics(events: list[dict]) -> dict:
@@ -431,6 +650,105 @@ def _event_metrics(events: list[dict]) -> dict:
     }
 
 
+def _artifact_path(output_dir: Path, stage: str) -> Path:
+    return output_dir / STAGE_ARTIFACTS[stage]
+
+
+def _stage_index(stage: str | None) -> int:
+    if stage is None:
+        return -1
+    try:
+        return STAGE_ORDER.index(stage)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported stage: {stage}") from exc
+
+
+def _should_stop_now(*, stage: str, stop_after: str | None) -> bool:
+    if stop_after is None:
+        return False
+    return _stage_index(stage) >= _stage_index(stop_after)
+
+
+def _raw_articles_from_artifact(path: Path) -> list[RawArticle]:
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, list):
+        return []
+    return [_raw_article_from_dict(item) for item in payload if isinstance(item, dict)]
+
+
+def _processed_articles_from_artifact(path: Path) -> list[ProcessedArticle]:
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, list):
+        return []
+    return [_processed_article_from_dict(item) for item in payload if isinstance(item, dict)]
+
+
+def _events_from_artifact(path: Path) -> list[dict]:
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _candidate_clusters_from_artifact(path: Path) -> list[CandidateCluster]:
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, list):
+        return []
+    return [_candidate_cluster_from_dict(item) for item in payload if isinstance(item, dict)]
+
+
+def _processed_events_from_artifact(path: Path) -> list[ProcessedEvent]:
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, list):
+        return []
+    return [_processed_event_from_dict(item) for item in payload if isinstance(item, dict)]
+
+
+def _global_summary_from_artifact(path: Path) -> GlobalSummary | None:
+    payload = _read_json_artifact(path)
+    if not isinstance(payload, dict):
+        return None
+    return _global_summary_from_dict(payload)
+
+
+def _report_date_from_summary(run_summary: dict) -> str:
+    window_end = _parse_iso_datetime(run_summary.get("window_end"))
+    if window_end is not None:
+        return window_end.date().isoformat()
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+async def _run_window_stage(
+    *,
+    raw_articles: list[RawArticle],
+    run_summary: dict,
+    source_settings: dict[str, dict],
+) -> tuple[list[RawArticle], dict[str, dict]]:
+    window_hours = int(run_summary.get("window_hours") or 24)
+    window_start = _parse_iso_datetime(run_summary.get("window_start")) or datetime.now(timezone.utc)
+    window_end = _parse_iso_datetime(run_summary.get("window_end")) or datetime.now(timezone.utc)
+    grouped: dict[str, list[RawArticle]] = {}
+    for item in raw_articles:
+        source_id = _safe_str((item.metadata or {}).get("source_id"))
+        grouped.setdefault(source_id, []).append(item)
+
+    kept: list[RawArticle] = []
+    traces: dict[str, dict] = {}
+    for source_id, items in grouped.items():
+        config = source_settings.get(source_id, {}).get("source_config")
+        allow_first_seen_fallback = bool(config.get("window_allow_first_seen_fallback", False)) if isinstance(config, dict) else False
+        filtered, trace = await filter_raw_articles_by_window(
+            raw_articles=items,
+            window_start=window_start,
+            window_end=window_end,
+            window_hours=window_hours,
+            allow_first_seen_fallback=allow_first_seen_fallback,
+        )
+        kept.extend(filtered)
+        traces[source_id] = trace
+    return kept, traces
+
+
 async def _run_replay(
     *,
     export_dir: Path,
@@ -441,42 +759,251 @@ async def _run_replay(
     max_articles: int | None,
     pipeline_mode: str,
     fallback_rule_on_auth_error: bool,
+    stage_concurrency: int = 1,
+    stop_after: str | None = None,
+    resume_from: str | None = None,
 ) -> dict:
     run_summary = _load_json(export_dir / "_run_summary.json")
-    raw_articles, source_stats = await _collect_after_window_articles(export_dir=export_dir, run_summary=run_summary)
-    if max_articles is not None and max_articles > 0:
-        raw_articles = raw_articles[:max_articles]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    raw_articles: list[RawArticle]
+    window_articles: list[RawArticle] = []
+    filtered_articles: list[RawArticle] = []
+    processed_articles: list[ProcessedArticle] = []
+    candidate_clusters: list[CandidateCluster] = []
+    processed_events: list[ProcessedEvent] = []
+    aggregated_events: list[dict] = []
+    global_summary: GlobalSummary | None = None
+    rendered_events: list[dict] = []
+    report = None
+    last_completed_stage = "raw"
+    report_provider_used = "not_run"
+    report_stage_error: str | None = None
 
-    pipeline = ProcessingPipeline(routing_profile=routing_profile)
-    pipeline.set_provider_overrides(provider_overrides)
+    raw_artifact = _artifact_path(output_dir, "raw")
+    if resume_from and _stage_index(resume_from) >= _stage_index("raw") and raw_artifact.exists():
+        raw_articles = _raw_articles_from_artifact(raw_artifact)
+        source_stats = _read_json_artifact(output_dir / "source_breakdown.json")
+        source_stats = {item["source_id"]: item for item in source_stats if isinstance(item, dict) and item.get("source_id")}
+        source_settings = _read_json_artifact(output_dir / "source_settings.json")
+        source_settings = source_settings if isinstance(source_settings, dict) else {}
+    else:
+        raw_articles, source_stats, source_settings = await _collect_after_window_articles(export_dir=export_dir, run_summary=run_summary)
+        _write_json_artifact(raw_artifact, [_raw_article_to_dict(item) for item in raw_articles])
+        _write_json_artifact(output_dir / "source_breakdown.json", list(source_stats.values()))
+        _write_json_artifact(output_dir / "source_settings.json", source_settings)
+    if _should_stop_now(stage="raw", stop_after=stop_after):
+        return {"output_dir": str(output_dir), "last_completed_stage": last_completed_stage}
+
+    window_artifact = _artifact_path(output_dir, "window")
+    if resume_from and _stage_index(resume_from) >= _stage_index("window") and window_artifact.exists():
+        window_articles = _raw_articles_from_artifact(window_artifact)
+    else:
+        window_articles, window_traces = await _run_window_stage(
+            raw_articles=raw_articles,
+            run_summary=run_summary,
+            source_settings=source_settings,
+        )
+        if max_articles is not None and max_articles > 0:
+            window_articles = window_articles[:max_articles]
+        _write_json_artifact(window_artifact, [_raw_article_to_dict(item) for item in window_articles])
+        _write_json_artifact(output_dir / "window_stage_trace.json", window_traces)
+    last_completed_stage = "window"
+    if _should_stop_now(stage="window", stop_after=stop_after):
+        return {"output_dir": str(output_dir), "last_completed_stage": last_completed_stage}
+
+    def _build_pipeline() -> ProcessingPipeline:
+        pipeline = ProcessingPipeline(routing_profile=routing_profile)
+        pipeline.set_provider_overrides(provider_overrides)
+        pipeline.set_stage_concurrency(stage_concurrency)
+        return pipeline
+
+    pipeline = _build_pipeline()
     pipeline_mode_used = pipeline_mode
     if pipeline_mode == "rule":
         _force_pipeline_rule_mode(pipeline)
 
-    try:
-        processed_articles = await pipeline.process(raw_articles)
-    except Exception as exc:
-        message = str(exc)
-        if fallback_rule_on_auth_error and pipeline_mode != "rule" and "401" in message and "Unauthorized" in message:
-            pipeline = ProcessingPipeline(routing_profile=routing_profile)
-            pipeline.set_provider_overrides(provider_overrides)
-            _force_pipeline_rule_mode(pipeline)
-            pipeline_mode_used = "rule_fallback"
-            processed_articles = await pipeline.process(raw_articles)
-        else:
-            raise
-    renderer = DailyRenderer()
+    filter_artifact = _artifact_path(output_dir, "filter")
+    if resume_from and _stage_index(resume_from) >= _stage_index("filter") and filter_artifact.exists():
+        filtered_articles = _raw_articles_from_artifact(filter_artifact)
+    else:
+        try:
+            filtered_articles, _ = await pipeline.run_filter_stage(window_articles)
+        except Exception as exc:
+            message = str(exc)
+            if fallback_rule_on_auth_error and pipeline_mode != "rule" and "401" in message and "Unauthorized" in message:
+                pipeline = _build_pipeline()
+                _force_pipeline_rule_mode(pipeline)
+                pipeline_mode_used = "rule_fallback"
+                filtered_articles, _ = await pipeline.run_filter_stage(window_articles)
+            else:
+                raise
+        _write_json_artifact(filter_artifact, [_raw_article_to_dict(item) for item in filtered_articles])
+    last_completed_stage = "filter"
+    if _should_stop_now(stage="filter", stop_after=stop_after):
+        return {"output_dir": str(output_dir), "last_completed_stage": last_completed_stage}
 
-    report_date = datetime.now(timezone.utc).date().isoformat()
-    window_end = _parse_iso_datetime(run_summary.get("window_end"))
-    if window_end is not None:
-        report_date = window_end.date().isoformat()
-    report = await renderer.render(processed_articles, RenderContext(date=report_date))
+    candidate_cluster_artifact = output_dir / SUPPLEMENTAL_ARTIFACTS["candidate_cluster"]
+    if resume_from and _stage_index(resume_from) > _stage_index("filter") and candidate_cluster_artifact.exists():
+        candidate_clusters = _candidate_clusters_from_artifact(candidate_cluster_artifact)
+    else:
+        candidate_clusters, _ = await pipeline.run_candidate_cluster_stage(filtered_articles)
+        _write_json_artifact(
+            candidate_cluster_artifact,
+            [_candidate_cluster_to_dict(item) for item in candidate_clusters],
+        )
 
-    profile = load_routing_profile(routing_profile)
-    report_provider_used = "daily_renderer"
-    report_stage_error: str | None = None
-    if run_report_rewrite:
+    keywords_artifact = _artifact_path(output_dir, "keywords")
+    if resume_from and _stage_index(resume_from) >= _stage_index("keywords") and keywords_artifact.exists():
+        processed_articles = _processed_articles_from_artifact(keywords_artifact)
+    else:
+        try:
+            processed_articles, _ = await pipeline.run_keywords_stage(filtered_articles)
+        except Exception as exc:
+            message = str(exc)
+            if fallback_rule_on_auth_error and pipeline_mode != "rule" and "401" in message and "Unauthorized" in message:
+                pipeline = _build_pipeline()
+                _force_pipeline_rule_mode(pipeline)
+                pipeline_mode_used = "rule_fallback"
+                processed_articles, _ = await pipeline.run_keywords_stage(filtered_articles)
+            else:
+                raise
+        _write_json_artifact(keywords_artifact, [_processed_article_to_dict(item) for item in processed_articles])
+    event_extract_artifact = output_dir / SUPPLEMENTAL_ARTIFACTS["event_extract"]
+    if resume_from and _stage_index(resume_from) >= _stage_index("keywords") and event_extract_artifact.exists():
+        processed_events = _processed_events_from_artifact(event_extract_artifact)
+    else:
+        processed_events, _ = await pipeline.run_event_extract_stage(candidate_clusters)
+        _write_json_artifact(
+            event_extract_artifact,
+            [_processed_event_to_dict(item) for item in processed_events],
+        )
+    last_completed_stage = "keywords"
+
+    diagnostics, processing_metrics = _build_diagnostics(
+        raw_articles=window_articles,
+        processed_articles=processed_articles,
+        rendered_events=[],
+    )
+    if _should_stop_now(stage="keywords", stop_after=stop_after):
+        metrics = {
+            "routing_profile": routing_profile,
+            "pipeline_mode_used": pipeline_mode_used,
+            "report_provider_used": report_provider_used,
+            "report_stage_error": report_stage_error,
+            "processing": processing_metrics,
+            "events": {
+                **_event_metrics([]),
+                "candidate_cluster_count": len(candidate_clusters),
+                "event_extract_count": len(processed_events),
+            },
+            "source_breakdown": list(source_stats.values()),
+            "top_low_detail_items": [],
+        }
+        _write_json_artifact(output_dir / "run_summary.json", run_summary)
+        _write_json_artifact(output_dir / "metrics.json", metrics)
+        _write_json_artifact(output_dir / "diagnostics.json", diagnostics)
+        _write_json_artifact(output_dir / "pipeline_stage_trace.json", pipeline.last_stage_trace)
+        return {"output_dir": str(output_dir), "last_completed_stage": last_completed_stage}
+
+    report_date = _report_date_from_summary(run_summary)
+    aggregate_artifact = _artifact_path(output_dir, "aggregate")
+    if resume_from and _stage_index(resume_from) >= _stage_index("aggregate") and aggregate_artifact.exists():
+        aggregated_events = _events_from_artifact(aggregate_artifact)
+    else:
+        aggregated_events = build_daily_events(processed_events or processed_articles)
+        _write_json_artifact(aggregate_artifact, aggregated_events)
+    last_completed_stage = "aggregate"
+    if _should_stop_now(stage="aggregate", stop_after=stop_after):
+        metrics = {
+            "routing_profile": routing_profile,
+            "pipeline_mode_used": pipeline_mode_used,
+            "report_provider_used": report_provider_used,
+            "report_stage_error": report_stage_error,
+            "processing": processing_metrics,
+            "global_summary_provider_used": "not_run",
+            "global_summary_chars": 0,
+            "global_summary_fallback_used": False,
+            "events": {
+                **_event_metrics(aggregated_events),
+                "candidate_cluster_count": len(candidate_clusters),
+                "event_extract_count": len(processed_events),
+                "aggregated_event_count": len(aggregated_events),
+            },
+            "source_breakdown": list(source_stats.values()),
+            "top_low_detail_items": [],
+        }
+        _write_json_artifact(output_dir / "run_summary.json", run_summary)
+        _write_json_artifact(output_dir / "metrics.json", metrics)
+        _write_json_artifact(output_dir / "diagnostics.json", diagnostics)
+        _write_json_artifact(output_dir / "pipeline_stage_trace.json", pipeline.last_stage_trace)
+        return {"output_dir": str(output_dir), "last_completed_stage": last_completed_stage}
+
+    global_summary_artifact = _artifact_path(output_dir, "global_summary")
+    if resume_from and _stage_index(resume_from) >= _stage_index("global_summary") and global_summary_artifact.exists():
+        global_summary = _global_summary_from_artifact(global_summary_artifact)
+    else:
+        profile = load_routing_profile(routing_profile)
+        summary_route = profile.stages.global_summary or profile.stages.report
+
+        async def _summary_runner(payload: dict) -> tuple[dict, str]:
+            return await run_global_summary_with_retry(
+                route=summary_route,
+                providers=profile.providers,
+                provider_overrides=provider_overrides,
+                payload=payload,
+            )
+
+        global_summary = await run_global_summary_stage(
+            events=aggregated_events,
+            runner=_summary_runner,
+        )
+        _write_json_artifact(global_summary_artifact, _global_summary_to_dict(global_summary))
+    last_completed_stage = "global_summary"
+    if _should_stop_now(stage="global_summary", stop_after=stop_after):
+        metrics = {
+            "routing_profile": routing_profile,
+            "pipeline_mode_used": pipeline_mode_used,
+            "report_provider_used": report_provider_used,
+            "report_stage_error": report_stage_error,
+            "processing": processing_metrics,
+            "global_summary_provider_used": global_summary.provider if global_summary is not None else "not_run",
+            "global_summary_chars": len(global_summary.global_tldr) if global_summary is not None else 0,
+            "global_summary_fallback_used": bool(global_summary.fallback_used) if global_summary is not None else False,
+            "events": {
+                **_event_metrics(aggregated_events),
+                "candidate_cluster_count": len(candidate_clusters),
+                "event_extract_count": len(processed_events),
+                "aggregated_event_count": len(aggregated_events),
+            },
+            "source_breakdown": list(source_stats.values()),
+            "top_low_detail_items": [],
+        }
+        _write_json_artifact(output_dir / "run_summary.json", run_summary)
+        _write_json_artifact(output_dir / "metrics.json", metrics)
+        _write_json_artifact(output_dir / "diagnostics.json", diagnostics)
+        _write_json_artifact(output_dir / "pipeline_stage_trace.json", pipeline.last_stage_trace)
+        return {"output_dir": str(output_dir), "last_completed_stage": last_completed_stage}
+
+    report = render_daily_report(
+        events=aggregated_events,
+        context=RenderContext(date=report_date),
+        global_summary=global_summary.global_tldr if global_summary is not None else None,
+    )
+    (output_dir / STAGE_ARTIFACTS["render"]).write_text(report.content, encoding="utf-8")
+    _write_json_artifact(
+        output_dir / "report_meta.json",
+        {
+            "title": report.title,
+            "global_tldr": report.metadata.get("global_tldr"),
+            "metadata": report.metadata,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    last_completed_stage = "render"
+    if _should_stop_now(stage="render", stop_after=stop_after):
+        report_provider_used = "daily_renderer"
+    elif run_report_rewrite:
+        profile = load_routing_profile(routing_profile)
         metadata = dict(report.metadata or {})
         payload = {
             "title": report.title,
@@ -492,6 +1019,7 @@ async def _run_replay(
                 provider_overrides=provider_overrides,
                 payload=payload,
             )
+            _write_json_artifact(output_dir / STAGE_ARTIFACTS["report"], report_output)
             title = _none_if_nullish(report_output.get("title"))
             content = _none_if_nullish(report_output.get("content"))
             global_tldr = _none_if_nullish(report_output.get("global_tldr"))
@@ -502,12 +1030,26 @@ async def _run_replay(
             if global_tldr:
                 report.metadata["global_tldr"] = global_tldr
                 report.metadata["tldr"] = [global_tldr]
+            (output_dir / "report.md").write_text(report.content, encoding="utf-8")
+            _write_json_artifact(
+                output_dir / "report_meta.json",
+                {
+                    "title": report.title,
+                    "global_tldr": report.metadata.get("global_tldr"),
+                    "metadata": report.metadata,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            last_completed_stage = "report"
         except Exception as exc:  # pragma: no cover - runtime fallback
+            report_provider_used = "daily_renderer"
             report_stage_error = str(exc)
+    else:
+        report_provider_used = "daily_renderer"
 
-    rendered_events = list(report.metadata.get("events") or [])
+    rendered_events = list((report.metadata or {}).get("events") or []) if report is not None else []
     diagnostics, processing_metrics = _build_diagnostics(
-        raw_articles=raw_articles,
+        raw_articles=window_articles,
         processed_articles=processed_articles,
         rendered_events=rendered_events,
     )
@@ -521,6 +1063,7 @@ async def _run_replay(
         processed_per_source[source_id] = processed_per_source.get(source_id, 0) + 1
 
     for source_id, stats in source_stats.items():
+        stats["raw_after_window"] = len([item for item in window_articles if _safe_str(item.metadata.get("source_id")) == source_id])
         stats["processed"] = processed_per_source.get(source_id, 0)
         stats["keep_ratio"] = _ratio(stats["processed"], stats["raw_after_window"])
 
@@ -535,7 +1078,15 @@ async def _run_replay(
         "report_provider_used": report_provider_used,
         "report_stage_error": report_stage_error,
         "processing": processing_metrics,
-        "events": event_metrics,
+        "global_summary_provider_used": global_summary.provider if global_summary is not None else "not_run",
+        "global_summary_chars": len(global_summary.global_tldr) if global_summary is not None else 0,
+        "global_summary_fallback_used": bool(global_summary.fallback_used) if global_summary is not None else False,
+        "events": {
+            **event_metrics,
+            "candidate_cluster_count": len(candidate_clusters),
+            "event_extract_count": len(processed_events),
+            "aggregated_event_count": len(aggregated_events),
+        },
         "source_breakdown": list(source_stats.values()),
         "top_low_detail_items": [
             {
@@ -550,37 +1101,32 @@ async def _run_replay(
         ],
     }
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "run_summary.json").write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    (output_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-    (output_dir / "diagnostics.json").write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
-    (output_dir / "pipeline_stage_trace.json").write_text(
-        json.dumps(pipeline.last_stage_trace, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    (output_dir / "report.md").write_text(report.content, encoding="utf-8")
-    (output_dir / "report_meta.json").write_text(
-        json.dumps(
+    _write_json_artifact(output_dir / "run_summary.json", run_summary)
+    _write_json_artifact(output_dir / "metrics.json", metrics)
+    _write_json_artifact(output_dir / "diagnostics.json", diagnostics)
+    _write_json_artifact(output_dir / "pipeline_stage_trace.json", pipeline.last_stage_trace)
+    if report is not None and not (output_dir / "report.md").exists():
+        (output_dir / "report.md").write_text(report.content, encoding="utf-8")
+    if report is not None and not (output_dir / "report_meta.json").exists():
+        _write_json_artifact(
+            output_dir / "report_meta.json",
             {
                 "title": report.title,
                 "global_tldr": report.metadata.get("global_tldr"),
                 "metadata": report.metadata,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+        )
 
     return {
         "output_dir": str(output_dir),
-        "raw_after_window_total": len(raw_articles),
+        "raw_after_window_total": len(window_articles),
         "processed_total": len(processed_articles),
-        "report_title": report.title,
+        "report_title": report.title if report is not None else "",
         "pipeline_mode_used": pipeline_mode_used,
         "report_provider_used": report_provider_used,
         "report_stage_error": report_stage_error,
+        "last_completed_stage": last_completed_stage,
     }
 
 
@@ -599,7 +1145,8 @@ async def _main_async(args: argparse.Namespace) -> int:
     if not run_summary_path.exists():
         raise RuntimeError(f"missing _run_summary.json under: {export_dir}")
 
-    provider_overrides = _load_provider_overrides(args.provider_overrides_json)
+    run_summary = _load_json(run_summary_path)
+    provider_overrides = await _resolve_provider_overrides(args.provider_overrides_json, run_summary)
     default_output_dir = export_dir / DEFAULT_OUTPUT_NAME / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else default_output_dir
 
@@ -612,6 +1159,9 @@ async def _main_async(args: argparse.Namespace) -> int:
         max_articles=args.max_articles,
         pipeline_mode=args.pipeline_mode,
         fallback_rule_on_auth_error=bool(args.fallback_rule_on_auth_error),
+        stage_concurrency=args.stage_concurrency,
+        stop_after=args.stop_after,
+        resume_from=args.resume_from,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -638,6 +1188,12 @@ def main() -> int:
     parser.add_argument("--output-dir", default=None, help="Output directory (default: <export-dir>/_replay/<timestamp>)")
     parser.add_argument("--max-articles", type=int, default=None, help="Optional cap on replayed article count")
     parser.add_argument(
+        "--stage-concurrency",
+        type=int,
+        default=1,
+        help="Max concurrent items for replay keywords/event_extract stages (default: 1)",
+    )
+    parser.add_argument(
         "--pipeline-mode",
         choices=["routing", "rule"],
         default="routing",
@@ -647,6 +1203,18 @@ def main() -> int:
         "--fallback-rule-on-auth-error",
         action="store_true",
         help="When routing mode hits 401 auth error, retry once in rule mode",
+    )
+    parser.add_argument(
+        "--stop-after",
+        choices=["raw", "window", "filter", "keywords", "aggregate", "global_summary", "render", "report"],
+        default=None,
+        help="Stop replay after the selected stage and persist intermediate artifacts",
+    )
+    parser.add_argument(
+        "--resume-from",
+        choices=["raw", "window", "filter", "keywords", "aggregate", "global_summary", "render"],
+        default=None,
+        help="Resume replay from a previously persisted stage artifact under output-dir",
     )
     args = parser.parse_args()
     return asyncio.run(_main_async(args))

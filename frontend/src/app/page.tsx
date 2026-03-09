@@ -6,6 +6,26 @@ import { getReports, type Report as APIReport } from "@/lib/api";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
+const DISCOVER_REPORTS_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timerId = setTimeout(() => {
+      reject(new Error(`Request timeout after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timerId);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timerId);
+        reject(error);
+      }
+    );
+  });
+}
+
 function toCardReport(report: APIReport): ReportCardModel {
   return {
     id: report.id,
@@ -29,7 +49,7 @@ export default function DiscoverPage() {
       setLoading(true);
       setError(null);
       try {
-        const data = await getReports({ report_type: "research", limit: 10, page: 1 });
+        const data = await withTimeout(getReports({ limit: 10, page: 1 }), DISCOVER_REPORTS_TIMEOUT_MS);
         setReports(data.map(toCardReport));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");

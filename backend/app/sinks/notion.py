@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import httpx
 
@@ -25,6 +26,20 @@ from app.template_engine.renderer import load_sink_schema, render_sink_report_te
 from app.utils.notion_ids import extract_notion_id
 
 logger = logging.getLogger(__name__)
+
+_HEADING_LINE_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_INTERNAL_EVENT_ANCHOR_PATTERN = re.compile(r"\s*\[#\d+\]\(#event-\d+\)")
+_EXTERNAL_ARROW_LINK_PATTERN = re.compile(r"\[↗\]\(([^)]+)\)")
+_SUMMARY_SECTION_NAMES = {
+    "摘要",
+    "执行摘要",
+    "tldr",
+    "summary",
+    "executivesummary",
+    "全局总结与锐评",
+}
+_OVERVIEW_SECTION_NAMES = {"概览", "概述", "overview"}
+_DAILY_CATEGORY_ORDER = ("要闻", "模型发布", "开发生态", "产品应用", "技术与洞察", "行业动态", "前瞻与传闻", "其他")
 
 
 async def _request_with_retry(
@@ -92,11 +107,13 @@ class NotionSink(BaseSink):
             or ("weekly" if time_period == "weekly" else "daily")
         ).strip()
         report_date = str(config.get("report_date") or "")
+        summary_text = str(config.get("summary_text", "")).strip()
         rendered_content = _render_notion_content(
             report=report,
             report_type=report_type,
             version=template_version,
             report_date=report_date,
+            summary_text=summary_text,
         )
 
         headers = {
@@ -112,7 +129,7 @@ class NotionSink(BaseSink):
             title=title,
             title_property=str(config.get("title_property") or title_property_default),
             summary_property=str(config.get("summary_property") or summary_property_default),
-            summary_text=str(config.get("summary_text", "")).strip(),
+            summary_text=summary_text,
         )
         timeout_seconds = int(config.get("timeout_sec", 30))
         async with httpx.AsyncClient(timeout=timeout_seconds, headers=headers) as client:
@@ -217,6 +234,7 @@ def _render_notion_content(
     report_type: str,
     version: str,
     report_date: str,
+    summary_text: str = "",
 ) -> str:
     base_content = report.content or ""
     context = {
@@ -236,5 +254,171 @@ def _render_notion_content(
         )
     except Exception as exc:  # pragma: no cover - defensive fallback
         logger.warning("notion_template_render_failed: %s", exc)
-        return base_content
-    return rendered if isinstance(rendered, str) and rendered.strip() else base_content
+        rendered_content = base_content
+    else:
+        rendered_content = rendered if isinstance(rendered, str) and rendered.strip() else base_content
+    return _normalize_notion_report_content(
+        content=rendered_content,
+        report=report,
+        report_type=report_type,
+        summary_text=summary_text,
+    )
+
+
+def _normalize_notion_report_content(
+    *,
+    content: str,
+    report: Report,
+    report_type: str,
+    summary_text: str,
+) -> str:
+    base = str(content or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not base:
+        return base
+    lines = base.split("\n")
+    lines = _strip_redundant_title_heading(lines=lines, report_title=report.title, report_type=report_type)
+    if summary_text:
+        lines = _strip_summary_section(lines)
+    normalized = "\n".join(lines).strip()
+    with_overview = _inject_daily_overview_if_missing(content=normalized, report=report, report_type=report_type)
+    return _cleanup_notion_link_markup(with_overview)
+
+
+def _strip_redundant_title_heading(*, lines: list[str], report_title: str, report_type: str) -> list[str]:
+    first_idx = _first_non_empty_line(lines)
+    if first_idx < 0:
+        return lines
+    match = _HEADING_LINE_PATTERN.match(lines[first_idx].strip())
+    if not match or len(match.group(1)) != 1:
+        return lines
+    heading_text = str(match.group(2) or "").strip()
+    if not _is_redundant_title_heading(heading_text=heading_text, report_title=report_title, report_type=report_type):
+        return lines
+    kept = lines[:first_idx] + lines[first_idx + 1 :]
+    while first_idx < len(kept) and not kept[first_idx].strip():
+        kept.pop(first_idx)
+    return kept
+
+
+def _is_redundant_title_heading(*, heading_text: str, report_title: str, report_type: str) -> bool:
+    heading_key = _normalize_section_name(heading_text)
+    report_title_key = _normalize_section_name(report_title)
+    if report_title_key and heading_key == report_title_key:
+        return True
+    if report_type == "daily" and ("aidailyreport" in heading_key or "ai早报" in heading_key or "ai日报" in heading_key):
+        return True
+    return False
+
+
+def _strip_summary_section(lines: list[str]) -> list[str]:
+    start_idx = -1
+    end_idx = -1
+    for idx, line in enumerate(lines):
+        match = _HEADING_LINE_PATTERN.match(line.strip())
+        if not match or len(match.group(1)) > 2:
+            continue
+        heading_key = _normalize_section_name(match.group(2))
+        if heading_key not in _SUMMARY_SECTION_NAMES:
+            continue
+        start_idx = idx
+        end_idx = idx + 1
+        while end_idx < len(lines):
+            probe = _HEADING_LINE_PATTERN.match(lines[end_idx].strip())
+            if probe and len(probe.group(1)) <= 2:
+                break
+            end_idx += 1
+        break
+    if start_idx < 0:
+        return lines
+    kept = lines[:start_idx] + lines[end_idx:]
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    return kept
+
+
+def _inject_daily_overview_if_missing(*, content: str, report: Report, report_type: str) -> str:
+    if report_type != "daily" or _contains_overview_section(content):
+        return content
+    metadata = report.metadata or {}
+    events = metadata.get("events")
+    if not isinstance(events, list) or not events:
+        return content
+    overview = _build_overview_section(events)
+    if not overview:
+        return content
+    if content.strip():
+        return f"{overview}\n\n{content.lstrip()}"
+    return overview
+
+
+def _contains_overview_section(content: str) -> bool:
+    for line in content.splitlines():
+        match = _HEADING_LINE_PATTERN.match(line.strip())
+        if not match or len(match.group(1)) > 2:
+            continue
+        heading_key = _normalize_section_name(match.group(2))
+        if heading_key in _OVERVIEW_SECTION_NAMES:
+            return True
+    return False
+
+
+def _build_overview_section(events: list[dict]) -> str:
+    grouped: dict[str, list[str]] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        title = str(event.get("title") or "").strip()
+        if not title:
+            continue
+        category = str(event.get("category") or "其他").strip() or "其他"
+        link = _first_source_link(event.get("source_links"))
+        if link:
+            item = f"- {title} [原文]({link})"
+        else:
+            item = f"- {title}"
+        grouped.setdefault(category, []).append(item)
+    if not grouped:
+        return ""
+    ordered_categories = [name for name in _DAILY_CATEGORY_ORDER if name in grouped]
+    ordered_categories.extend(name for name in grouped if name not in ordered_categories)
+    lines = ["## 概览", ""]
+    for category in ordered_categories:
+        lines.append(f"### {category}")
+        lines.extend(grouped[category])
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _first_source_link(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    for item in value:
+        link = str(item or "").strip()
+        if link:
+            return link
+    return ""
+
+
+def _first_non_empty_line(lines: list[str]) -> int:
+    for idx, line in enumerate(lines):
+        if line.strip():
+            return idx
+    return -1
+
+
+def _normalize_section_name(value: object) -> str:
+    text = str(value or "").strip().lower()
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+
+
+def _cleanup_notion_link_markup(content: str) -> str:
+    if not content:
+        return content
+    cleaned_lines = [_cleanup_notion_link_markup_line(line) for line in content.splitlines()]
+    return "\n".join(cleaned_lines).strip()
+
+
+def _cleanup_notion_link_markup_line(line: str) -> str:
+    without_anchor = _INTERNAL_EVENT_ANCHOR_PATTERN.sub("", line)
+    relabeled = _EXTERNAL_ARROW_LINK_PATTERN.sub(r"[原文](\1)", without_anchor)
+    return re.sub(r" {2,}", " ", relabeled).rstrip()

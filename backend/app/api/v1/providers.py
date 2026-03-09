@@ -41,7 +41,7 @@ PROVIDER_PRESETS: dict[ProviderId, dict] = {
         "default_config": {
             "base_url": "https://api.openai.com/v1",
             "model": settings.llm_primary_model or "gpt-4o-mini",
-            "timeout_sec": 30,
+            "timeout_sec": 120,
             "max_retry": 2,
             "max_output_tokens": settings.llm_max_tokens or 2048,
             "temperature": settings.llm_temperature or 0.3,

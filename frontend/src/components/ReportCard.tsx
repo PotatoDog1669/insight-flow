@@ -1,17 +1,12 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ChevronRight, Calendar, Layers, Hash } from "lucide-react";
+import { ChevronRight, Calendar } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { ReportCover } from "./ReportCover";
-
-export interface Topic {
-    name: string;
-    weight: number;
-}
 
 export interface Report {
     id: string;
@@ -21,19 +16,12 @@ export interface Report {
     report_date: string;
     tldr: string[];
     article_count: number;
-    topics?: Topic[];
 }
 
 interface ReportCardProps {
     report: Report;
     index: number;
 }
-
-const timeConfig = {
-    daily: { label: "Daily", color: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
-    weekly: { label: "Weekly", color: "bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
-    custom: { label: "Custom", color: "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300" },
-};
 
 const reportTypeConfig = {
     daily: { label: "Daily", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
@@ -42,7 +30,6 @@ const reportTypeConfig = {
 };
 
 export function ReportCard({ report, index }: ReportCardProps) {
-    const tConfig = timeConfig[report.time_period];
     const rConfig = reportTypeConfig[report.report_type];
 
     return (
@@ -56,12 +43,10 @@ export function ReportCard({ report, index }: ReportCardProps) {
                     <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
                     <div className="absolute top-0 left-0 w-full md:w-[2px] md:h-full h-[2px] bg-gradient-to-r md:bg-gradient-to-b from-blue-500/0 via-blue-500/40 to-blue-500/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
-                    {/* Dynamic Graphic Cover */}
-                    {report.topics && report.topics.length > 0 && (
-                        <div className="md:w-[32%] lg:w-[28%] shrink-0 flex flex-col items-stretch">
-                            <ReportCover topics={report.topics} date={report.report_date} className="h-40 md:h-full w-full rounded-t-xl md:rounded-tr-none md:rounded-l-xl" />
-                        </div>
-                    )}
+                    {/* Report cover */}
+                    <div className="md:w-[32%] lg:w-[28%] shrink-0 flex flex-col items-stretch">
+                        <ReportCover reportType={report.report_type} className="h-40 md:h-full w-full rounded-t-xl md:rounded-tr-none md:rounded-l-xl" />
+                    </div>
 
                     <CardContent className="p-4 md:p-5 xl:p-6 relative z-10 bg-background/20 flex-1 flex flex-col justify-center">
                         <div className="flex flex-col gap-4">
@@ -69,11 +54,8 @@ export function ReportCard({ report, index }: ReportCardProps) {
                             {/* Header: Meta information */}
                             <div className="flex items-center justify-between">
                                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                                    <Badge variant="secondary" className={`${tConfig.color} border-none font-medium px-2 py-0.5`}>
-                                        {tConfig.label}
-                                    </Badge>
-                                    <Badge variant="secondary" className={`${rConfig.color} border-none font-medium px-2 py-0.5`}>
-                                        {rConfig.label}
+                                    <Badge variant="secondary" className={`${rConfig.color} border-none font-medium px-2 py-0.5 capitalize`}>
+                                        {report.report_type}
                                     </Badge>
                                     <span className="flex items-center space-x-1 ml-2">
                                         <Calendar className="w-3.5 h-3.5" />
@@ -96,33 +78,22 @@ export function ReportCard({ report, index }: ReportCardProps) {
                             {/* TL;DR Bullet Points */}
                             {report.tldr && report.tldr.length > 0 && (
                                 <div className="bg-muted/30 rounded-md p-4 space-y-2">
-                                    <div className="flex items-center space-x-2 text-sm font-medium text-foreground/80 mb-1">
-                                        <Hash className="w-4 h-4 text-muted-foreground" />
-                                        <span>{report.report_type === "daily" ? "Abstracts / TL;DR" : "Key Insights"}</span>
-                                    </div>
+
                                     <ul className="space-y-1.5 list-none m-0 p-0 text-sm text-muted-foreground">
-                                        {report.tldr.slice(0, 3).map((point, i) => (
+                                        {report.tldr.slice(0, 4).map((point, i) => (
                                             <li key={i} className="flex items-start">
                                                 <span className="mr-2 mt-1.5 w-1 h-1 rounded-full bg-muted-foreground/50 shrink-0" />
-                                                <span className="leading-relaxed line-clamp-2">{point}</span>
+                                                <span className="leading-relaxed line-clamp-3">{point}</span>
                                             </li>
                                         ))}
                                     </ul>
-                                    {report.tldr.length > 3 && (
+                                    {report.tldr.length > 4 && (
                                         <div className="pt-1 text-xs text-muted-foreground/80 font-medium">
-                                            + {report.tldr.length - 3} more insights...
+                                            + {report.tldr.length - 4} more insights...
                                         </div>
                                     )}
                                 </div>
                             )}
-
-                            {/* Footer Stats */}
-                            <div className="flex items-center pt-2 text-sm text-muted-foreground font-medium">
-                                <div className="flex items-center space-x-1.5">
-                                    <Layers className="w-4 h-4" />
-                                    <span>{report.article_count} sources analyzed</span>
-                                </div>
-                            </div>
 
                         </div>
                     </CardContent>

@@ -108,3 +108,55 @@ async def test_two_sites_with_different_profiles(monkeypatch: pytest.MonkeyPatch
     assert len(items_b) == 1
     assert "Alpha" in (items_a[0].content or "")
     assert "Beta" in (items_b[0].content or "")
+
+
+@pytest.mark.asyncio
+async def test_cursor_profile_extracts_recent_blog_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    list_url = "https://cursor.com/blog"
+    post_url = "https://cursor.com/blog/automations"
+
+    async def fake_get(self, url, *args, **kwargs):
+        key = str(url)
+        if key == list_url:
+            return DummyResponse(
+                200,
+                text=f"""
+                <html><body>
+                  <article class="flex grow-1 flex-col mb-g1">
+                    <a class="card" href="/blog/automations">
+                      <div>
+                        <p>Build agents that run automatically</p>
+                        <time datetime="2026-03-06T12:00:00.000Z">Mar 6, 2026</time>
+                      </div>
+                    </a>
+                  </article>
+                </body></html>
+                """,
+            )
+        if key == post_url:
+            return DummyResponse(
+                200,
+                text="""
+                <html><body>
+                  <main>
+                    <article>
+                      <h1>Automations</h1>
+                      <p>Cursor now supports automations for recurring agent workflows.</p>
+                      <p>Users can schedule repeated tasks, define workspace scope, and route long-running maintenance jobs without reopening the app each time.</p>
+                      <p>The post also explains output expectations, notification behavior, and how teams can standardize recurring agent routines with shared prompts.</p>
+                    </article>
+                  </main>
+                </body></html>
+                """,
+            )
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = BlogScraperCollector()
+    items = await collector.collect({"site_key": "cursor", "max_items": 5})
+
+    assert len(items) == 1
+    assert items[0].url == post_url
+    assert items[0].title == "Build agents that run automatically"
+    assert "automations for recurring agent workflows" in (items[0].content or "")

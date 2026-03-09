@@ -39,7 +39,21 @@ async def test_llm_keywords_provider_uses_llm_transport(monkeypatch: pytest.Monk
 
     async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
         calls["llm"] += 1
-        return {"keywords": ["qwen", "llm"], "summary": "第三方网关模型总结测试", "importance": "normal", "detail": "detail"}
+        return {
+            "event_title": "Qwen 3.5 发布更新",
+            "keywords": ["qwen", "llm"],
+            "summary": "第三方网关模型总结测试",
+            "importance": "normal",
+            "category": "模型发布",
+            "detail": "detail",
+            "who": "阿里云",
+            "what": "发布模型更新",
+            "when": "2026-03-05",
+            "metrics": ["12%", "$0.25/M"],
+            "availability": "逐步开放",
+            "unknowns": "暂无公开参数规模",
+            "evidence": "官方博客更新说明",
+        }
 
     async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
         calls["codex"] += 1
@@ -53,7 +67,11 @@ async def test_llm_keywords_provider_uses_llm_transport(monkeypatch: pytest.Monk
     output = await provider.run(payload={"article": article}, config={"model": "qwen3.5-397b-a17b", "api_key": "sk-demo"})
 
     assert output["keywords"] == ["qwen", "llm"]
+    assert output["event_title"] == "Qwen 3.5 发布更新"
     assert output["summary"] == "第三方网关模型总结测试"
+    assert output["category"] == "模型发布"
+    assert output["who"] == "阿里云"
+    assert output["metrics"] == ["12%", "$0.25/M"]
     assert calls["llm"] == 1
     assert calls["codex"] == 0
 
@@ -85,7 +103,77 @@ async def test_llm_report_provider_uses_llm_transport(monkeypatch: pytest.Monkey
     )
 
     assert output["title"] == "LLM report"
-    assert output["content"] == "LLM summary content"
+    assert output["content"] == "raw markdown"
     assert output["global_tldr"] == "LLM TLDR"
     assert calls["llm"] == 1
     assert calls["codex"] == 0
+
+
+@pytest.mark.asyncio
+async def test_llm_report_provider_builds_prompt_from_event_payload_not_full_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_prompt: dict[str, str] = {}
+
+    async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
+        captured_prompt["text"] = prompt
+        return {"title": "LLM report", "content": "LLM summary content", "global_tldr": "LLM TLDR"}
+
+    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
+        return {"title": "codex report", "content": "should not be used"}
+
+    monkeypatch.setattr("app.providers.report.run_llm_json", _fake_llm)
+    monkeypatch.setattr("app.providers.report.run_codex_json", _fake_codex)
+
+    provider = LLMReportProvider()
+    tail_marker = "TAIL_MARKER_SHOULD_EXIST"
+    long_content = ("long report content " * 450) + tail_marker
+    await provider.run(
+        payload={
+            "title": "Daily Report",
+            "content": long_content,
+            "global_tldr": "raw tldr",
+            "events": [{"title": "event one", "category": "模型发布", "one_line_tldr": "summary"}],
+        },
+        config={"model": "qwen3.5-397b-a17b", "api_key": "sk-demo"},
+    )
+
+    assert tail_marker not in captured_prompt["text"]
+    assert "event one" in captured_prompt["text"]
+
+
+@pytest.mark.asyncio
+async def test_llm_report_provider_removes_count_and_distribution_style_tldr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
+        return {
+            "title": "LLM report",
+            "global_tldr": (
+                "今日共收录 10 条 AI 关键进展。"
+                "分类分布：要闻 1 条，模型发布 6 条，开发生态 2 条。"
+                "核心突破：OpenAI 联合学界推进量子引力计算。"
+                "趋势洞察：下一阶段焦点转向工程化成本与真实场景转化率。"
+            ),
+        }
+
+    monkeypatch.setattr("app.providers.report.run_llm_json", _fake_llm)
+    monkeypatch.setattr("app.providers.report.run_codex_json", _fake_llm)
+
+    provider = LLMReportProvider()
+    output = await provider.run(
+        payload={
+            "title": "Daily Report",
+            "content": "raw markdown",
+            "global_tldr": "raw tldr",
+            "events": [{"title": "event"}],
+        },
+        config={"model": "qwen3.5-397b-a17b", "api_key": "sk-demo"},
+    )
+
+    assert "共收录" not in output["global_tldr"]
+    assert "分类分布" not in output["global_tldr"]
+    assert "要闻 1 条" not in output["global_tldr"]
+    assert "核心突破" not in output["global_tldr"]
+    assert "趋势洞察" not in output["global_tldr"]
+    assert "OpenAI 联合学界推进量子引力计算" in output["global_tldr"]

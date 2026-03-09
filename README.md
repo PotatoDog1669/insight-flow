@@ -81,6 +81,20 @@ make frontend-deps
 make dev-local
 ```
 
+#### 正常启停（保留数据库数据）
+
+```bash
+# 启动（推荐日常使用）
+make dev-local
+
+# 停止（在 dev-local 终端 Ctrl+C 后执行）
+docker compose down   # 不带 -v，保留 pgdata
+```
+
+> 不要在日常重启时使用 `docker compose down -v`，它会删除数据库 volume（`pgdata`），导致已创建的 monitor、provider 配置等数据丢失。
+
+> `scripts/dev-local.sh` 在检测到数据库密码不匹配（`InvalidPasswordError`）时，也会自动执行一次 `docker compose down -v` 重建本地库。请保持 `.env` 中 `DB_PASSWORD` 稳定，避免意外清库。
+
 常用快捷命令：
 
 ```bash
@@ -95,6 +109,24 @@ make run-mvp-codex-notion # 4 源最小链路(OpenAI/Anthropic/GitHub/HF) -> Not
 make infra-down      # 停止 docker 服务
 ```
 
+### 运行日志落盘（用于排障）
+
+- 每次 monitor run 的阶段事件会落盘到 `output/logs/`。
+- 文件命名：
+  - `run_<timestamp>.jsonl`：机器可读（结构化 JSON 行）
+  - `run_<timestamp>.log`：人类可读（可直接 `tail -f` 排障）
+- `jsonl` 每行一条结构化事件（JSON），包含：
+  - `created_at`, `run_id`, `monitor_id`, `task_id`, `source_id`
+  - `stage`, `event_type`, `level`, `message`, `payload`
+- `log` 行格式示例：
+  - `context run=<run_id> monitor=- task=<task_id> source=<source_id>`
+  - `2026-03-05T00:55:12.808568+08:00 INFO  stage=collect event=source_started message="[Seed Source] collect started" payload={"provider":"huggingface","source_name":"Seed Source"}`
+- `report` 阶段会额外记录：
+  - `input_content_chars`, `prompt_content_chars`, `output_content_chars`
+  - `input_events`, `output_heading3_count`, `provider`
+
+可结合 `/api/v1/monitors/{monitor_id}/runs` 返回的 `run_id` 直接定位对应日志文件。
+
 Notion 落盘需在 `.env` 中配置 `NOTION_API_KEY`，并在 `NOTION_DATABASE_ID` 或 `NOTION_PARENT_PAGE_ID` 二选一。
 Codex Agent 支持两种认证：
 - `CODEX_AUTH_MODE=api_key` + `CODEX_API_KEY`
@@ -104,7 +136,7 @@ Codex Agent 支持两种认证：
 
 ```
 LexDeepResearch/
-├── .spec/              # 产品与技术文档 (PRD.md / TEC.md)
+├── .spec/              # 产品与技术文档 (.spec/spec-index.md / core/product-requirements-spec.md / core/technical-architecture-spec.md)
 ├── backend/            # 后端服务 (Python/FastAPI)
 ├── frontend/           # 前端 (Next.js)
 ├── agents/             # 浏览器 Agent 模块 (deepbrowse / browser-use / codex 等)
@@ -115,7 +147,7 @@ LexDeepResearch/
 
 ## 📖 文档
 
-详细技术文档请参阅 [`.spec/TEC.md`](./.spec/TEC.md)，产品需求请参阅 [`.spec/PRD.md`](./.spec/PRD.md)。
+详细技术文档请参阅 [`.spec/core/technical-architecture-spec.md`](./.spec/core/technical-architecture-spec.md)，产品需求请参阅 [`.spec/core/product-requirements-spec.md`](./.spec/core/product-requirements-spec.md)。文档索引见 [`.spec/spec-index.md`](./.spec/spec-index.md)。
 
 ## 📄 License
 

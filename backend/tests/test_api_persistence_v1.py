@@ -20,6 +20,21 @@ def test_reports_reads_seeded_rows_from_database(client: TestClient) -> None:
     assert reports[0]["publish_trace"] == []
 
 
+def test_reports_list_returns_summary_payload_while_detail_keeps_full_content(client: TestClient) -> None:
+    list_response = client.get("/api/v1/reports", params={"time_period": "daily", "report_type": "daily"})
+    assert list_response.status_code == 200
+    reports = list_response.json()
+    assert len(reports) == 1
+    assert reports[0]["content"] == ""
+    assert reports[0]["events"] == []
+    assert reports[0]["metadata"] == {}
+
+    detail_response = client.get("/api/v1/reports/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["content"] == "Seed content"
+
+
 def test_update_user_settings_persists_to_database(client: TestClient, db_session_factory) -> None:
     response = client.patch(
         "/api/v1/users/me/settings",
@@ -52,6 +67,17 @@ def test_create_monitor_persists_report_type(client: TestClient, db_session_fact
             "source_ids": ["11111111-1111-1111-1111-111111111111"],
             "destination_ids": ["notion"],
             "source_overrides": {"11111111-1111-1111-1111-111111111111": {"limit": 20}},
+            "ai_routing": {
+                "stages": {
+                    "filter": {"primary": "agent_codex"},
+                    "keywords": {"primary": "llm_openai"},
+                    "report": {"primary": "agent_codex"},
+                },
+                "providers": {
+                    "agent_codex": {"model": "gpt-5-codex"},
+                    "llm_openai": {"model": "gpt-4o-mini"},
+                },
+            },
         },
     )
     assert response.status_code == 201
@@ -70,6 +96,52 @@ def test_create_monitor_persists_report_type(client: TestClient, db_session_fact
     assert monitor.report_type == "research"
     assert monitor.destination_ids == ["notion"]
     assert monitor.source_overrides == {"11111111-1111-1111-1111-111111111111": {"limit": 20}}
+    assert monitor.ai_routing["stages"]["filter"]["primary"] == "agent_codex"
+    assert monitor.ai_routing["stages"]["keywords"]["primary"] == "llm_openai"
+    assert monitor.ai_routing["stages"]["report"]["primary"] == "agent_codex"
+    assert monitor.ai_routing["providers"]["agent_codex"]["model"] == "gpt-5-codex"
+    assert monitor.ai_routing["providers"]["llm_openai"]["model"] == "gpt-4o-mini"
+
+
+def test_update_monitor_with_null_ai_routing_clears_override(client: TestClient, db_session_factory) -> None:
+    create_response = client.post(
+        "/api/v1/monitors",
+        json={
+            "name": "Clear Routing Monitor",
+            "time_period": "daily",
+            "source_ids": ["11111111-1111-1111-1111-111111111111"],
+            "ai_routing": {
+                "stages": {
+                    "filter": {"primary": "agent_codex"},
+                }
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["ai_routing"]["stages"]["filter"]["primary"] == "agent_codex"
+
+    update_response = client.patch(
+        f"/api/v1/monitors/{created['id']}",
+        json={"ai_routing": None},
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["ai_routing"]["stages"]["filter"] is None
+    assert updated["ai_routing"]["stages"]["keywords"] is None
+    assert updated["ai_routing"]["stages"]["report"] is None
+    assert updated["ai_routing"]["providers"] == {}
+
+    session_factory, _ = db_session_factory
+
+    async def _fetch_monitor() -> Monitor | None:
+        async with session_factory() as session:
+            result = await session.execute(select(Monitor).where(Monitor.id == uuid.UUID(created["id"])))
+            return result.scalars().first()
+
+    monitor = asyncio.run(_fetch_monitor())
+    assert monitor is not None
+    assert monitor.ai_routing == {}
 
 
 def test_update_destination_persists_to_user_settings(client: TestClient, db_session_factory) -> None:

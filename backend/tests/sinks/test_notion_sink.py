@@ -267,3 +267,81 @@ def test_render_notion_content_falls_back_to_base_content_on_template_error(monk
     report = Report(level="L2", title="Fallback Test", content="base content", article_ids=[])
     rendered = _render_notion_content(report=report, report_type="daily", version="v1", report_date="2026-03-02")
     assert rendered == "base content"
+
+
+def test_render_notion_content_removes_redundant_title_and_summary_when_property_present() -> None:
+    report = Report(
+        level="L2",
+        title="AI Daily Report — 2026-03-05",
+        content=(
+            "# AI Daily Report — 2026-03-05\n\n"
+            "## 执行摘要\n\n"
+            "这里是正文内摘要。\n\n"
+            "## 概览\n\n"
+            "- 事件一 [#1](#event-1)\n"
+        ),
+        article_ids=[],
+    )
+    rendered = _render_notion_content(
+        report=report,
+        report_type="daily",
+        version="v1",
+        report_date="2026-03-05",
+        summary_text="这里是属性 TL;DR。",
+    )
+
+    assert "# AI Daily Report — 2026-03-05" not in rendered
+    assert "## 执行摘要" not in rendered
+    assert "## 概览" in rendered
+    assert "[#1](#event-1)" not in rendered
+
+
+def test_render_notion_content_strips_internal_event_anchor_and_relabels_arrow_link() -> None:
+    report = Report(
+        level="L2",
+        title="AI Daily Report — 2026-03-05",
+        content="## 概览\n\n- 事件一 [↗](https://example.com/a) [#1](#event-1)\n",
+        article_ids=[],
+    )
+    rendered = _render_notion_content(
+        report=report,
+        report_type="daily",
+        version="v1",
+        report_date="2026-03-05",
+        summary_text="",
+    )
+
+    assert "[#1](#event-1)" not in rendered
+    assert "[↗](https://example.com/a)" not in rendered
+    assert "- 事件一 [原文](https://example.com/a)" in rendered
+
+
+def test_render_notion_content_injects_overview_when_missing_in_daily_report() -> None:
+    report = Report(
+        level="L2",
+        title="AI Daily Report — 2026-03-05",
+        content="## 详细事件记录\n\n## OpenAI 发布更新 #1\n\n详情内容",
+        article_ids=[],
+        metadata={
+            "events": [
+                {
+                    "index": 1,
+                    "title": "OpenAI 发布更新",
+                    "category": "要闻",
+                    "source_links": ["https://openai.com/news"],
+                }
+            ]
+        },
+    )
+    rendered = _render_notion_content(
+        report=report,
+        report_type="daily",
+        version="v1",
+        report_date="2026-03-05",
+        summary_text="",
+    )
+
+    assert "## 概览" in rendered
+    assert "### 要闻" in rendered
+    assert "[#1](#event-1)" not in rendered
+    assert "OpenAI 发布更新 [原文](https://openai.com/news)" in rendered

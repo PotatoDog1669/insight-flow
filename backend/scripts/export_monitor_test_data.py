@@ -11,7 +11,7 @@ import re
 import sys
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
@@ -19,10 +19,12 @@ DEFAULT_OUTPUT_BASE = REPO_ROOT / "test_data"
 
 sys.path.insert(0, str(ROOT))
 
+from app.models.article import Article
 from app.models.database import async_session
 from app.models.monitor import Monitor
 from app.models.source import Source
 from app.models.task import CollectTask
+from app.processors.window_filter import filter_raw_articles_by_window
 from app.scheduler.monitor_runner import (
     _filter_source_overrides_by_source_ids,
     _normalize_source_overrides,
@@ -157,13 +159,26 @@ async def _run_export(
             after_window_dir.mkdir(parents=True, exist_ok=True)
 
             collect_config, raw_articles, collect_trace = collected_by_source[source.id]
-            filtered_articles, filter_trace = await orchestrator._filter_raw_articles_by_window(
-                db=db,
-                source=source,
+
+            async def _existing_external_ids(candidate_ids: list[str]) -> set[str]:
+                if not candidate_ids:
+                    return set()
+                stmt = select(Article.external_id).where(
+                    and_(
+                        Article.source_id == source.id,
+                        Article.external_id.in_(candidate_ids),
+                    )
+                )
+                result = await db.execute(stmt)
+                return {str(item) for item in result.scalars().all() if item}
+
+            filtered_articles, filter_trace = await filter_raw_articles_by_window(
                 raw_articles=raw_articles,
                 window_start=window_start,
                 window_end=window_end,
                 window_hours=window_hours,
+                allow_first_seen_fallback=bool((source.config or {}).get("window_allow_first_seen_fallback", False)),
+                existing_external_ids_resolver=_existing_external_ids,
             )
 
             raw_manifest: list[dict] = []
@@ -226,6 +241,8 @@ async def _run_export(
                 "source_id": str(source.id),
                 "source_name": source.name,
                 "collect_method": source.collect_method,
+                "source_category": source.category,
+                "source_config": source.config if isinstance(source.config, dict) else {},
                 "collect_config": collect_config,
                 "collect_trace": collect_trace,
                 "window_filter_trace": filter_trace,
@@ -271,7 +288,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--monitor-id", required=True, help="Monitor UUID")
     parser.add_argument("--window-hours", type=int, default=168, help="Window size in hours (1..168)")
     parser.add_argument("--output-base", default=str(DEFAULT_OUTPUT_BASE), help="Base output directory")
-    parser.add_argument("--trigger-type", default="test", choices=["test", "manual"], help="Trigger type for run")
+    parser.add_argument("--trigger-type", default="manual", choices=["manual", "scheduled"], help="Trigger type for run")
     parser.add_argument("--skip-run", action="store_true", help="Do not execute run_monitor_once before export")
     return parser.parse_args()
 

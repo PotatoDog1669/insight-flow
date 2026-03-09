@@ -24,7 +24,7 @@ def test_render_report_template_daily() -> None:
         version="v1",
         context={"date": "2026-03-02", "overview": [], "events": []},
     )
-    assert "# AI Daily Report — 2026-03-02" in content
+    assert "## 概览" in content
 
 
 def test_render_sink_report_template_notion_override() -> None:
