@@ -71,15 +71,20 @@ npm run dev
 
 ### 一键本地开发（推荐）
 
-```bash
-# 仅首次
-make backend-deps
-make backend-browser-deps   # 可选：安装 Playwright Chromium（用于无 RSS 博客浏览器采集，如 Anthropic）
-make frontend-deps
+只要记住三步命令：
 
-# 每次开发
+```bash
+# Step 1: 修复/初始化本地依赖环境
+make bootstrap
+# Step 2: 启动前环境自检
+make doctor
+
+# Step 3: 启动本地开发环境
 make dev-local
 ```
+
+> `make bootstrap` 会自动修复/创建 `.venv`、安装后后端依赖，并在前端依赖损坏时自动隔离旧 `node_modules` 后重装。
+> `make doctor` 会检查 docker 可达性、关键命令、`.venv` 完整性、pip 源可解析性和常用端口占用。
 
 #### 正常启停（保留数据库数据）
 
@@ -99,6 +104,8 @@ docker compose down   # 不带 -v，保留 pgdata
 
 ```bash
 make infra-up        # 启动 postgres + redis
+make bootstrap       # 修复/重建本地依赖环境
+make doctor          # 本地环境诊断（启动前推荐）
 make migrate         # 运行数据库迁移
 make sync-sources    # 将 source_presets.yaml 全量同步到数据库（upsert）
 make test-all        # 后端测试 + 前端 lint/build

@@ -2,7 +2,8 @@
  * LexDeepResearch — 后端 API 调用封装
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use same-origin API by default so browser clients work in remote/devbox access too.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export interface Source {
     id: string;

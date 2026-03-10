@@ -1,7 +1,9 @@
-.PHONY: help infra-up infra-down backend-deps backend-browser-deps frontend-deps migrate backend frontend dev-local dev-docker test-backend lint-frontend build-frontend test-all sync-sources profile-gen profile-check smoke-e2e run-mvp-codex-notion
+.PHONY: help doctor bootstrap infra-up infra-down backend-deps backend-browser-deps frontend-deps migrate backend frontend dev-local dev-docker test-backend lint-frontend build-frontend test-all sync-sources profile-gen profile-check smoke-e2e run-mvp-codex-notion
 
 help:
 	@echo "Available commands:"
+	@echo "  make doctor          # Run local environment diagnostics"
+	@echo "  make bootstrap       # Rebuild/repair local dev dependencies"
 	@echo "  make infra-up        # Start Postgres + Redis"
 	@echo "  make infra-down      # Stop all Docker services"
 	@echo "  make backend-deps    # Install backend dependencies into .venv"
@@ -19,6 +21,12 @@ help:
 	@echo "  make smoke-e2e       # Deterministic E2E smoke pipeline check"
 	@echo "  make run-mvp-codex-notion # Run 4-source MVP chain (OpenAI/Anthropic/GitHub/HF) -> Notion"
 
+doctor:
+	./scripts/doctor.sh
+
+bootstrap:
+	./scripts/bootstrap.sh
+
 infra-up:
 	docker compose up -d postgres redis
 
@@ -26,22 +34,22 @@ infra-down:
 	docker compose down
 
 backend-deps:
-	cd backend && ../.venv/bin/pip install -e ".[dev]"
+	cd backend && ../.venv/bin/python -m pip install -e ".[dev]"
 
 backend-browser-deps:
-	cd backend && ../.venv/bin/playwright install chromium
+	cd backend && ../.venv/bin/python -m playwright install chromium
 
 frontend-deps:
 	cd frontend && npm install
 
 migrate:
-	cd backend && PYTHONPATH=. ../.venv/bin/alembic upgrade head
+	cd backend && PYTHONPATH=. ../.venv/bin/python -m alembic upgrade head
 
 sync-sources:
 	cd backend && PYTHONPATH=. ../.venv/bin/python scripts/sync_sources_from_presets.py
 
 backend:
-	cd backend && PYTHONPATH=. ../.venv/bin/uvicorn app.main:app --reload --port 8000
+	cd backend && PYTHONPATH=. ../.venv/bin/python -m uvicorn app.main:app --reload --port 8000
 
 frontend:
 	cd frontend && npm run dev

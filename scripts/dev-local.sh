@@ -18,7 +18,7 @@ require_cmd npm
 
 if [ ! -x "$VENV_BIN/python" ]; then
   echo "[dev-local] Missing Python venv at $VENV_BIN"
-  echo "Create it first, e.g.: python3 -m venv .venv"
+  echo "Run: make bootstrap"
   exit 1
 fi
 
@@ -36,13 +36,19 @@ export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://lex:${DB_PASSWORD_VALU
 
 if [ ! -x "$VENV_BIN/uvicorn" ]; then
   echo "[dev-local] Missing uvicorn in .venv"
-  echo "Run: make backend-deps"
+  echo "Run: make bootstrap"
   exit 1
 fi
 
 if [ ! -x "$VENV_BIN/alembic" ]; then
   echo "[dev-local] Missing alembic in .venv"
-  echo "Run: make backend-deps"
+  echo "Run: make bootstrap"
+  exit 1
+fi
+
+if [ ! -x "$FRONTEND_DIR/node_modules/.bin/next" ]; then
+  echo "[dev-local] Missing frontend dependencies (next not found)"
+  echo "Run: make bootstrap"
   exit 1
 fi
 
