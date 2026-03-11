@@ -332,6 +332,58 @@ async def test_collect_supports_usernames_list_and_merges_results(monkeypatch: p
     assert items[1].metadata["author_username"] == "OpenAI"
 
 
+@pytest.mark.asyncio
+async def test_collect_defaults_to_five_items_per_username(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _tweet(tweet_id: str, hour: int, username: str) -> dict:
+        return {
+            "id": tweet_id,
+            "text": f"{username} tweet {tweet_id}",
+            "created_at": f"Mon Mar 03 {hour:02d}:00:00 +0000 2026",
+            "author": {"username": username, "name": username},
+            "stats": {"likes": 3, "retweets": 2, "replies": 1},
+            "is_retweet": False,
+            "is_pinned": False,
+        }
+
+    async def fake_get(self, url, *args, **kwargs):
+        raw = str(url)
+        params = kwargs.get("params") or {}
+        username = str(params.get("data") or "")
+        if raw.endswith("/challenge/"):
+            return DummyResponse(
+                200,
+                json_data={"challenge_id": "id", "timestamp": 1700000000, "random_value": "abc"},
+            )
+        if "/viewer/" in raw and username.lower() == "openai":
+            return DummyResponse(
+                200,
+                json_data={
+                    "profile": {"username": "OpenAI"},
+                    "tweets": [_tweet(f"o{i}", 20 - i, "OpenAI") for i in range(6)],
+                    "cursor": None,
+                },
+            )
+        if "/viewer/" in raw and username.lower() == "anthropicai":
+            return DummyResponse(
+                200,
+                json_data={
+                    "profile": {"username": "AnthropicAI"},
+                    "tweets": [_tweet(f"a{i}", 10 - i, "AnthropicAI") for i in range(6)],
+                    "cursor": None,
+                },
+            )
+        raise AssertionError(f"Unexpected URL: {raw} params={params}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = TwitterSnaplyticsCollector()
+    items = await collector.collect({"usernames": ["openai", "anthropicai"], "max_items": 5})
+
+    assert len(items) == 10
+    assert sum(1 for item in items if item.metadata["author_username"] == "OpenAI") == 5
+    assert sum(1 for item in items if item.metadata["author_username"] == "AnthropicAI") == 5
+
+
 def test_resolve_usernames_handles_single_or_list() -> None:
     resolved_from_single = TwitterSnaplyticsCollector._resolve_usernames({"username": "@OpenAI"})
     resolved_from_list = TwitterSnaplyticsCollector._resolve_usernames({"usernames": ["@OpenAI", "https://x.com/AnthropicAI"]})

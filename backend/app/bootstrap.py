@@ -122,6 +122,44 @@ def _origin(url: str | None) -> str:
         return ""
 
 
+def _merge_twitter_usernames(existing_config: dict | None, synced_config: dict) -> dict:
+    if not isinstance(synced_config, dict):
+        return {}
+
+    merged = dict(synced_config)
+    raw_candidates: list[str] = []
+    for config in (existing_config or {}, synced_config):
+        if not isinstance(config, dict):
+            continue
+        for key in ("username", "handle"):
+            value = str(config.get(key) or "").strip()
+            if value:
+                raw_candidates.append(value)
+        usernames = config.get("usernames")
+        if isinstance(usernames, str):
+            raw_candidates.extend([part.strip() for part in usernames.replace("\n", ",").split(",") if part.strip()])
+        elif isinstance(usernames, (list, tuple, set)):
+            raw_candidates.extend([str(item).strip() for item in usernames if str(item).strip()])
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        normalized = candidate.lstrip("@").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+
+    if deduped:
+        merged["usernames"] = deduped
+        merged.pop("username", None)
+        merged.pop("handle", None)
+    return merged
+
+
 async def seed_initial_data(db: AsyncSession) -> None:
     now = datetime.now(UTC)
 
@@ -180,7 +218,10 @@ async def seed_initial_data(db: AsyncSession) -> None:
             source.name = company
             source.category = category
             source.collect_method = collect_method
-            source.config = config
+            if collect_method == "twitter_snaplytics":
+                source.config = _merge_twitter_usernames(source.config, config)
+            else:
+                source.config = config
             source.enabled = enabled
             source.updated_at = now
         db.add(source)

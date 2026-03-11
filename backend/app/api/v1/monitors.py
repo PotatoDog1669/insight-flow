@@ -1,9 +1,11 @@
 """监控任务（Monitors）API"""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
+from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
@@ -11,12 +13,13 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import get_db
+from app.models.database import async_session, get_db
 from app.models.monitor import Monitor
 from app.models.task import CollectTask
 from app.models.task_event import TaskEvent
 from app.routing.loader import load_routing_profile
-from app.scheduler.monitor_runner import run_monitor_once
+from app.scheduler.monitor_runner import execute_monitor_pipeline
+from app.scheduler.monitor_runner import prepare_monitor_run
 from app.scheduler.task_events import append_task_event
 from app.schemas.monitor import MonitorAIRouting
 from app.schemas.monitor import MonitorAIRoutingDefaultsResponse
@@ -26,6 +29,31 @@ from app.schemas.monitor import MonitorRunRequest
 from app.schemas.monitor import MonitorResponse
 from app.schemas.monitor import MonitorRunResponse
 from app.schemas.monitor import MonitorUpdate
+
+logger = logging.getLogger(__name__)
+
+async def _background_execute_monitor(
+    monitor_id: uuid.UUID,
+    task_id: uuid.UUID,
+    trigger_type: str,
+    window_hours_override: int | None,
+):
+    try:
+        async with async_session() as db:
+            monitor = await db.get(Monitor, monitor_id)
+            task = await db.get(CollectTask, task_id)
+            if not monitor or not task:
+                logger.error("Monitor %s or Task %s not found for background execution.", monitor_id, task_id)
+                return
+            await execute_monitor_pipeline(
+                db=db,
+                monitor=monitor,
+                task=task,
+                trigger_type=trigger_type,
+                window_hours_override=window_hours_override,
+            )
+    except Exception as exc:
+        logger.exception("Failed background monitor execution for %s: %s", monitor_id, exc)
 
 router = APIRouter()
 
@@ -111,6 +139,7 @@ async def get_monitor_ai_routing_defaults():
 @router.post("/{monitor_id}/run", response_model=MonitorRunResponse)
 async def run_monitor(
     monitor_id: str,
+    background_tasks: BackgroundTasks,
     payload: MonitorRunRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ):
@@ -121,14 +150,21 @@ async def run_monitor(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
 
     try:
-        task = await run_monitor_once(
+        task = await prepare_monitor_run(
             db=db,
             monitor=monitor,
             trigger_type="manual",
-            window_hours_override=payload.window_hours if payload else None,
         )
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Monitor run failed") from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Monitor prepare failed") from exc
+
+    background_tasks.add_task(
+        _background_execute_monitor,
+        monitor_uuid,
+        task.id,
+        "manual",
+        payload.window_hours if payload else None,
+    )
 
     return MonitorRunResponse(task_id=task.id, run_id=task.run_id or task.id, status="running", monitor_id=monitor_uuid)
 

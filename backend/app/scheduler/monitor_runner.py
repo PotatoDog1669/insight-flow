@@ -20,14 +20,13 @@ def _format_error(exc: Exception, *, limit: int = 1000) -> str:
     return message[:limit]
 
 
-async def run_monitor_once(
+async def prepare_monitor_run(
     *,
     db: AsyncSession,
     monitor: Monitor,
     trigger_type: str,
-    window_hours_override: int | None = None,
 ) -> CollectTask:
-    """Execute one monitor run and persist a monitor-level task record."""
+    """Prepare a monitor run and persist a monitor-level task record."""
     await cleanup_expired_task_events(db, retention_days=7)
 
     now = datetime.now(timezone.utc)
@@ -61,6 +60,19 @@ async def run_monitor_once(
         payload={"trigger_type": normalized_trigger_type},
     )
     await db.commit()
+    return task
+
+async def execute_monitor_pipeline(
+    *,
+    db: AsyncSession,
+    monitor: Monitor,
+    task: CollectTask,
+    trigger_type: str,
+    window_hours_override: int | None = None,
+) -> CollectTask:
+    """Execute the pipeline of a prepared monitor run task."""
+    normalized_trigger_type = "scheduled" if trigger_type == "scheduled" else "manual"
+    run_id = task.run_id or task.id
 
     source_ids: list[uuid.UUID] = []
     for raw_source_id in monitor.source_ids or []:
@@ -151,6 +163,23 @@ async def run_monitor_once(
         )
         await db.commit()
         raise
+
+async def run_monitor_once(
+    *,
+    db: AsyncSession,
+    monitor: Monitor,
+    trigger_type: str,
+    window_hours_override: int | None = None,
+) -> CollectTask:
+    """Execute one monitor run and persist a monitor-level task record."""
+    task = await prepare_monitor_run(db=db, monitor=monitor, trigger_type=trigger_type)
+    return await execute_monitor_pipeline(
+        db=db,
+        monitor=monitor,
+        task=task,
+        trigger_type=trigger_type,
+        window_hours_override=window_hours_override,
+    )
 
 
 def _normalize_destination_ids(destination_ids: list | None) -> list[str]:

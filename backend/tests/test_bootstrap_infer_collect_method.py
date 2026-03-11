@@ -62,3 +62,19 @@ def test_infer_collect_method_uses_blog_scraper_for_site_profile_strategy() -> N
     assert config.get("site_key") == "cursor"
     assert config.get("max_items") == 20
     assert config.get("fallback_chain") == ["blog_scraper", "deepbrowse"]
+
+
+def test_infer_collect_method_merges_rss_social_config() -> None:
+    method, config = _infer_collect_method(
+        {
+            "key": "reddit_social",
+            "rss_url": "https://www.reddit.com/search.rss?q=subreddit%3ALocalLLaMA+OR+subreddit%3Asingularity+OR+subreddit%3AOpenAI&sort=new",
+            "collect_config": {"fetch_detail": False, "max_items": 40, "user_agent": "LexDeepResearchBot/0.1"},
+        }
+    )
+
+    assert method == "rss"
+    assert config.get("feed_url") == "https://www.reddit.com/search.rss?q=subreddit%3ALocalLLaMA+OR+subreddit%3Asingularity+OR+subreddit%3AOpenAI&sort=new"
+    assert config.get("fetch_detail") is False
+    assert config.get("max_items") == 40
+    assert config.get("user_agent") == "LexDeepResearchBot/0.1"

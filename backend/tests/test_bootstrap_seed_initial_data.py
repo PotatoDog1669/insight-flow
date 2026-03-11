@@ -110,6 +110,34 @@ def _write_upsert_presets(path: Path) -> None:
     )
 
 
+def _write_x_preset(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """
+            sources:
+              - key: x_social
+                company: X
+                urls: ["https://x.com"]
+                strategy: twitter_snaplytics
+                priority: p1
+                enabled: true
+                category: social
+                collect_config:
+                  usernames:
+                    - OpenAI
+                    - AnthropicAI
+                    - GoogleDeepMind
+                  max_items: 30
+                  max_pages: 1
+                  include_retweets: false
+                  include_pinned: true
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.asyncio
 async def test_seed_initial_data_sets_deepseek_category_from_preset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -332,3 +360,60 @@ async def test_seed_initial_data_merges_rss_collect_config_from_preset(
     finally:
         await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_seed_initial_data_merges_existing_twitter_usernames_with_preset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "seed-x.db"
+    presets_path = tmp_path / "source_presets.yaml"
+    profiles_dir = tmp_path / "site_profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    _write_x_preset(presets_path)
+
+    monkeypatch.setattr("app.bootstrap.PRESETS_PATH", presets_path)
+    monkeypatch.setattr("app.bootstrap.SITE_PROFILE_DIR", profiles_dir)
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as session:
+            session.add(
+                Source(
+                    id=_source_uuid("x_social"),
+                    name="X",
+                    category="social",
+                    collect_method="twitter_snaplytics",
+                    config={
+                        "usernames": ["karpathy", "Google"],
+                        "max_items": 50,
+                        "max_pages": 2,
+                        "include_retweets": False,
+                        "include_pinned": True,
+                    },
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            await seed_initial_data(session)
+
+        async with session_factory() as session:
+            x_source = await session.get(Source, _source_uuid("x_social"))
+            assert x_source is not None
+            assert x_source.collect_method == "twitter_snaplytics"
+            assert x_source.config.get("usernames") == [
+                "karpathy",
+                "Google",
+                "OpenAI",
+                "AnthropicAI",
+                "GoogleDeepMind",
+            ]
+            assert x_source.config.get("include_retweets") is False
+            assert x_source.config.get("include_pinned") is True
+    finally:
+        await engine.dispose()

@@ -28,7 +28,8 @@ class TwitterSnaplyticsCollector(BaseCollector):
     async def collect(self, config: dict) -> list[RawArticle]:
         usernames = self._resolve_usernames(config)
         max_items = max(1, int(config.get("max_items", 30)))
-        per_username_max_items = max(1, int(config.get("per_username_max_items", max_items)))
+        per_username_max_items = max(1, int(config.get("per_username_max_items", 5)))
+        effective_max_items = max(max_items, per_username_max_items * len(usernames))
         max_pages = max(1, int(config.get("max_pages", 1)))
         include_retweets = bool(config.get("include_retweets", True))
         include_pinned = bool(config.get("include_pinned", True))
@@ -76,7 +77,7 @@ class TwitterSnaplyticsCollector(BaseCollector):
                     seen_ids.add(article.external_id)
                     results.append(article)
         results.sort(key=lambda item: item.published_at or datetime.min.replace(tzinfo=UTC), reverse=True)
-        return results[:max_items]
+        return results[:effective_max_items]
 
     @staticmethod
     def _resolve_username(value: Any) -> str:

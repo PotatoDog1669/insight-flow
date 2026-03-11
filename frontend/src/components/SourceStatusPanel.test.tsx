@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { SourceStatusPanel } from "@/components/SourceStatusPanel";
 import type { Source } from "@/lib/api";
@@ -76,5 +76,23 @@ describe("SourceStatusPanel brand logos", () => {
 
     expect(screen.queryByAltText("小红书 logo")).not.toBeInTheDocument();
     expect(screen.getByLabelText("小红书 logo")).toBeInTheDocument();
+  });
+
+  it("shows all social sources in the social media tab", () => {
+    render(
+      <SourceStatusPanel
+        sources={[
+          makeSource({ id: "source-x", name: "X", category: "social", collect_method: "twitter_snaplytics" }),
+          makeSource({ id: "source-reddit", name: "Reddit", category: "social", collect_method: "rss" }),
+          makeSource({ id: "source-openai", name: "OpenAI", category: "blog", collect_method: "rss" }),
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Social Media/i }));
+
+    expect(screen.getByText("X")).toBeInTheDocument();
+    expect(screen.getByText("Reddit")).toBeInTheDocument();
+    expect(screen.queryByText("OpenAI")).not.toBeInTheDocument();
   });
 });

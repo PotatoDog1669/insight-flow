@@ -155,6 +155,33 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
 
     monkeypatch.setattr("app.scheduler.monitor_runner.Orchestrator", _FakeOrchestrator)
 
+    async def _fake_execute(monitor_id, task_id, trigger_type, window_hours_override):
+        from app.scheduler.monitor_runner import execute_monitor_pipeline
+        from app.models.database import get_db
+        from app.main import app
+        # Use the test's dependency override to get a session
+        generator = app.dependency_overrides.get(get_db, get_db)()
+        session = await generator.__anext__()
+        try:
+            from app.models.monitor import Monitor
+            from app.models.task import CollectTask
+            monitor = await session.get(Monitor, monitor_id)
+            task = await session.get(CollectTask, task_id)
+            await execute_monitor_pipeline(
+                db=session,
+                monitor=monitor,
+                task=task,
+                trigger_type=trigger_type,
+                window_hours_override=window_hours_override
+            )
+        finally:
+            try:
+                await generator.__anext__()
+            except StopAsyncIteration:
+                pass
+
+    monkeypatch.setattr("app.api.v1.monitors._background_execute_monitor", _fake_execute)
+
     run_response = client.post(f"/api/v1/monitors/{created['id']}/run")
     assert run_response.status_code == 200
     run_data = run_response.json()
@@ -203,12 +230,11 @@ def test_monitors_contract_supports_run_cancel(client: TestClient, monkeypatch) 
     assert create_response.status_code == 201
     created = create_response.json()
 
-    async def _fake_run_monitor_once(
+    async def _fake_prepare_monitor_run(
         *,
         db: AsyncSession,
         monitor,
         trigger_type: str,
-        window_hours_override: int | None = None,
     ) -> CollectTask:
         now = datetime.now(timezone.utc)
         task = CollectTask(
@@ -226,7 +252,11 @@ def test_monitors_contract_supports_run_cancel(client: TestClient, monkeypatch) 
         await db.refresh(task)
         return task
 
-    monkeypatch.setattr("app.api.v1.monitors.run_monitor_once", _fake_run_monitor_once)
+    async def _fake_execute(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr("app.api.v1.monitors.prepare_monitor_run", _fake_prepare_monitor_run)
+    monkeypatch.setattr("app.api.v1.monitors._background_execute_monitor", _fake_execute)
 
     run_response = client.post(f"/api/v1/monitors/{created['id']}/run")
     assert run_response.status_code == 200

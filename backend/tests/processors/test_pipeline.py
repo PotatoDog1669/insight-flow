@@ -94,33 +94,71 @@ async def test_pipeline_filters_dedups_and_enriches(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_keywords_stage_does_not_fallback_to_rule(monkeypatch: pytest.MonkeyPatch) -> None:
-    attempts = {"count": 0}
+async def test_keywords_stage_falls_back_to_rule_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = {"primary": 0, "fallback": 0}
+    calls: list[str] = []
 
     class _FailingKeywordProvider:
         async def run(self, payload: dict, config: dict | None = None) -> dict:
-            attempts["count"] += 1
+            attempts["primary"] += 1
             raise RuntimeError("primary provider failed")
 
-    calls: list[str] = []
+    class _FallbackKeywordProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["fallback"] += 1
+            return {
+                "event_title": "规则回退命中",
+                "keywords": ["fallback"],
+                "summary": "回退成功。",
+                "importance": "normal",
+                "category": "行业动态",
+                "detail": "规则回退输出了可用摘要。",
+                "who": "Fallback",
+                "what": "关键词提取回退",
+                "when": "",
+                "metrics": [],
+                "availability": "",
+                "unknowns": "",
+                "evidence": "fallback",
+            }
 
     def fake_get_provider(stage: str, name: str):  # noqa: ANN201
         assert stage == "keywords"
         calls.append(name)
-        assert name == "llm_openai"
-        return _FailingKeywordProvider()
+        if name == "llm_openai":
+            return _FailingKeywordProvider()
+        if name == "rule":
+            return _FallbackKeywordProvider()
+        raise KeyError(name)
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
     pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
     pipeline.routing_profile.providers["llm_openai"] = {"max_retry": 1}
+    pipeline.routing_profile.providers["rule"] = {"max_retry": 0}
     articles = [RawArticle(external_id="k1", title="a", url="https://example.com/1", content="text")]
 
-    with pytest.raises(RuntimeError):
-        await pipeline._extract_keywords_and_summaries_with_routing(articles)
+    (
+        keywords_list,
+        summaries,
+        _importances,
+        _details,
+        _categories,
+        _event_titles,
+        _whos,
+        _whats,
+        _whens,
+        _metrics,
+        _availabilities,
+        _unknowns,
+        _evidences,
+    ) = await pipeline._extract_keywords_and_summaries_with_routing(articles)
 
-    assert calls == ["llm_openai"]
-    assert attempts["count"] == 2
+    assert keywords_list == [["fallback"]]
+    assert summaries == ["回退成功。"]
+    assert calls == ["llm_openai", "rule"]
+    assert attempts["primary"] == 2
+    assert attempts["fallback"] == 1
 
 
 @pytest.mark.asyncio
@@ -153,6 +191,50 @@ async def test_run_stage_with_retry_retries_same_provider(monkeypatch: pytest.Mo
     assert provider_name == "agent_codex"
     assert output["articles"] == []
     assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_stage_with_retry_falls_back_to_secondary_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = {"primary": 0, "fallback": 0}
+    calls: list[str] = []
+
+    class _AlwaysFailProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["primary"] += 1
+            raise RuntimeError("still failing")
+
+    class _FallbackFilterProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["fallback"] += 1
+            return {"articles": payload.get("articles", [])}
+
+    def fake_get_provider(stage: str, name: str):  # noqa: ANN201
+        assert stage == "filter"
+        calls.append(name)
+        if name == "agent_codex":
+            return _AlwaysFailProvider()
+        if name == "rule":
+            return _FallbackFilterProvider()
+        raise KeyError(name)
+
+    monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
+
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
+    pipeline.routing_profile.providers["agent_codex"] = {"max_retry": 1}
+    pipeline.routing_profile.providers["rule"] = {"max_retry": 0}
+
+    output, provider_name = await pipeline._run_stage_with_retry(
+        stage="filter",
+        provider_name="agent_codex",
+        payload={"articles": []},
+        fallback_providers=["rule"],
+    )
+
+    assert provider_name == "rule"
+    assert output["articles"] == []
+    assert calls == ["agent_codex", "rule"]
+    assert attempts["primary"] == 2
+    assert attempts["fallback"] == 1
 
 
 @pytest.mark.asyncio

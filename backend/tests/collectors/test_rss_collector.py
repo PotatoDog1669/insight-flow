@@ -65,6 +65,42 @@ async def test_rss_fetches_full_article_content_not_feed_summary(monkeypatch: py
 
 
 @pytest.mark.asyncio
+async def test_rss_can_skip_detail_fetch_and_keep_feed_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    feed_url = "https://example.com/reddit.rss"
+    article_url = "https://www.reddit.com/r/LocalLLaMA/comments/example"
+    feed_xml = f"""
+    <rss version=\"2.0\">
+      <channel>
+        <title>Reddit Feed</title>
+        <item>
+          <guid>reddit-1</guid>
+          <title>Reddit Post</title>
+          <link>{article_url}</link>
+          <description>feed summary only</description>
+        </item>
+      </channel>
+    </rss>
+    """
+    called_urls: list[str] = []
+
+    async def fake_get(self, url, *args, **kwargs):
+        called_urls.append(str(url))
+        if str(url) != feed_url:
+            raise AssertionError(f"unexpected url: {url}")
+        return DummyResponse(200, text=feed_xml)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = RSSCollector()
+    articles = await collector.collect({"feed_url": feed_url, "max_items": 5, "fetch_detail": False})
+
+    assert called_urls == [feed_url]
+    assert len(articles) == 1
+    assert articles[0].content == "feed summary only"
+    assert articles[0].metadata.get("extractor") == "feed_summary"
+
+
+@pytest.mark.asyncio
 async def test_rss_extractor_fallback_chain(monkeypatch: pytest.MonkeyPatch) -> None:
     feed_url = "https://example.com/fallback.xml"
     article_url = "https://example.com/posts/2"

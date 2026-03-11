@@ -30,6 +30,7 @@ class RSSCollector(BaseCollector):
     async def collect(self, config: dict) -> list[RawArticle]:
         max_items = int(config.get("max_items", 30))
         feed_url = _resolve_feed_url(config=config, max_items=max_items)
+        fetch_detail = bool(config.get("fetch_detail", True))
         timeout_seconds = float(config.get("timeout_seconds", 20))
         retry_max_attempts = int(config.get("retry_max_attempts", 3))
         user_agent = config.get("user_agent", "LexDeepResearchBot/0.1")
@@ -77,7 +78,7 @@ class RSSCollector(BaseCollector):
 
             # When require_browser is set, batch-extract all articles with a single browser instance
             browser_results: dict[str, str] = {}
-            if require_browser:
+            if require_browser and fetch_detail:
                 urls_to_fetch = [e["link"] for e in entry_data if e["link"]]
                 browser_results = await _browser_batch_extract(urls_to_fetch, min_content_chars)
 
@@ -87,7 +88,7 @@ class RSSCollector(BaseCollector):
                 content = ed["summary"]
                 extractor = ""
 
-                if link:
+                if link and fetch_detail:
                     try:
                         if require_browser:
                             browser_text = browser_results.get(link)
@@ -130,6 +131,8 @@ class RSSCollector(BaseCollector):
                                 extractor = used_extractor
                     except Exception:
                         pass
+                elif content:
+                    extractor = "feed_summary"
                 articles.append(
                     RawArticle(
                         external_id=str(ed["external_id"]),
@@ -141,6 +144,7 @@ class RSSCollector(BaseCollector):
                             "collector": "rss",
                             "feed_url": feed_url,
                             "extractor": extractor,
+                            "detail_fetch_enabled": fetch_detail,
                             "content_length": len(content or ""),
                             "fetched_at": datetime.now(timezone.utc).isoformat(),
                         },

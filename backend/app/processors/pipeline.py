@@ -92,21 +92,25 @@ class ProcessingPipeline:
         """运行事件级提炼，基于 cluster 输入复用现有 keywords routing。"""
         route = self.routing_profile.stages.keywords
         event_inputs = build_event_extraction_inputs(clusters)
+        used_providers: list[str] = []
 
         async def _extract_event(event_input: EventExtractionInput) -> ProcessedEvent:
-            output, _ = await self._run_stage_with_retry(
+            output, used_provider = await self._run_stage_with_retry(
                 stage="keywords",
                 provider_name=route.primary,
                 payload={"event_input": event_input},
+                fallback_providers=route.fallback,
             )
-
+            used_providers.append(used_provider)
             return build_processed_event(event_input, output)
 
         events = await self._run_with_stage_concurrency(event_inputs, _extract_event)
+        trace_provider, trace_providers = self._resolve_trace_providers(route.primary, used_providers)
 
         trace = {
-            "provider": route.primary,
-            "model": self._trace_model(route.primary),
+            "provider": trace_provider,
+            "model": self._trace_model(trace_provider),
+            "providers": trace_providers,
             "input": len(clusters),
             "output": len(events),
             "clustered_articles": sum(len(cluster.articles) for cluster in clusters),
@@ -117,15 +121,18 @@ class ProcessingPipeline:
 
     async def run_filter_stage(self, articles: list[RawArticle]) -> tuple[list[RawArticle], dict]:
         """运行 filter stage 并返回保留文章。"""
+        route = self.routing_profile.stages.filter
         filter_output, filter_provider = await self._run_stage_with_retry(
             stage="filter",
-            provider_name=self.routing_profile.stages.filter.primary,
+            provider_name=route.primary,
             payload={"articles": articles},
+            fallback_providers=route.fallback,
         )
         relevant = filter_output.get("articles", [])
         trace = {
             "provider": filter_provider,
             "model": self._trace_model(filter_provider),
+            "providers": [filter_provider],
             "input": len(articles),
             "output": len(relevant),
         }
@@ -185,28 +192,32 @@ class ProcessingPipeline:
             processed.append(
                 apply_content_quality_gate(
                     ProcessedArticle(
-                    raw=article,
-                    event_title=event_title,
-                    summary=summary,
-                    keywords=keywords,
-                    score=1.0,
-                    importance=importance,
-                    detail=detail,
-                    category=category,
-                    who=who,
-                    what=what,
-                    when=when,
-                    metrics=metrics,
-                    availability=availability,
-                    unknowns=unknowns,
-                    evidence=evidence,
+                        raw=article,
+                        event_title=event_title,
+                        summary=summary,
+                        keywords=keywords,
+                        score=1.0,
+                        importance=importance,
+                        detail=detail,
+                        category=category,
+                        who=who,
+                        what=what,
+                        when=when,
+                        metrics=metrics,
+                        availability=availability,
+                        unknowns=unknowns,
+                        evidence=evidence,
                     )
                 )
             )
 
+        keyword_trace = self.last_stage_trace.get("keywords", {})
+        keyword_providers = keyword_trace.get("providers", [])
+        keyword_provider = str(keyword_trace.get("provider") or self.routing_profile.stages.keywords.primary)
         trace = {
-            "provider": self.routing_profile.stages.keywords.primary,
-            "model": self._trace_model(self.routing_profile.stages.keywords.primary),
+            "provider": keyword_provider,
+            "model": self._trace_model(keyword_provider),
+            "providers": keyword_providers if isinstance(keyword_providers, list) else [keyword_provider],
             "input": len(articles),
             "output": len(summaries),
             "compact_output": len([item for item in processed if item.detail_mode == "compact"]),
@@ -246,6 +257,7 @@ class ProcessingPipeline:
         all_availabilities: list[str] = []
         all_unknowns: list[str] = []
         all_evidences: list[str] = []
+        used_providers: list[str] = []
 
         async def _extract_article(article: RawArticle) -> tuple[
             list[str],
@@ -262,11 +274,13 @@ class ProcessingPipeline:
             str,
             str,
         ]:
-            output, _ = await self._run_stage_with_retry(
+            output, provider_name = await self._run_stage_with_retry(
                 stage="keywords",
                 provider_name=route.primary,
                 payload={"article": article},
+                fallback_providers=route.fallback,
             )
+            used_providers.append(provider_name)
 
             keywords = output.get("keywords", [])
             summary = str(output.get("summary") or "").strip()
@@ -339,10 +353,11 @@ class ProcessingPipeline:
             all_unknowns.append(unknowns)
             all_evidences.append(evidence)
 
+        trace_provider, trace_providers = self._resolve_trace_providers(route.primary, used_providers)
         self.last_stage_trace["keywords"] = {
-            "provider": route.primary,
-            "model": self._trace_model(route.primary),
-            "providers": [route.primary],
+            "provider": trace_provider,
+            "model": self._trace_model(trace_provider),
+            "providers": trace_providers,
             "input": len(articles),
             "output": len(all_keywords),
             "stage_concurrency": self.stage_concurrency,
@@ -363,22 +378,31 @@ class ProcessingPipeline:
             all_evidences,
         )
 
-    async def _run_stage_with_retry(self, stage: str, provider_name: str, payload: dict) -> tuple[dict, str]:
+    async def _run_stage_with_retry(
+        self,
+        stage: str,
+        provider_name: str,
+        payload: dict,
+        fallback_providers: list[str] | None = None,
+    ) -> tuple[dict, str]:
         if not provider_name:
             raise RuntimeError(f"Missing provider for stage={stage}")
 
-        provider = get_provider(stage=stage, name=provider_name)
-        provider_config = self._provider_config(provider_name)
-        max_retry = self._max_retry(provider_config)
         last_exc: Exception | None = None
+        provider_chain = self._provider_chain(provider_name, fallback_providers)
 
-        for _ in range(max_retry + 1):
-            try:
-                result = await provider.run(payload=payload, config=provider_config)
-                return result, provider_name
-            except Exception as exc:  # pragma: no cover - retry guard
-                last_exc = exc
-                continue
+        for candidate in provider_chain:
+            provider = get_provider(stage=stage, name=candidate)
+            provider_config = self._provider_config(candidate)
+            max_retry = self._max_retry(provider_config)
+
+            for _ in range(max_retry + 1):
+                try:
+                    result = await provider.run(payload=payload, config=provider_config)
+                    return result, candidate
+                except Exception as exc:  # pragma: no cover - retry guard
+                    last_exc = exc
+                    continue
 
         if last_exc:
             raise last_exc
@@ -410,6 +434,30 @@ class ProcessingPipeline:
         provider_config = self._provider_config(provider_name)
         model = str(provider_config.get("model") or "").strip() if isinstance(provider_config, dict) else ""
         return model or None
+
+    @staticmethod
+    def _provider_chain(primary: str, fallback_providers: list[str] | None = None) -> list[str]:
+        candidates = [str(primary or "").strip(), *(str(item or "").strip() for item in (fallback_providers or []))]
+        chain: list[str] = []
+        for candidate in candidates:
+            if candidate and candidate not in chain:
+                chain.append(candidate)
+        return chain
+
+    @staticmethod
+    def _resolve_trace_providers(primary: str, used_providers: list[str]) -> tuple[str, list[str]]:
+        providers: list[str] = []
+        for provider_name in used_providers:
+            normalized = str(provider_name or "").strip()
+            if normalized and normalized not in providers:
+                providers.append(normalized)
+        if not providers:
+            normalized_primary = str(primary or "").strip()
+            return normalized_primary, [normalized_primary] if normalized_primary else []
+        if len(providers) == 1:
+            return providers[0], providers
+        normalized_primary = str(primary or "").strip()
+        return (normalized_primary or providers[0]), providers
 
     async def _run_with_stage_concurrency(
         self,

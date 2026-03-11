@@ -50,6 +50,22 @@ sources:
     enabled: true
     notes: "2026-03-04 Social Media 统一入口，用户名列表在配置中维护"
 
+  - key: reddit_social
+    group: social_media
+    company: Reddit
+    category: social
+    urls: ["https://www.reddit.com"]
+    rss_url: "https://www.reddit.com/search.rss?q=subreddit%3ALocalLLaMA+OR+subreddit%3Asingularity+OR+subreddit%3AOpenAI&sort=new"
+    rss_status: provided
+    strategy: rss_then_feed_summary
+    collect_config:
+      max_items: 30
+      fetch_detail: false
+      user_agent: "LexDeepResearchBot/0.1"
+    priority: p1
+    enabled: true
+    notes: "2026-03-10 使用公开 Reddit RSS 搜索聚合 AI 相关 subreddit；仅保留 feed 摘要，避免整页评论噪音"
+
   - key: google_deepmind
     group: intl_vendors
     company: Google DeepMind

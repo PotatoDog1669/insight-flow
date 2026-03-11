@@ -82,7 +82,7 @@ def db_session_factory(tmp_path: Path):
 
 
 @pytest.fixture()
-def client(db_session_factory):
+def client(db_session_factory, monkeypatch):
     session_factory, _ = db_session_factory
 
     async def override_get_db():
@@ -90,6 +90,7 @@ def client(db_session_factory):
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr("app.models.database.async_session", session_factory)
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

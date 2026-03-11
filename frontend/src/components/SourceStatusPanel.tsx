@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { type Source } from "@/lib/api";
-import { SiOpenai, SiGithub, SiHuggingface, SiX, SiAnthropic, SiArxiv, SiBytedance, SiXiaohongshu } from "react-icons/si";
+import { SiOpenai, SiGithub, SiHuggingface, SiX, SiAnthropic, SiArxiv, SiBytedance, SiXiaohongshu, SiReddit } from "react-icons/si";
 import { Globe, Building2, Code2, Cpu, AppWindow } from "lucide-react";
 import { BilibiliIcon, NotionIcon, ZhihuIcon, MicrosoftIcon, DockerIcon } from "./BrandIcons";
 
@@ -96,6 +96,7 @@ function inferBrandDomain(name: string): string | null {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return null;
   if (normalized === "x" || normalized.includes("twitter")) return "x.com";
+  if (normalized.includes("reddit")) return "reddit.com";
   for (const rule of BRAND_DOMAIN_OVERRIDES) {
     if (rule.patterns.some((pattern) => normalized.includes(pattern))) {
       return rule.domain;
@@ -189,6 +190,7 @@ const getSourceIconFallback = (name: string, category: string) => {
   if (n.includes("github")) return <SiGithub className="w-5 h-5 text-foreground" />;
   if (n.includes("huggingface") || n.includes("hugging")) return <SiHuggingface className="w-5 h-5 text-yellow-500" />;
   if (n === "x" || n.includes("twitter") || n.includes("x ") || n.includes("xai")) return <SiX className="w-4 h-4 text-foreground" />;
+  if (n.includes("reddit")) return <SiReddit className="w-5 h-5 text-[#FF4500]" />;
   if (n.includes("arxiv")) return <SiArxiv className="w-5 h-5 text-red-600 dark:text-red-400" />;
   if (n.includes("bilibili") || n.includes("b站")) return <BilibiliIcon className="w-5 h-5 text-[#00AEEC]" />;
   if (n.includes("notion")) return <NotionIcon className="w-5 h-5 text-foreground" />;
@@ -267,21 +269,17 @@ function formatLastRun(lastRun: string | null): string {
 
 export function SourceStatusPanel({ sources, loading = false, error = null, onSourceClick }: SourceStatusPanelProps) {
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["id"]>("all");
-
-  const socialPrimarySource = useMemo(() => {
-    const candidates = sources.filter((source) => source.category === "social" || source.collect_method === "twitter_snaplytics");
-    if (!candidates.length) return null;
-    const byName = candidates.find((source) => source.name.trim().toLowerCase() === "x");
-    if (byName) return byName;
-    const byUsernames = candidates.find((source) => getTwitterUsernames(source).length > 1);
-    if (byUsernames) return byUsernames;
-    const sorted = [...candidates].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-    return sorted[0] ?? null;
-  }, [sources]);
+  const socialSources = useMemo(
+    () =>
+      sources
+        .filter((source) => source.category === "social" || source.collect_method === "twitter_snaplytics")
+        .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)),
+    [sources]
+  );
 
   const getTabCount = (tabId: (typeof TABS)[number]["id"]): number => {
     if (tabId === "all") return sources.length;
-    if (tabId === "social") return socialPrimarySource ? 1 : 0;
+    if (tabId === "social") return socialSources.length;
     return sources.filter((source) => source.category === tabId).length;
   };
 
@@ -290,11 +288,10 @@ export function SourceStatusPanel({ sources, loading = false, error = null, onSo
       return sources;
     }
     if (activeTab === "social") {
-      if (!socialPrimarySource) return [];
-      return [{ ...socialPrimarySource, name: "X" }];
+      return socialSources;
     }
     return sources.filter((source) => source.category === activeTab);
-  }, [sources, activeTab, socialPrimarySource]);
+  }, [sources, activeTab, socialSources]);
 
   if (loading) {
     return <div className="py-10 text-sm text-muted-foreground">Loading sources...</div>;
