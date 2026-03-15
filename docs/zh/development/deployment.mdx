@@ -1,0 +1,43 @@
+---
+title: "部署"
+description: "本地开发与服务启动相关说明"
+---
+
+当前仓库主要提供本地开发与 Docker 化运行能力。
+
+## 本地开发
+
+推荐使用：
+
+```bash
+make bootstrap
+make doctor
+make dev-local
+```
+
+## 分步启动
+
+```bash
+make infra-up
+make migrate
+make backend
+make frontend
+```
+
+## 关键依赖
+
+- Postgres
+- Redis
+- Python 3.12+
+- Node.js 18+
+
+## 验证
+
+- 前端：`http://localhost:3000`
+- 后端 OpenAPI：`http://localhost:8000/docs`
+- 健康检查：`http://localhost:8000/health`
+
+## 备注
+
+- 浏览器采集能力需要额外执行 `make backend-browser-deps`
+- 首次启动后会自动初始化默认用户与预置 source 数据

@@ -1,0 +1,55 @@
+---
+title: "Insight Flow Introduction"
+description: "A workspace for continuous research monitoring, processing, and publishing"
+---
+
+Insight Flow is a workspace for research monitoring. It continuously collects from sources, generates daily, weekly, or research reports, and syncs the results to the destinations you configure.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/en/quickstart">
+    Start the local frontend, backend, database, and docs site.
+  </Card>
+  <Card title="Sources" icon="database" href="/en/features/sources">
+    Manage RSS, site scraping, GitHub Trending, Hugging Face, and more.
+  </Card>
+  <Card title="Monitors" icon="radar" href="/en/features/monitors">
+    Create daily, weekly, and research monitors and run them on demand.
+  </Card>
+  <Card title="API Reference" icon="code" href="/en/api-reference/introduction">
+    Explore resource groups under `/api/v1/`.
+  </Card>
+</CardGroup>
+
+## Core Capabilities
+
+- Multi-source collection across RSS, site scraping, GitHub Trending, and Hugging Face
+- AI processing pipeline with `filter`, `keywords`, `global_summary`, and `report`
+- Per-stage routing with `rule`, `llm_openai`, and `llm_codex`
+- Multiple output targets including Notion, Obsidian, and RSS
+- Run observability through monitor runs, events, logs, archives, and feed output
+
+## Typical Flow
+
+<Steps>
+  <Step title="Configure Providers">
+    Fill in `llm_openai` or `llm_codex` settings and run connectivity tests.
+  </Step>
+  <Step title="Configure Destinations">
+    Enable Notion, Obsidian, or RSS as output targets.
+  </Step>
+  <Step title="Prepare Sources">
+    Create or sync sources and confirm categories, strategy, and test results.
+  </Step>
+  <Step title="Create a Monitor">
+    Choose sources, report type, AI routing, and destinations.
+  </Step>
+  <Step title="Review Results">
+    Run the monitor and inspect reports, runs, logs, and feed output.
+  </Step>
+</Steps>
+
+## Next
+
+- Start with [Quickstart](/en/quickstart) if you want a working local setup
+- Read the [Features](/en/features/sources) pages to understand product workflows
+- Read the [API Reference](/en/api-reference/introduction) to integrate with the backend

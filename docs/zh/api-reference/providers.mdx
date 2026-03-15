@@ -1,0 +1,21 @@
+---
+title: "Providers API"
+description: "模型与执行器配置资源的接口概览"
+---
+
+前缀：`/api/v1/providers`
+
+## 用途
+
+维护 `llm_openai`、`llm_codex` 等执行器的配置与连通性测试。
+
+## 主要接口
+
+- `GET /api/v1/providers`
+- `PATCH /api/v1/providers/{provider_id}`
+- `POST /api/v1/providers/{provider_id}/test`
+
+## 常见场景
+
+- 保存模型 URL、model、api key 等配置
+- 在创建 monitor 前验证 provider 是否可用

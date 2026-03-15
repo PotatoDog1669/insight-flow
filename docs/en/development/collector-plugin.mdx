@@ -1,0 +1,39 @@
+---
+title: "Collector Plugins"
+description: "Recommended flow for adding or maintaining collection logic"
+---
+
+Collectors define how external information sources are converted into the platform's internal article inputs.
+
+## Choose a Strategy
+
+- `rss`: public RSS or Atom feeds
+- `github_trending`: GitHub Trending aggregation
+- `huggingface`: Hugging Face Daily Papers
+- `twitter_snaplytics`: public X / Twitter timelines through an intermediary
+- `blog_scraper`: sites without RSS
+- `deepbrowse`: dynamic or complex sites
+
+## Recommended Flow for Non-RSS Sites
+
+1. Start from the template at `docs/development/skills/blog-pattern-mining/templates/site_profile.template.yaml`
+2. Add the profile under `backend/app/collectors/site_profiles/<site_key>.yaml`
+3. Run:
+
+```bash
+python backend/scripts/validate_site_profile.py --profile backend/app/collectors/site_profiles/<site_key>.yaml
+```
+
+4. Check P0 coverage:
+
+```bash
+python backend/scripts/validate_site_profile.py --check-p0
+```
+
+## Useful Commands
+
+```bash
+make profile-gen
+make profile-check
+make smoke-e2e
+```

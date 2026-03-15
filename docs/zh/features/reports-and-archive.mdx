@@ -1,0 +1,36 @@
+---
+title: "报告与归档"
+description: "Insight Flow 中报告查看、筛选、删除和 RSS 输出"
+---
+
+Report 是 monitor 运行后的最终输出。你可以在前端查看报告列表、筛选结果、阅读详情，并通过 destination 或 RSS 对外消费。
+
+## 关键能力
+
+- 浏览报告列表
+- 按筛选条件查看报告
+- 查看单篇报告详情
+- 删除不需要的报告
+- 通过 RSS feed 对外提供最新结果
+
+## 如何使用
+
+1. 手动或自动运行 monitor
+2. 在 Reports 页面查看生成结果
+3. 根据需要筛选、阅读或删除
+4. 如果配置了 Notion / Obsidian / RSS，可在对应目标中查看同步结果
+
+## 相关接口
+
+- 列表：`GET /api/v1/reports`
+- 筛选项：`GET /api/v1/reports/filters`
+- 详情：`GET /api/v1/reports/{report_id}`
+- 删除：`DELETE /api/v1/reports/{report_id}`
+- 自定义生成入口：`POST /api/v1/reports/custom`（当前保留，未完成）
+- RSS：`GET /api/v1/feed.xml`
+
+## 关联概念
+
+- 报告由 monitor run 产出
+- 输出成功与否由 destination 配置决定
+- run 过程问题可回到 monitor 的 runs、logs、events 排查

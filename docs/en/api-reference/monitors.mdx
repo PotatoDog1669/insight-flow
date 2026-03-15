@@ -1,0 +1,29 @@
+---
+title: "Monitors API"
+description: "Interface overview for monitor resources"
+---
+
+Prefix: `/api/v1/monitors`
+
+## Purpose
+
+Create, run, update, and observe monitors.
+
+## Main Endpoints
+
+- `GET /api/v1/monitors`
+- `POST /api/v1/monitors`
+- `GET /api/v1/monitors/ai-routing/defaults`
+- `POST /api/v1/monitors/{monitor_id}/run`
+- `GET /api/v1/monitors/{monitor_id}/logs`
+- `GET /api/v1/monitors/{monitor_id}/runs`
+- `POST /api/v1/monitors/{monitor_id}/runs/{run_id}/cancel`
+- `GET /api/v1/monitors/{monitor_id}/runs/{run_id}/events`
+- `PATCH /api/v1/monitors/{monitor_id}`
+- `DELETE /api/v1/monitors/{monitor_id}`
+
+## Common Scenarios
+
+- Create a new monitor
+- Trigger a manual run
+- Track run status and detailed execution events

@@ -1,0 +1,21 @@
+---
+title: "Providers API"
+description: "Interface overview for model and executor configuration"
+---
+
+Prefix: `/api/v1/providers`
+
+## Purpose
+
+Manage executor settings for providers such as `llm_openai` and `llm_codex`, including connectivity tests.
+
+## Main Endpoints
+
+- `GET /api/v1/providers`
+- `PATCH /api/v1/providers/{provider_id}`
+- `POST /api/v1/providers/{provider_id}/test`
+
+## Common Scenarios
+
+- Save model URL, model id, and API key settings
+- Test provider connectivity before assigning it to monitor stages

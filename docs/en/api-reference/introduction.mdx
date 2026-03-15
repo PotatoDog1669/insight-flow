@@ -1,0 +1,33 @@
+---
+title: "API Reference Overview"
+description: "Path conventions and resource groups in the Insight Flow API"
+---
+
+Insight Flow exposes its API under the shared `/api/v1/` prefix for both the frontend UI and automation workflows.
+
+## Conventions
+
+- Resource APIs live under `/api/v1/`
+- OpenAPI docs are available at `http://localhost:8000/docs`
+- Health checks are available at `/health`
+- Frontend calls are centralized in `frontend/src/lib/api.ts`
+
+## Resource Groups
+
+- Sources
+- Articles
+- Tasks
+- Reports
+- Monitors
+- Providers
+- Destinations
+- Feed
+- Users
+
+## Suggested Reading Order
+
+1. [Sources](/en/api-reference/sources)
+2. [Monitors](/en/api-reference/monitors)
+3. [Reports](/en/api-reference/reports)
+4. [Providers](/en/api-reference/providers)
+5. [Destinations](/en/api-reference/destinations)

@@ -1,0 +1,24 @@
+---
+title: "Reports API"
+description: "报告资源的接口概览"
+---
+
+前缀：`/api/v1/reports`
+
+## 用途
+
+查询、筛选、查看和删除最终报告。
+
+## 主要接口
+
+- `GET /api/v1/reports`
+- `GET /api/v1/reports/filters`
+- `GET /api/v1/reports/{report_id}`
+- `DELETE /api/v1/reports/{report_id}`
+- `POST /api/v1/reports/custom`
+
+## 常见场景
+
+- 在前端展示报告列表与详情
+- 删除不需要的归档结果
+- 为未来自定义报告入口预留接入点

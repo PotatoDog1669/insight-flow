@@ -1,0 +1,31 @@
+---
+title: "贡献开发"
+description: "参与 Insight Flow 开发时的基本约定"
+---
+
+## 开发建议
+
+- 先阅读相关文档和已有实现，再动手修改
+- 保持 API、schema、前端类型的一致性
+- 数据库变更必须通过 Alembic migration
+- 尽量复用已有 collector、provider、destination 约定
+
+## 常用检查
+
+```bash
+make test-all
+make profile-check
+```
+
+如果只需要跑后端测试：
+
+```bash
+make test-backend
+```
+
+## 代码位置
+
+- 后端入口：`backend/app/main.py`
+- API：`backend/app/api/v1/`
+- 前端 API 封装：`frontend/src/lib/api.ts`
+- 文档：`docs/`

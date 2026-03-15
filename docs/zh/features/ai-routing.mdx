@@ -1,0 +1,42 @@
+---
+title: "AI 路由"
+description: "Insight Flow 的阶段化 AI 路由模型与常见配置方式"
+---
+
+Insight Flow 把内容加工拆成多个阶段，每个阶段可以单独选择执行器。这样你可以在成本、速度和输出质量之间做取舍。
+
+## 阶段模型
+
+- `filter`：筛掉不相关或低价值内容
+- `keywords`：为内容提取关键词
+- `global_summary`：为多个内容项生成汇总摘要
+- `report`：生成最终报告正文
+
+## 可选执行器
+
+- `rule`：规则执行，适合无需模型参与的轻量阶段
+- `llm_openai`：使用 OpenAI 兼容模型
+- `llm_codex`：使用 Codex 兼容模型
+
+说明：
+
+- `global_summary` 与 `report` 只支持 LLM 类执行器
+- 默认值可以通过 `GET /api/v1/monitors/ai-routing/defaults` 查看
+
+## 如何使用
+
+1. 在 Providers 页面配置并测试模型连接
+2. 创建或编辑 monitor
+3. 为每个阶段选择 provider
+4. 先运行小样本任务，比较输出质量与耗时
+
+## 常见配置思路
+
+- 成本优先：`filter=rule`、`keywords=rule`、`global_summary=llm_openai`、`report=llm_openai`
+- 统一模型：所有 LLM 阶段都用 `llm_codex`
+- 混合模式：轻量阶段用规则，长文本阶段用模型
+
+## 相关页面
+
+- [监控任务](/zh/features/monitors)
+- [Providers API](/zh/api-reference/providers)

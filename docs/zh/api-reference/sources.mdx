@@ -1,0 +1,26 @@
+---
+title: "Sources API"
+description: "信息源资源的接口概览"
+---
+
+前缀：`/api/v1/sources`
+
+## 用途
+
+管理信息源的创建、查询、更新、测试与删除。
+
+## 主要接口
+
+- `GET /api/v1/sources`
+- `GET /api/v1/sources/categories`
+- `GET /api/v1/sources/{source_id}`
+- `POST /api/v1/sources`
+- `POST /api/v1/sources/{source_id}/test`
+- `PATCH /api/v1/sources/{source_id}`
+- `DELETE /api/v1/sources/{source_id}`
+
+## 常见场景
+
+- 列出全部 source 供 monitor 选择
+- 对新建 source 做连通性测试
+- 按分类查看 source 覆盖情况

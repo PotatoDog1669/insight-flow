@@ -1,0 +1,33 @@
+---
+title: "Docs Maintenance"
+description: "How to maintain the Mint docs structure, mirrors, and checks"
+---
+
+The docs site is built with Mint, and its configuration lives at `docs/docs.json`.
+
+## Structure
+
+- `zh/`: primary Chinese documentation
+- `en/`: English mirror
+- `plans/`: design and implementation records
+
+## Maintenance Rules
+
+- Update Chinese first, then sync the English mirror
+- Keep Guides and API Reference separate
+- Maintain one-to-one path mirroring across languages
+
+## Local Preview
+
+```bash
+cd docs
+mint dev
+```
+
+## Pre-merge Checks
+
+```bash
+cd docs
+mint validate
+mint broken-links
+```

@@ -1,0 +1,31 @@
+---
+title: "API Overview"
+description: "Routing layout, conventions, and resource groups"
+---
+
+The backend exposes HTTP APIs through FastAPI, all grouped under `/api/v1/`.
+
+## Route Groups
+
+- `/sources`
+- `/monitors`
+- `/articles`
+- `/reports`
+- `/users`
+- `/tasks`
+- `/destinations`
+- `/providers`
+- `/feed.xml`
+
+## Conventions
+
+- Request and response payloads are defined with Pydantic schemas
+- Resource APIs follow REST-style conventions when practical
+- Frontend API calls are centralized in `frontend/src/lib/api.ts`
+- In local development, OpenAPI is available at `http://localhost:8000/docs`
+
+## Where to Start
+
+- Frontend integration: [API Reference](/en/api-reference/introduction)
+- Monitor workflow changes: [Monitors API](/en/api-reference/monitors)
+- Provider or destination changes: read those resource pages first

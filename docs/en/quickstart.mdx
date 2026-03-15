@@ -1,0 +1,80 @@
+---
+title: "Quickstart"
+description: "Run Insight Flow in a local development environment"
+---
+
+## Requirements
+
+- Python 3.12+
+- Node.js 18+
+- Docker / Docker Compose
+
+## First-time Setup
+
+From the repository root:
+
+```bash
+cp .env.example .env
+make bootstrap
+make doctor
+```
+
+Notes:
+
+- `make bootstrap` installs and repairs local dependencies
+- `make doctor` checks Python, Node, Docker, and service prerequisites
+
+## Daily Development Startup
+
+```bash
+make dev-local
+```
+
+If you prefer to start services separately:
+
+```bash
+make infra-up
+make migrate
+make backend
+make frontend
+```
+
+## Endpoints
+
+- Frontend: `http://localhost:3000`
+- Backend OpenAPI: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
+- Mint docs preview: run `mint dev` inside `docs/`
+
+## First Working Flow
+
+1. Open the frontend and go to Providers
+2. Configure `llm_openai` or `llm_codex`
+3. Enable at least one destination
+4. Review preset sources or add your own source
+5. Create a `daily` monitor
+6. Run it and inspect runs, reports, and destination output
+
+## Useful Commands
+
+```bash
+make sync-sources
+make test-all
+make infra-down
+make backend-browser-deps
+```
+
+## Troubleshooting
+
+### OpenAPI docs are not available
+
+Make sure the backend is running, then open `http://localhost:8000/docs`.
+
+### The Mint docs site will not start
+
+Inside `docs/`, run:
+
+```bash
+mint validate
+mint dev
+```

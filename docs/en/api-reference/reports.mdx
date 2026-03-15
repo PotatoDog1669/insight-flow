@@ -1,0 +1,24 @@
+---
+title: "Reports API"
+description: "Interface overview for report resources"
+---
+
+Prefix: `/api/v1/reports`
+
+## Purpose
+
+List, filter, inspect, and delete final reports.
+
+## Main Endpoints
+
+- `GET /api/v1/reports`
+- `GET /api/v1/reports/filters`
+- `GET /api/v1/reports/{report_id}`
+- `DELETE /api/v1/reports/{report_id}`
+- `POST /api/v1/reports/custom`
+
+## Common Scenarios
+
+- Power report list and detail pages in the UI
+- Delete archived results
+- Reserve a future entry point for custom report generation

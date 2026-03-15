@@ -1,0 +1,41 @@
+---
+title: "信息源"
+description: "Insight Flow 的信息源模型、支持的采集方式和使用流程"
+---
+
+信息源是 Insight Flow 的输入层。每个 source 定义了数据来自哪里、按什么策略采集，以及属于哪个主题分类。
+
+## 支持的采集方式
+
+- `rss`：适合公开 RSS / Atom 信息源
+- `blog_scraper`：适合没有 RSS 的静态站点，通过站点 profile 解析
+- `deepbrowse`：适合复杂动态站点，作为兜底策略
+- `github_trending`：聚合 GitHub Trending
+- `huggingface`：聚合 Hugging Face Daily Papers
+
+## 关键能力
+
+- 统一管理预置源与自定义源
+- 对单个 source 进行测试，验证连接与解析结果
+- 通过分类维度管理不同研究主题
+- 支持从预置 YAML 同步到数据库
+
+## 如何使用
+
+1. 进入 Sources 页面查看现有 source
+2. 新建或编辑 source，设置名称、URL、分类与采集策略
+3. 执行 source test，确认采集返回正常
+4. 在创建 monitor 时选择需要的 source
+
+## 相关接口
+
+- 列表与详情：`GET /api/v1/sources`、`GET /api/v1/sources/{source_id}`
+- 创建与更新：`POST /api/v1/sources`、`PATCH /api/v1/sources/{source_id}`
+- 测试：`POST /api/v1/sources/{source_id}/test`
+- 删除：`DELETE /api/v1/sources/{source_id}`
+
+## 运维说明
+
+- 预置源可通过 `make sync-sources` 同步
+- 站点 profile 位于 `backend/app/collectors/site_profiles/`
+- 新增非 RSS 站点时，优先走 profile 驱动流程，详见 [编写 Collector 插件](/zh/development/collector-plugin)

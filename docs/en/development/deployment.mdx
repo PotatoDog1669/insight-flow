@@ -1,0 +1,43 @@
+---
+title: "Deployment"
+description: "Local development and service startup notes"
+---
+
+The repository currently focuses on local development and Docker-backed runtime setup.
+
+## Local Development
+
+Recommended commands:
+
+```bash
+make bootstrap
+make doctor
+make dev-local
+```
+
+## Start Services Separately
+
+```bash
+make infra-up
+make migrate
+make backend
+make frontend
+```
+
+## Main Dependencies
+
+- Postgres
+- Redis
+- Python 3.12+
+- Node.js 18+
+
+## Verification
+
+- Frontend: `http://localhost:3000`
+- Backend OpenAPI: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
+
+## Notes
+
+- Browser collection support requires `make backend-browser-deps`
+- The first backend startup initializes the default user and preset sources

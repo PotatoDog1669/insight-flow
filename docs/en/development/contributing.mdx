@@ -1,0 +1,31 @@
+---
+title: "Contributing"
+description: "Basic conventions for contributing to Insight Flow"
+---
+
+## Development Guidance
+
+- Read the related docs and implementation before editing
+- Keep API payloads, schemas, and frontend types aligned
+- Use Alembic for database schema changes
+- Reuse the existing collector, provider, and destination patterns
+
+## Common Checks
+
+```bash
+make test-all
+make profile-check
+```
+
+If you only need backend tests:
+
+```bash
+make test-backend
+```
+
+## Important Locations
+
+- Backend entrypoint: `backend/app/main.py`
+- API routes: `backend/app/api/v1/`
+- Frontend API client: `frontend/src/lib/api.ts`
+- Docs site: `docs/`

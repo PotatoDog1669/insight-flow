@@ -1,0 +1,54 @@
+---
+title: "Monitors"
+description: "The monitor model, configuration fields, and runtime workflow"
+---
+
+A monitor is the core scheduling unit in Insight Flow. It combines sources, AI routing, report type, and destinations into a repeatable run configuration.
+
+## What a Monitor Contains
+
+- Name
+- `time_period`
+- `report_type`
+- `source_ids`
+- `ai_routing`
+- `destination_ids`
+- `window_hours`
+- `enabled`
+
+## Key Capabilities
+
+- Create and update monitors
+- Trigger runs manually
+- Inspect runs, logs, and events
+- Cancel a running job
+
+## How to Use It
+
+1. Configure sources, providers, and destinations first
+2. Create a monitor and choose its sources and destinations
+3. Set providers for `filter`, `keywords`, `global_summary`, and `report`
+4. Save and run it, then inspect runs and logs
+
+## Report Type Relationship
+
+- `daily`: ongoing monitoring
+- `weekly`: periodic summaries
+- `research`: longer-form research output
+
+## Related API
+
+- List and create: `GET /api/v1/monitors`, `POST /api/v1/monitors`
+- Default AI routing: `GET /api/v1/monitors/ai-routing/defaults`
+- Run: `POST /api/v1/monitors/{monitor_id}/run`
+- Logs: `GET /api/v1/monitors/{monitor_id}/logs`
+- Runs: `GET /api/v1/monitors/{monitor_id}/runs`
+- Cancel: `POST /api/v1/monitors/{monitor_id}/runs/{run_id}/cancel`
+- Events: `GET /api/v1/monitors/{monitor_id}/runs/{run_id}/events`
+- Update and delete: `PATCH /api/v1/monitors/{monitor_id}`, `DELETE /api/v1/monitors/{monitor_id}`
+
+## Recommended Workflow
+
+- Validate a small source set first
+- Confirm destination output before enabling long-form monitors
+- If a run stalls, inspect runs first, then events and logs

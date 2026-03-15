@@ -1,0 +1,80 @@
+---
+title: "快速开始"
+description: "用本地开发环境启动 Insight Flow"
+---
+
+## 环境要求
+
+- Python 3.12+
+- Node.js 18+
+- Docker / Docker Compose
+
+## 首次初始化
+
+在仓库根目录执行：
+
+```bash
+cp .env.example .env
+make bootstrap
+make doctor
+```
+
+说明：
+
+- `make bootstrap`：安装和修复本地依赖
+- `make doctor`：检查 Python、Node、Docker、数据库相关环境是否正常
+
+## 日常开发启动
+
+```bash
+make dev-local
+```
+
+如果你希望分开启动，也可以使用：
+
+```bash
+make infra-up
+make migrate
+make backend
+make frontend
+```
+
+## 启动后访问
+
+- 前端：`http://localhost:3000`
+- 后端 API 文档：`http://localhost:8000/docs`
+- 健康检查：`http://localhost:8000/health`
+- Mint 文档预览：在 `docs/` 目录执行 `mint dev`
+
+## 首次可用流程
+
+1. 打开前端并进入 Providers 页面
+2. 配置 `llm_openai` 或 `llm_codex`
+3. 进入 Destinations 页面启用一个输出目标
+4. 在 Sources 页面检查预置信息源或添加自己的源
+5. 在 Monitors 页面创建一个 `daily` monitor
+6. 手动运行 monitor，查看 runs、reports 与输出结果
+
+## 常用命令
+
+```bash
+make sync-sources
+make test-all
+make infra-down
+make backend-browser-deps
+```
+
+## 常见问题
+
+### OpenAPI 页面打不开
+
+确认后端正在运行，并访问 `http://localhost:8000/docs`。
+
+### 文档站无法预览
+
+进入 `docs/` 目录后执行：
+
+```bash
+mint validate
+mint dev
+```

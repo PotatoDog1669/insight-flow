@@ -1,0 +1,29 @@
+---
+title: "Monitors API"
+description: "监控任务资源的接口概览"
+---
+
+前缀：`/api/v1/monitors`
+
+## 用途
+
+创建、运行、更新和观察 monitor。
+
+## 主要接口
+
+- `GET /api/v1/monitors`
+- `POST /api/v1/monitors`
+- `GET /api/v1/monitors/ai-routing/defaults`
+- `POST /api/v1/monitors/{monitor_id}/run`
+- `GET /api/v1/monitors/{monitor_id}/logs`
+- `GET /api/v1/monitors/{monitor_id}/runs`
+- `POST /api/v1/monitors/{monitor_id}/runs/{run_id}/cancel`
+- `GET /api/v1/monitors/{monitor_id}/runs/{run_id}/events`
+- `PATCH /api/v1/monitors/{monitor_id}`
+- `DELETE /api/v1/monitors/{monitor_id}`
+
+## 常见场景
+
+- 创建新的监控任务
+- 手动执行 run
+- 追踪运行过程中的状态与事件

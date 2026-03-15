@@ -1,0 +1,21 @@
+---
+title: "Destinations API"
+description: "输出目标资源的接口概览"
+---
+
+前缀：`/api/v1/destinations`
+
+## 用途
+
+维护 Notion、Obsidian、RSS 等输出目标的配置和启用状态。
+
+## 主要接口
+
+- `GET /api/v1/destinations`
+- `PATCH /api/v1/destinations/{destination_id}`
+
+## 常见场景
+
+- 更新 Notion database 配置
+- 启用或停用某个 output target
+- 让 monitor 绑定已配置好的 destination

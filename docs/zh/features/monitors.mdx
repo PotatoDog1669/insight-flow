@@ -1,0 +1,54 @@
+---
+title: "监控任务"
+description: "Insight Flow 中 monitor 的概念、配置项与运行方式"
+---
+
+Monitor 是 Insight Flow 的核心调度单元。它把信息源、AI 路由、报告类型和输出目标组合成一个可重复执行的任务。
+
+## Monitor 包含什么
+
+- 名称
+- `time_period`：如 `daily`、`weekly`
+- `report_type`：如 `daily`、`weekly`、`research`
+- `source_ids`
+- `ai_routing`
+- `destination_ids`
+- `window_hours`
+- `enabled`
+
+## 关键能力
+
+- 创建和更新监控任务
+- 手动触发运行
+- 查看 runs、日志和事件
+- 取消正在执行的 run
+
+## 如何使用
+
+1. 先完成信息源、Providers 和 Destinations 的基本配置
+2. 创建 monitor，选择信息源和目标输出
+3. 为 `filter`、`keywords`、`global_summary`、`report` 配置路由
+4. 保存后手动运行，观察 runs 和日志
+
+## 与报告类型的关系
+
+- `daily`：面向日常监控
+- `weekly`：面向周期性总结
+- `research`：面向更长篇幅的研究输出
+
+## 相关接口
+
+- 列表与创建：`GET /api/v1/monitors`、`POST /api/v1/monitors`
+- AI 默认路由：`GET /api/v1/monitors/ai-routing/defaults`
+- 手动运行：`POST /api/v1/monitors/{monitor_id}/run`
+- 运行日志：`GET /api/v1/monitors/{monitor_id}/logs`
+- runs 摘要：`GET /api/v1/monitors/{monitor_id}/runs`
+- 取消 run：`POST /api/v1/monitors/{monitor_id}/runs/{run_id}/cancel`
+- 运行事件：`GET /api/v1/monitors/{monitor_id}/runs/{run_id}/events`
+- 更新与删除：`PATCH /api/v1/monitors/{monitor_id}`、`DELETE /api/v1/monitors/{monitor_id}`
+
+## 操作建议
+
+- 先用少量 source 验证流程，再扩展 source 范围
+- 报告类 monitor 优先确认 destination 可写
+- 如果 run 卡住，先看 runs，再看 events 和 logs

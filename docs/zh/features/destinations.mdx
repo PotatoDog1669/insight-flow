@@ -1,0 +1,43 @@
+---
+title: "输出渠道"
+description: "Insight Flow 的目标输出配置与使用流程"
+---
+
+Destination 决定生成结果写到哪里。当前系统围绕 Notion、Obsidian 和 RSS 提供配置与启用能力。
+
+## 支持的目标
+
+- `notion`：同步到 Notion database 或 page
+- `obsidian`：写入 Obsidian vault 或 REST bridge
+- `rss`：将报告暴露为 RSS feed
+
+## 关键能力
+
+- 为每个目标维护独立配置
+- 单独启用或停用某个 destination
+- 在 monitor 上绑定多个 destination
+
+## 如何使用
+
+1. 进入 Destinations 页面
+2. 填写对应目标的 config
+3. 启用 destination
+4. 在 monitor 中选择要使用的 destination
+5. 运行任务并检查落盘结果
+
+## 配置建议
+
+- Notion：优先确认 token、database ID 或 parent page ID
+- Obsidian：确认本地 bridge 或 vault 路径可写
+- RSS：确认前端或消费端使用正确的 feed URL
+
+## 相关接口
+
+- 列表：`GET /api/v1/destinations`
+- 更新：`PATCH /api/v1/destinations/{destination_id}`
+- RSS feed：`GET /api/v1/feed.xml`
+
+## 相关页面
+
+- [报告与归档](/zh/features/reports-and-archive)
+- [Destinations API](/zh/api-reference/destinations)

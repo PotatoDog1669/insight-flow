@@ -1,0 +1,33 @@
+---
+title: "API 参考总览"
+description: "Insight Flow API 的路径约定与资源划分"
+---
+
+Insight Flow 的 API 以 `/api/v1/` 为统一前缀，面向前端管理界面和自动化调用。
+
+## 基本约定
+
+- 资源接口集中在 `/api/v1/`
+- OpenAPI 文档位于 `http://localhost:8000/docs`
+- 健康检查位于 `/health`
+- 前端调用统一收敛在 `frontend/src/lib/api.ts`
+
+## 资源分组
+
+- Sources
+- Articles
+- Tasks
+- Reports
+- Monitors
+- Providers
+- Destinations
+- Feed
+- Users
+
+## 推荐阅读顺序
+
+1. [Sources](/zh/api-reference/sources)
+2. [Monitors](/zh/api-reference/monitors)
+3. [Reports](/zh/api-reference/reports)
+4. [Providers](/zh/api-reference/providers)
+5. [Destinations](/zh/api-reference/destinations)

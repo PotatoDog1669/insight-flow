@@ -6,37 +6,131 @@
     "primary": "#4F46E5"
   },
   "navigation": {
-    "groups": [
+    "languages": [
       {
-        "group": "开始",
-        "pages": [
-          "introduction",
-          "quickstart"
+        "language": "zh",
+        "tabs": [
+          {
+            "tab": "指南",
+            "groups": [
+              {
+                "group": "开始",
+                "pages": [
+                  "zh/introduction",
+                  "zh/quickstart"
+                ]
+              },
+              {
+                "group": "功能",
+                "pages": [
+                  "zh/features/sources",
+                  "zh/features/monitors",
+                  "zh/features/ai-routing",
+                  "zh/features/destinations",
+                  "zh/features/reports-and-archive"
+                ]
+              },
+              {
+                "group": "开发",
+                "pages": [
+                  "zh/development/architecture",
+                  "zh/development/api-overview",
+                  "zh/development/collector-plugin",
+                  "zh/development/deployment",
+                  "zh/development/contributing",
+                  "zh/development/docs"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "API Reference",
+            "groups": [
+              {
+                "group": "概览",
+                "pages": [
+                  "zh/api-reference/introduction"
+                ]
+              },
+              {
+                "group": "资源",
+                "pages": [
+                  "zh/api-reference/sources",
+                  "zh/api-reference/articles",
+                  "zh/api-reference/tasks",
+                  "zh/api-reference/reports",
+                  "zh/api-reference/monitors",
+                  "zh/api-reference/providers",
+                  "zh/api-reference/destinations",
+                  "zh/api-reference/feed",
+                  "zh/api-reference/users"
+                ]
+              }
+            ]
+          }
         ]
       },
       {
-        "group": "API 参考",
-        "pages": [
-          "api-reference/sources",
-          "api-reference/articles",
-          "api-reference/tasks",
-          "api-reference/reports"
-        ]
-      },
-      {
-        "group": "用户指南",
-        "pages": [
-          "guides/add-source",
-          "guides/configure-sink",
-          "guides/custom-template"
-        ]
-      },
-      {
-        "group": "开发者",
-        "pages": [
-          "development/architecture",
-          "development/collector-plugin",
-          "development/deployment"
+        "language": "en",
+        "tabs": [
+          {
+            "tab": "Guides",
+            "groups": [
+              {
+                "group": "Get Started",
+                "pages": [
+                  "en/introduction",
+                  "en/quickstart"
+                ]
+              },
+              {
+                "group": "Features",
+                "pages": [
+                  "en/features/sources",
+                  "en/features/monitors",
+                  "en/features/ai-routing",
+                  "en/features/destinations",
+                  "en/features/reports-and-archive"
+                ]
+              },
+              {
+                "group": "Development",
+                "pages": [
+                  "en/development/architecture",
+                  "en/development/api-overview",
+                  "en/development/collector-plugin",
+                  "en/development/deployment",
+                  "en/development/contributing",
+                  "en/development/docs"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "API Reference",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": [
+                  "en/api-reference/introduction"
+                ]
+              },
+              {
+                "group": "Resources",
+                "pages": [
+                  "en/api-reference/sources",
+                  "en/api-reference/articles",
+                  "en/api-reference/tasks",
+                  "en/api-reference/reports",
+                  "en/api-reference/monitors",
+                  "en/api-reference/providers",
+                  "en/api-reference/destinations",
+                  "en/api-reference/feed",
+                  "en/api-reference/users"
+                ]
+              }
+            ]
+          }
         ]
       }
     ]

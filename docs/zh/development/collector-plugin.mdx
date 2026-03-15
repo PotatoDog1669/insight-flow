@@ -1,0 +1,39 @@
+---
+title: "编写 Collector 插件"
+description: "新增或维护信息源采集逻辑的建议流程"
+---
+
+Collector 决定系统如何把外部信息源转换成内部统一的文章输入。
+
+## 选择采集策略
+
+- `rss`：适用于公开 RSS / Atom 信息源
+- `github_trending`：适用于 GitHub Trending
+- `huggingface`：适用于 Hugging Face Daily Papers
+- `twitter_snaplytics`：适用于公开 X / Twitter 时间线
+- `blog_scraper`：适用于无 RSS 的站点
+- `deepbrowse`：适用于复杂动态站点
+
+## 新增无 RSS 站点的推荐流程
+
+1. 使用模板创建 profile：`docs/development/skills/blog-pattern-mining/templates/site_profile.template.yaml`
+2. 将 profile 放到 `backend/app/collectors/site_profiles/<site_key>.yaml`
+3. 运行：
+
+```bash
+python backend/scripts/validate_site_profile.py --profile backend/app/collectors/site_profiles/<site_key>.yaml
+```
+
+4. 检查 P0 覆盖：
+
+```bash
+python backend/scripts/validate_site_profile.py --check-p0
+```
+
+## 常用命令
+
+```bash
+make profile-gen
+make profile-check
+make smoke-e2e
+```

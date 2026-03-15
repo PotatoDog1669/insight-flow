@@ -1,0 +1,55 @@
+---
+title: "Insight Flow 简介"
+description: "面向研究与信息监控场景的自动化采集、加工与输出工作台"
+---
+
+Insight Flow 是一个面向研究与信息监控场景的工作台，用来持续采集信息源、生成日报/周报/研究报告，并把结果同步到你配置的输出渠道。
+
+<CardGroup cols={2}>
+  <Card title="快速开始" icon="rocket" href="/zh/quickstart">
+    用本地开发环境启动前后端、数据库与文档站。
+  </Card>
+  <Card title="信息源" icon="database" href="/zh/features/sources">
+    管理 RSS、站点抓取、GitHub Trending、Hugging Face 等采集源。
+  </Card>
+  <Card title="监控任务" icon="radar" href="/zh/features/monitors">
+    创建 daily、weekly、research 监控任务并触发运行。
+  </Card>
+  <Card title="API 参考" icon="code" href="/zh/api-reference/introduction">
+    查看 `/api/v1/` 下各资源的接口分组与用途。
+  </Card>
+</CardGroup>
+
+## 核心能力
+
+- 多源采集：支持 RSS、站点抓取、GitHub Trending、Hugging Face 等来源
+- AI 加工流水线：支持 `filter`、`keywords`、`global_summary`、`report` 四个阶段
+- 多模型路由：可在 `rule`、`llm_openai`、`llm_codex` 之间配置阶段执行器
+- 多目标输出：支持 Notion、Obsidian、RSS
+- 运行可观测：提供 monitor runs、事件日志、报告归档与 RSS feed
+
+## 典型使用路径
+
+<Steps>
+  <Step title="配置模型">
+    在 Providers 中填写 `llm_openai` 或 `llm_codex` 的连接信息，并执行连通性测试。
+  </Step>
+  <Step title="配置输出">
+    在 Destinations 中启用 Notion、Obsidian 或 RSS 目标。
+  </Step>
+  <Step title="准备信息源">
+    创建或同步信息源，确认分类、采集方式与测试结果正确。
+  </Step>
+  <Step title="创建监控任务">
+    选择信息源、报告类型、AI 路由和输出目标，保存 monitor。
+  </Step>
+  <Step title="查看结果">
+    手动运行任务后，在 Reports、runs、日志和 RSS feed 中查看结果。
+  </Step>
+</Steps>
+
+## 下一步
+
+- 如果你要先跑通系统，请从 [快速开始](/zh/quickstart) 开始
+- 如果你要了解能力边界，请阅读 [功能](/zh/features/sources)
+- 如果你要对接前端或自动化流程，请阅读 [API 参考](/zh/api-reference/introduction)

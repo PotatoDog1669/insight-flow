@@ -1,0 +1,33 @@
+---
+title: "文档维护"
+description: "维护 Mint 文档站的目录、镜像与校验方式"
+---
+
+文档站使用 Mint 构建，配置文件位于 `docs/docs.json`。
+
+## 目录结构
+
+- `zh/`：中文主文档
+- `en/`：英文镜像文档
+- `plans/`：设计与实施记录
+
+## 维护原则
+
+- 优先更新中文页，再同步英文镜像
+- Guides 与 API Reference 分开维护
+- 页面路径保持中英文一一对应，方便导航镜像
+
+## 本地预览
+
+```bash
+cd docs
+mint dev
+```
+
+## 提交前校验
+
+```bash
+cd docs
+mint validate
+mint broken-links
+```

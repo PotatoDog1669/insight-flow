@@ -1,0 +1,42 @@
+---
+title: "AI Routing"
+description: "Stage-based provider routing and common configuration patterns"
+---
+
+Insight Flow splits content processing into multiple stages. Each stage can choose its own execution provider so you can balance cost, speed, and output quality.
+
+## Stage Model
+
+- `filter`: remove low-value or irrelevant items
+- `keywords`: extract keywords
+- `global_summary`: generate a summary across multiple items
+- `report`: generate the final report body
+
+## Available Providers
+
+- `rule`: rule-based execution
+- `llm_openai`: OpenAI-compatible model execution
+- `llm_codex`: Codex-compatible model execution
+
+Notes:
+
+- `global_summary` and `report` only support LLM providers
+- Check defaults through `GET /api/v1/monitors/ai-routing/defaults`
+
+## How to Use It
+
+1. Configure and test providers on the Providers page
+2. Create or edit a monitor
+3. Choose a provider for each stage
+4. Run a small monitor first to compare latency and output quality
+
+## Common Patterns
+
+- Cost-first: `filter=rule`, `keywords=rule`, `global_summary=llm_openai`, `report=llm_openai`
+- Single-model: all LLM stages use `llm_codex`
+- Hybrid: rules for lightweight stages, LLMs for long-form output
+
+## Related Pages
+
+- [Monitors](/en/features/monitors)
+- [Providers API](/en/api-reference/providers)

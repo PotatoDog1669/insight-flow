@@ -1,0 +1,34 @@
+---
+title: "Architecture"
+description: "Main modules, runtime flow, and responsibility boundaries"
+---
+
+Insight Flow is composed of a backend API, scheduling and collection layers, a frontend management UI, and a Mint docs site.
+
+## Modules
+
+- `backend/`: FastAPI, database models, scheduler, collectors, report generation, and publishing
+- `frontend/`: Next.js management interface
+- `agents/`: browser collection capabilities
+- `docs/`: Mint site and design records
+
+## Main Runtime Flow
+
+1. A source defines where content comes from
+2. A monitor combines sources, AI routing, destinations, and report type
+3. A scheduler or manual action triggers a monitor run
+4. The backend collects, filters, summarizes, generates, and publishes output
+5. The frontend and API expose management and result views
+
+## Key Constraints
+
+- API prefix is `/api/v1/`
+- Schemas live under `backend/app/schemas/`
+- Database changes must go through Alembic migrations
+- Collector, renderer, and sink extensions should follow the plugin contract
+
+## Recommended Reading
+
+1. [API Overview](/en/development/api-overview)
+2. [Collector Plugins](/en/development/collector-plugin)
+3. [Deployment](/en/development/deployment)

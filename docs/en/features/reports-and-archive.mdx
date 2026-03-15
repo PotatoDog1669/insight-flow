@@ -1,0 +1,36 @@
+---
+title: "Reports and Archive"
+description: "Viewing, filtering, deleting, and publishing generated reports"
+---
+
+Reports are the final outputs of monitor runs. You can browse report lists, filter results, inspect details, and publish them through destinations or RSS.
+
+## Key Capabilities
+
+- Browse report lists
+- Filter report results
+- Open report detail views
+- Delete archived reports
+- Expose the latest results through RSS
+
+## How to Use It
+
+1. Run a monitor manually or through scheduling
+2. Open the Reports page
+3. Filter, inspect, or delete results as needed
+4. Verify Notion, Obsidian, or RSS output if destinations are enabled
+
+## Related API
+
+- List: `GET /api/v1/reports`
+- Filter metadata: `GET /api/v1/reports/filters`
+- Detail: `GET /api/v1/reports/{report_id}`
+- Delete: `DELETE /api/v1/reports/{report_id}`
+- Custom report entry point: `POST /api/v1/reports/custom` (reserved, not implemented)
+- RSS: `GET /api/v1/feed.xml`
+
+## Related Concepts
+
+- Reports are produced by monitor runs
+- Publishing success depends on destination configuration
+- For run issues, inspect monitor runs, logs, and events

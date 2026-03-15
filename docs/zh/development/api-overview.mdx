@@ -1,0 +1,31 @@
+---
+title: "API 总览"
+description: "Insight Flow API 的分层、路径约定和资源划分"
+---
+
+Insight Flow 后端通过 FastAPI 暴露 HTTP 接口，统一挂载在 `/api/v1/` 下。
+
+## 路由分组
+
+- `/sources`
+- `/monitors`
+- `/articles`
+- `/reports`
+- `/users`
+- `/tasks`
+- `/destinations`
+- `/providers`
+- `/feed.xml`
+
+## 设计约定
+
+- 请求与响应通过 Pydantic schema 定义
+- 资源型接口优先使用 REST 风格
+- 前端调用统一收敛在 `frontend/src/lib/api.ts`
+- 本地开发时可通过 `http://localhost:8000/docs` 查看 OpenAPI
+
+## 适合先读哪部分
+
+- 你要接前端：先看 [API Reference](/zh/api-reference/introduction)
+- 你要改 monitor 流程：先看 [监控任务 API](/zh/api-reference/monitors)
+- 你要改 provider / destination：先看对应资源页

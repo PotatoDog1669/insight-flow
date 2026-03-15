@@ -1,0 +1,41 @@
+---
+title: "Sources"
+description: "The source model, supported collection strategies, and usage flow"
+---
+
+Sources form the input layer of Insight Flow. A source defines where data comes from, how it is collected, and which category it belongs to.
+
+## Supported Collection Strategies
+
+- `rss`: public RSS or Atom feeds
+- `blog_scraper`: profile-driven parsing for sites without RSS
+- `deepbrowse`: fallback for dynamic or complex sites
+- `github_trending`: GitHub Trending aggregation
+- `huggingface`: Hugging Face Daily Papers aggregation
+
+## Key Capabilities
+
+- Manage preset and custom sources in one place
+- Test a single source before using it in a monitor
+- Organize sources by category
+- Sync preset YAML definitions into the database
+
+## How to Use It
+
+1. Open the Sources page
+2. Create or edit a source with name, URL, category, and strategy
+3. Run the source test
+4. Select that source when creating a monitor
+
+## Related API
+
+- List and detail: `GET /api/v1/sources`, `GET /api/v1/sources/{source_id}`
+- Create and update: `POST /api/v1/sources`, `PATCH /api/v1/sources/{source_id}`
+- Test: `POST /api/v1/sources/{source_id}/test`
+- Delete: `DELETE /api/v1/sources/{source_id}`
+
+## Operational Notes
+
+- Sync presets with `make sync-sources`
+- Site profiles live under `backend/app/collectors/site_profiles/`
+- For non-RSS sites, prefer the profile-driven flow described in [Collector Plugins](/en/development/collector-plugin)
