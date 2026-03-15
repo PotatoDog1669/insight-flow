@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ProviderId = Literal["agent_codex", "llm_openai"]
-ProviderType = Literal["agent", "llm"]
+ProviderId = Literal["llm_openai"]
+ProviderType = Literal["llm"]
 
 
 class ProviderResponse(BaseModel):
@@ -22,3 +22,14 @@ class ProviderResponse(BaseModel):
 class ProviderUpdate(BaseModel):
     enabled: bool | None = None
     config: dict | None = None
+
+
+class ProviderTestRequest(BaseModel):
+    config: dict | None = None
+
+
+class ProviderTestResponse(BaseModel):
+    success: bool
+    message: str
+    latency_ms: int | None = None
+    model: str | None = None

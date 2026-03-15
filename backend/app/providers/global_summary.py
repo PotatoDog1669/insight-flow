@@ -1,11 +1,10 @@
-"""Global summary stage providers (llm / agent)."""
+"""Global summary stage providers."""
 
 from __future__ import annotations
 
 import json
 
 from app.providers.base import BaseStageProvider
-from app.providers.codex_agent import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -50,19 +49,16 @@ def _sanitize_global_tldr(text: str) -> str:
     return "。".join(cleaned) + "。"
 
 
-async def _run_ai_summary(payload: dict, config: dict | None = None, prompt_scope: str = "agent") -> dict:
+async def _run_ai_summary(payload: dict, config: dict | None = None) -> dict:
     events = payload.get("events", [])
     prompt_content = _build_events_prompt_payload(events)
     prompt = render_prompt(
-        scope=prompt_scope,
+        scope="llm",
         name="global_summary",
         variables={"events_json": prompt_content},
     )
     run_config = dict(config or {})
-    if prompt_scope == "llm":
-        output = await run_llm_json(prompt=prompt, config=run_config)
-    else:
-        output = await run_codex_json(prompt=prompt, config=run_config)
+    output = await run_llm_json(prompt=prompt, config=run_config)
     generated = _sanitize_global_tldr(str(output.get("global_tldr") or "").strip())
     return {
         "global_tldr": generated,
@@ -80,13 +76,4 @@ class LLMGlobalSummaryProvider(BaseStageProvider):
     name = "llm_openai"
 
     async def run(self, payload: dict, config: dict | None = None) -> dict:
-        return await _run_ai_summary(payload=payload, config=config, prompt_scope="llm")
-
-
-@register(stage="global_summary", name="agent_codex")
-class AgentGlobalSummaryProvider(BaseStageProvider):
-    stage = "global_summary"
-    name = "agent_codex"
-
-    async def run(self, payload: dict, config: dict | None = None) -> dict:
-        return await _run_ai_summary(payload=payload, config=config, prompt_scope="agent")
+        return await _run_ai_summary(payload=payload, config=config)

@@ -12,11 +12,14 @@ import structlog
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.registry import get_agent
+from app.agents.schemas import ResearchEvent, ResearchJob
 from app.collectors.base import RawArticle
 from app.collectors.registry import get_collector
 from app.config import settings
 from app.models.article import Article
 from app.models.database import async_session
+from app.models.monitor import Monitor
 from app.models.report import Report
 from app.models.source import Source
 from app.models.subscription import UserSubscription
@@ -28,7 +31,7 @@ from app.processors.global_summary import run_global_summary_stage, run_global_s
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.processors.report_stage import run_report_with_retry
 from app.processors.window_filter import filter_raw_articles_by_window
-from app.renderers.base import RenderContext
+from app.renderers.base import RenderContext, Report as RenderedReport
 from app.renderers.daily import DailyRenderer, build_daily_events, render_daily_report
 from app.routing.loader import load_routing_profile
 from app.routing.schema import PublishRoute, RoutingProfile, RoutingStages, StageRoute
@@ -49,12 +52,12 @@ logger = structlog.get_logger()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 _AI_STAGE_ALLOWED_PROVIDERS: dict[str, set[str]] = {
-    "filter": {"rule", "llm_openai", "agent_codex"},
-    "keywords": {"rule", "llm_openai", "agent_codex"},
-    "global_summary": {"llm_openai", "agent_codex"},
-    "report": {"llm_openai", "agent_codex"},
+    "filter": {"rule", "llm_openai"},
+    "keywords": {"rule", "llm_openai"},
+    "global_summary": {"llm_openai"},
+    "report": {"llm_openai"},
 }
-_AI_PROVIDER_NAMES = {"rule", "llm_openai", "agent_codex"}
+_AI_PROVIDER_NAMES = {"rule", "llm_openai"}
 _ORIGINAL_PIPELINE_PROCESS = ProcessingPipeline.process
 
 
@@ -79,6 +82,10 @@ class Orchestrator:
         self.runtime_provider_overrides: dict[str, dict] = {}
         self.runtime_routing_profile = self.routing_profile
         self.daily_renderer = DailyRenderer()
+        self.research_default_agent = settings.research_default_agent
+        self.research_agents_config = (
+            dict(settings.research_agents) if isinstance(settings.research_agents, dict) else {}
+        )
 
     @staticmethod
     def _error_message(exc: Exception, *, limit: int = 1000) -> str:
@@ -1509,6 +1516,11 @@ class Orchestrator:
 
         today = date.today()
         selected_report_type = _normalize_report_type(report_type)
+        selected_time_period = "daily"
+        if selected_report_type == "weekly":
+            selected_time_period = "weekly"
+        elif selected_report_type == "research":
+            selected_time_period = "custom"
         context = RenderContext(date=today.isoformat(), user_id=str(user_id))
         report_events = build_daily_events(processed_articles)
         if run_id is not None:
@@ -1550,6 +1562,29 @@ class Orchestrator:
                 ),
             )
             await db.commit()
+        if selected_report_type == "research":
+            report_rows, rendered_reports = await self._build_research_reports(
+                db=db,
+                user_id=user_id,
+                report_events=report_events,
+                article_ids=article_ids,
+                selected_time_period=selected_time_period,
+                selected_report_type=selected_report_type,
+                report_date=today,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                monitor_task_id=monitor_task_id,
+            )
+            return await self._publish_report_rows(
+                db=db,
+                report_rows=report_rows,
+                rendered_reports=rendered_reports,
+                destination_ids=destination_ids,
+                destination_settings=destination_settings,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                monitor_task_id=monitor_task_id,
+            )
         summary_route = self.runtime_routing_profile.stages.global_summary or self.runtime_routing_profile.stages.report
         global_summary: GlobalSummary = await run_global_summary_stage(
             events=report_events,
@@ -1630,12 +1665,12 @@ class Orchestrator:
         deep_events = daily_metadata.get("events")
         if not isinstance(deep_events, list):
             deep_events = []
+        monitor_name = ""
+        if monitor_id is not None:
+            monitor = await db.get(Monitor, monitor_id)
+            if monitor is not None:
+                monitor_name = monitor.name
         article_id_strings = [str(item) for item in article_ids]
-        selected_time_period = "daily"
-        if selected_report_type == "weekly":
-            selected_time_period = "weekly"
-        elif selected_report_type == "research":
-            selected_time_period = "custom"
         report_payload = {
             "provider": report_provider,
             "report_type": selected_report_type,
@@ -1681,6 +1716,8 @@ class Orchestrator:
                     "global_summary_fallback_used": daily_metadata.get("global_summary_fallback_used"),
                     "global_summary_metrics": daily_metadata.get("global_summary_metrics"),
                     "report_provider": report_provider,
+                    "monitor_id": str(monitor_id) if monitor_id is not None else None,
+                    "monitor_name": monitor_name,
                 },
                 published_to=[],
                 publish_trace=[],
@@ -1692,6 +1729,204 @@ class Orchestrator:
         await db.commit()
 
         rendered_reports = [daily_report]
+        return await self._publish_report_rows(
+            db=db,
+            report_rows=report_rows,
+            rendered_reports=rendered_reports,
+            destination_ids=destination_ids,
+            destination_settings=destination_settings,
+            run_id=run_id,
+            monitor_id=monitor_id,
+            monitor_task_id=monitor_task_id,
+        )
+
+    async def _build_research_reports(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        report_events: list[dict],
+        article_ids: list[uuid.UUID],
+        selected_time_period: str,
+        selected_report_type: str,
+        report_date: date,
+        run_id: uuid.UUID | None,
+        monitor_id: uuid.UUID | None,
+        monitor_task_id: uuid.UUID | None,
+    ) -> tuple[list[Report], list[RenderedReport]]:
+        target_event = self._select_research_target_event(report_events)
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="report",
+                event_type="research_target_selected",
+                message=f"[research] selected target event {target_event['event_id']}",
+                payload={"event_id": target_event["event_id"], "title": target_event["title"]},
+            )
+            await db.commit()
+
+        job = self._build_research_job(
+            target_event=target_event,
+            frequency=selected_time_period,
+            user_id=user_id,
+            monitor_id=monitor_id,
+            report_date=report_date,
+        )
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="report",
+                event_type="research_job_built",
+                message="[research] job built",
+                payload={"job_id": job.job_id, "agent": self._research_agent_name()},
+            )
+            await db.commit()
+
+        agent_name = self._research_agent_name()
+        agent_config = self._research_agent_config(agent_name)
+        started_at = datetime.now(timezone.utc)
+        try:
+            result = await get_agent(agent_name, config=agent_config).run(job)
+        except Exception as exc:
+            if run_id is not None:
+                await append_task_event(
+                    db,
+                    run_id=run_id,
+                    monitor_id=monitor_id,
+                    task_id=monitor_task_id,
+                    source_id=None,
+                    stage="report",
+                    level="error",
+                    event_type="research_failed",
+                    message=f"[research] agent failed via {agent_name}",
+                    payload={"agent": agent_name, "error": self._error_message(exc)},
+                )
+                await db.commit()
+            raise
+
+        if not str(result.content_markdown or "").strip():
+            exc = RuntimeError("Research agent returned empty content")
+            if run_id is not None:
+                await append_task_event(
+                    db,
+                    run_id=run_id,
+                    monitor_id=monitor_id,
+                    task_id=monitor_task_id,
+                    source_id=None,
+                    stage="report",
+                    level="error",
+                    event_type="research_failed",
+                    message=f"[research] empty content via {agent_name}",
+                    payload={"agent": agent_name, "error": self._error_message(exc)},
+                )
+                await db.commit()
+            raise exc
+
+        latency_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="report",
+                event_type="research_response_received",
+                message=f"[research] response received via {agent_name}",
+                payload={"agent": agent_name, "latency_ms": latency_ms},
+            )
+            await db.commit()
+
+        monitor_name = ""
+        if monitor_id is not None:
+            monitor = await db.get(Monitor, monitor_id)
+            if monitor is not None:
+                monitor_name = monitor.name
+
+        source_payload = [
+            {"title": item.title, "url": item.url, "source_type": item.source_type}
+            for item in result.sources
+        ]
+        event_article_ids = [str(item).strip() for item in target_event.get("article_ids", []) if str(item).strip()]
+        article_id_strings = event_article_ids or [str(item) for item in article_ids]
+        metadata = {
+            "template": "research",
+            "frequency": selected_time_period,
+            "report_type": selected_report_type,
+            "events": [target_event],
+            "event_ids": [str(target_event["event_id"])],
+            "global_tldr": result.summary,
+            "tldr": [result.summary] if result.summary else [],
+            "research_agent": agent_name,
+            "research_runtime": agent_name,
+            "research_assistant_id": str(result.metadata.get("agent_name") or "lead_agent"),
+            "research_job_id": job.job_id,
+            "research_sources": source_payload,
+            "research_confidence": {
+                "level": result.confidence_level or "unknown",
+                "reason": result.confidence_reason,
+            },
+            "research_artifacts": list(result.artifacts),
+            "research_metrics": {"latency_ms": latency_ms, "fetched_urls": len(source_payload)},
+            "monitor_id": str(monitor_id) if monitor_id is not None else None,
+            "monitor_name": monitor_name,
+        }
+        report_row = Report(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            time_period=selected_time_period,
+            report_type=selected_report_type,
+            title=result.title,
+            content=result.content_markdown,
+            article_ids=article_id_strings,
+            metadata_=metadata,
+            published_to=[],
+            publish_trace=[],
+            report_date=report_date,
+            created_at=datetime.now(timezone.utc),
+        )
+        rendered_report = RenderedReport(
+            level="L4",
+            title=result.title,
+            content=result.content_markdown,
+            article_ids=article_id_strings,
+            metadata=metadata,
+        )
+        db.add(report_row)
+        await db.commit()
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="report",
+                event_type="research_report_generated",
+                message=f"[research] report generated via {agent_name}",
+                payload={"agent": agent_name, "output_content_chars": len(result.content_markdown)},
+            )
+            await db.commit()
+        return [report_row], [rendered_report]
+
+    async def _publish_report_rows(
+        self,
+        db: AsyncSession,
+        report_rows: list[Report],
+        rendered_reports: list[RenderedReport],
+        destination_ids: list[str] | None,
+        destination_settings: dict[str, dict] | None,
+        run_id: uuid.UUID | None,
+        monitor_id: uuid.UUID | None,
+        monitor_task_id: uuid.UUID | None,
+    ) -> tuple[list[uuid.UUID], str, list[dict]]:
         publish_stage = self.runtime_routing_profile.stages.publish
         targets = self._resolve_publish_targets(
             default_targets=publish_stage.targets or ["database"],
@@ -1737,7 +1972,6 @@ class Orchestrator:
                     )
                     final_status = "partial_success"
                     continue
-                sink_name = normalize_sink_name(target)
                 sink_config = self._build_sink_config(
                     target=target,
                     report_id=str(report.id),
@@ -1745,10 +1979,7 @@ class Orchestrator:
                 )
                 sink_config.setdefault("time_period", report.time_period)
                 sink_config.setdefault("template_version", "v1")
-                sink_config.setdefault(
-                    "report_type",
-                    str((report.metadata_ or {}).get("report_type") or report.report_type),
-                )
+                sink_config.setdefault("report_type", str((report.metadata_ or {}).get("report_type") or report.report_type))
                 sink_config.setdefault("report_date", str(report.report_date))
                 sink_config.setdefault("report_metadata", dict(report.metadata_ or {}))
                 if sink_name == "notion":
@@ -1759,7 +1990,6 @@ class Orchestrator:
                 started_at = datetime.now(timezone.utc)
                 publish_result = await sink.publish(rendered, sink_config)
                 latency_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
-
                 if run_id is not None:
                     await append_task_event(
                         db,
@@ -1781,7 +2011,6 @@ class Orchestrator:
                         },
                     )
                     await db.commit()
-
                 publish_trace.append(
                     {
                         "stage": "publish",
@@ -1797,7 +2026,6 @@ class Orchestrator:
                     if sink_name not in published_to:
                         published_to.append(sink_name)
                     continue
-
                 action = on_failure.get(target) or on_failure.get(sink_name)
                 if not action:
                     action = "abort" if sink_name == "database" else "continue"
@@ -1818,6 +2046,98 @@ class Orchestrator:
             db.add(report)
         await db.commit()
         return [row.id for row in report_rows], final_status, publish_reports
+
+    def _research_agent_name(self) -> str:
+        candidate = str(self.research_default_agent or "").strip()
+        return candidate or "deerflow_embedded"
+
+    def _research_agent_config(self, name: str) -> dict:
+        raw = self.research_agents_config.get(name, {}) if isinstance(self.research_agents_config, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        return dict(raw)
+
+    def _select_research_target_event(self, report_events: list[dict]) -> dict:
+        candidates: list[dict] = []
+        for event in report_events:
+            if not isinstance(event, dict):
+                continue
+            source_links = event.get("source_links")
+            if not isinstance(source_links, list) or not any(str(item).strip() for item in source_links):
+                continue
+            category = str(event.get("category") or "").strip()
+            non_empty_fields = sum(
+                1
+                for value in (event.get("title"), event.get("one_line_tldr"), event.get("detail"))
+                if str(value or "").strip()
+            )
+            if not category or non_empty_fields < 2:
+                continue
+            candidates.append(event)
+
+        if not candidates:
+            raise RuntimeError("No eligible research event found")
+
+        def _sort_key(item: dict) -> tuple[int, int, str]:
+            importance_rank = {"critical": 4, "high": 3, "normal": 2, "low": 1}.get(
+                str(item.get("importance") or "normal").strip().lower(),
+                0,
+            )
+            source_count = int(item.get("source_count") or 0)
+            published_at = str(item.get("published_at") or "").strip()
+            return importance_rank, source_count, published_at
+
+        return sorted(candidates, key=_sort_key, reverse=True)[0]
+
+    def _build_research_job(
+        self,
+        *,
+        target_event: dict,
+        frequency: str,
+        user_id: uuid.UUID,
+        monitor_id: uuid.UUID | None,
+        report_date: date,
+    ) -> ResearchJob:
+        return ResearchJob(
+            job_id=str(uuid.uuid4()),
+            frequency=frequency if frequency in {"daily", "weekly", "custom"} else "custom",
+            template="research",
+            event=ResearchEvent(
+                event_id=str(target_event.get("event_id") or ""),
+                title=str(target_event.get("title") or "").strip(),
+                summary=str(target_event.get("one_line_tldr") or "").strip(),
+                detail=str(target_event.get("detail") or "").strip(),
+                category=str(target_event.get("category") or "").strip() or "其他",
+                importance=str(target_event.get("importance") or "normal").strip() or "normal",
+                source_links=[str(item).strip() for item in target_event.get("source_links", []) if str(item).strip()],
+                source_count=int(target_event.get("source_count") or 0),
+                source_name=str(target_event.get("source_name") or "").strip(),
+                published_at=str(target_event.get("published_at") or "").strip() or None,
+                who=str(target_event.get("who") or "").strip(),
+                what=str(target_event.get("what") or "").strip(),
+                when=str(target_event.get("when") or "").strip(),
+                metrics=[str(item).strip() for item in target_event.get("metrics", []) if str(item).strip()],
+                availability=str(target_event.get("availability") or "").strip(),
+                unknowns=str(target_event.get("unknowns") or "").strip(),
+                evidence=str(target_event.get("evidence") or "").strip(),
+                keywords=[str(item).strip() for item in target_event.get("keywords", []) if str(item).strip()],
+            ),
+            focus_questions=self._default_research_questions(target_event),
+            monitor_id=str(monitor_id) if monitor_id is not None else None,
+            user_id=str(user_id),
+            report_date=report_date.isoformat(),
+        )
+
+    @staticmethod
+    def _default_research_questions(target_event: dict) -> list[str]:
+        title = str(target_event.get("title") or "").strip()
+        subject = title or "该事件"
+        return [
+            f"{subject}的核心变化是什么",
+            "哪些信息已经确认，哪些仍未证实",
+            "对开发者和企业用户的影响是什么",
+            "后续最值得关注的变量是什么",
+        ]
 
     @staticmethod
     def _trace_dict_to_list(trace: dict[str, dict]) -> list[dict]:
@@ -1867,7 +2187,7 @@ class Orchestrator:
             config = payload.get("config")
             if not isinstance(config, dict):
                 continue
-            normalized[str(provider_name)] = config
+            normalized[str(provider_name)] = dict(config)
         return normalized
 
     @staticmethod

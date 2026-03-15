@@ -11,12 +11,10 @@ import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
 import { canonicalizeReportContent, extractOutline, parseReportContent } from "@/lib/report-content-parser";
 import { getArticleById, getReportById, type Article as APIArticle, type Report as APIReport } from "@/lib/api";
-
-const MAX_DAILY_REPORT_EVENTS = 15;
 const REPORT_TYPE_LABELS: Record<APIReport["report_type"], string> = {
-  daily: "Daily",
-  weekly: "Weekly",
-  research: "Research",
+  daily: "日报",
+  weekly: "周报",
+  research: "研究",
 };
 
 function toArticleCard(article: APIArticle): ArticleCardModel {
@@ -110,7 +108,6 @@ export default function ReportDetailPage() {
 
   const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
   const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
-  const displayEventCount = report?.events.length ?? 0;
   const displayTitle = useMemo(() => {
     if (!report) return "";
     if (report.report_type === "daily" && report.report_date) {
@@ -139,11 +136,11 @@ export default function ReportDetailPage() {
   };
 
   if (loading) {
-    return <div className="py-10 text-sm text-muted-foreground">Loading report...</div>;
+    return <div className="py-10 text-sm text-muted-foreground">正在加载报告...</div>;
   }
 
   if (error || !report) {
-    return <div className="py-10 text-sm text-red-500">Failed to load report: {error ?? "Not found"}</div>;
+    return <div className="py-10 text-sm text-red-500">加载报告失败：{error ?? "未找到"}</div>;
   }
 
   return (
@@ -153,13 +150,13 @@ export default function ReportDetailPage() {
         className="inline-flex items-center space-x-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-10 group"
       >
         <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-        <span>Back to Discover</span>
+        <span>返回发现页</span>
       </Link>
 
       <div className={`relative flex flex-col gap-10 items-start ${hasTemplateContent ? 'lg:pr-[210px]' : ''}`}>
         <div className="order-1 min-w-0 w-full">
           <header className="mb-14 mt-2">
-            <div className="flex flex-wrap items-center gap-3 mb-6">
+            <div className="mb-6 flex flex-wrap items-center gap-3">
               <Badge variant="secondary" className="bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-none font-medium px-3 py-1">
                 {REPORT_TYPE_LABELS[report.report_type]}
               </Badge>
@@ -169,8 +166,13 @@ export default function ReportDetailPage() {
               </div>
               <div className="flex items-center space-x-1.5 text-sm font-medium text-muted-foreground/80">
                 <Layers className="w-4 h-4" />
-                <span>{sourceCount} Sources</span>
+                <span>{sourceCount} 个信息源</span>
               </div>
+              {report.monitor_name ? (
+                <div className="text-sm font-medium text-muted-foreground/80">
+                  所属任务：<span className="text-foreground">{report.monitor_name}</span>
+                </div>
+              ) : null}
             </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-5xl font-extrabold tracking-tight leading-[1.15] mb-6 text-foreground">
@@ -200,7 +202,7 @@ export default function ReportDetailPage() {
                   <div className="flex items-center space-x-3 mb-6">
                     <h2 className="text-2xl font-semibold tracking-tight capitalize">{category.replace("_", " ")}</h2>
                     <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-                      {categoryArticles.length} Updates
+                      {categoryArticles.length} 篇更新
                     </Badge>
                   </div>
                   <div className="space-y-5">
@@ -213,7 +215,7 @@ export default function ReportDetailPage() {
 
               {articles.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground border border-dashed border-border/50 rounded-xl">
-                  This report currently has no resolved article details.
+                  此报告目前没有解析出的文章详情。
                 </div>
               )}
             </div>

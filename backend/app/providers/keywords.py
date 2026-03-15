@@ -6,7 +6,6 @@ import re
 from collections import Counter
 
 from app.providers.base import BaseStageProvider
-from app.providers.codex_agent import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -141,11 +140,11 @@ def _normalize_metrics(raw: object) -> list[str]:
     return metrics
 
 
-async def _run_ai_keywords(article: object, config: dict | None = None, prompt_scope: str = "agent") -> dict:
+async def _run_ai_keywords(article: object, config: dict | None = None) -> dict:
     title = str(getattr(article, "title", "") or "").strip()
     content = _prepare_content_for_prompt(getattr(article, "content", ""))
     prompt = render_prompt(
-        scope=prompt_scope,
+        scope="llm",
         name="keywords",
         variables={
             "title": title[:240],
@@ -153,10 +152,7 @@ async def _run_ai_keywords(article: object, config: dict | None = None, prompt_s
         },
     )
     run_config = dict(config or {})
-    if prompt_scope == "llm":
-        output = await run_llm_json(prompt=prompt, config=run_config)
-    else:
-        output = await run_codex_json(prompt=prompt, config=run_config)
+    output = await run_llm_json(prompt=prompt, config=run_config)
     keywords = _normalize_keywords(output.get("keywords"))
     if not keywords:
         raise ValueError("Missing keywords from AI provider")
@@ -365,16 +361,4 @@ class LLMKeywordProvider(BaseStageProvider):
         article = _resolve_article_from_payload(payload)
         if article is None:
             return {"keywords": [], "summary": ""}
-        return await _run_ai_keywords(article=article, config=config, prompt_scope="llm")
-
-
-@register(stage="keywords", name="agent_codex")
-class AgentKeywordProvider(BaseStageProvider):
-    stage = "keywords"
-    name = "agent_codex"
-
-    async def run(self, payload: dict, config: dict | None = None) -> dict:
-        article = _resolve_article_from_payload(payload)
-        if article is None:
-            return {"keywords": [], "summary": ""}
-        return await _run_ai_keywords(article=article, config=config, prompt_scope="agent")
+        return await _run_ai_keywords(article=article, config=config)

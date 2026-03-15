@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.collectors.base import BaseCollector, RawArticle
 from app.models import Article, CollectTask, Report, Source, TaskEvent, User, UserSubscription
+from app.agents.schemas import ResearchResult, ResearchSource
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.scheduler import orchestrator as orchestrator_module
 from app.scheduler.orchestrator import Orchestrator
@@ -46,7 +47,7 @@ def _stub_report_provider(monkeypatch: pytest.MonkeyPatch):
 
     class _ReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             return {
@@ -65,7 +66,7 @@ def _stub_report_provider(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def _stub_ai_processing_calls(monkeypatch: pytest.MonkeyPatch):
-    async def _mock_run_codex_json(prompt: str, config: dict | None = None) -> dict:
+    async def _mock_run_llm_json(prompt: str, config: dict | None = None) -> dict:
         lowered = prompt.lower()
         if "keep_indices" in lowered:
             return {"keep_indices": [0]}
@@ -82,11 +83,11 @@ def _stub_ai_processing_calls(monkeypatch: pytest.MonkeyPatch):
             }
         return {}
 
-    monkeypatch.setattr("app.providers.filter.run_codex_json", _mock_run_codex_json)
-    monkeypatch.setattr("app.providers.global_summary.run_codex_json", _mock_run_codex_json)
-    monkeypatch.setattr("app.providers.global_summary.run_llm_json", _mock_run_codex_json)
-    monkeypatch.setattr("app.providers.keywords.run_codex_json", _mock_run_codex_json)
-    monkeypatch.setattr("app.providers.report.run_codex_json", _mock_run_codex_json)
+    monkeypatch.setattr("app.providers.filter.run_llm_json", _mock_run_llm_json)
+    monkeypatch.setattr("app.providers.global_summary.run_llm_json", _mock_run_llm_json)
+    monkeypatch.setattr("app.providers.global_summary.run_llm_json", _mock_run_llm_json)
+    monkeypatch.setattr("app.providers.keywords.run_llm_json", _mock_run_llm_json)
+    monkeypatch.setattr("app.providers.report.run_llm_json", _mock_run_llm_json)
 
 
 @pytest.mark.asyncio
@@ -200,6 +201,135 @@ async def test_orchestrator_emits_transparent_run_detail_events(
         assert payload["sections"][0]["title"] == "Raw Items"
         assert payload["sections"][0]["items"][0]["title"] == "AI breakthrough today"
         assert payload["sections"][0]["artifact_path"].endswith("01_collect_raw_items.json")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_research_agent_for_research_reports(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    class _ResearchAgent:
+        name = "deerflow_embedded"
+
+        async def run(self, job) -> ResearchResult:
+            return ResearchResult(
+                title="Research title",
+                summary="Research summary",
+                content_markdown="# Executive Summary\nResearch content",
+                sources=[ResearchSource(title="Official", url="https://example.com/official", source_type="official")],
+                confidence_level="high",
+                confidence_reason="official source",
+                artifacts=["/tmp/research.md"],
+                metadata={"agent_name": "lead_agent"},
+            )
+
+    monkeypatch.setattr(orchestrator_module, "get_agent", lambda name, config=None: _ResearchAgent())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.research_default_agent = "deerflow_embedded"
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            report_type="research",
+        )
+        assert result["reports_created"] == 1
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report).where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                    Report.report_type == "research",
+                )
+            )
+        ).scalars().all()
+
+        assert len(reports) == 1
+        report = reports[0]
+        assert report.time_period == "custom"
+        assert report.title == "Research title"
+        assert report.content == "# Executive Summary\nResearch content"
+        metadata = report.metadata_ or {}
+        assert metadata["template"] == "research"
+        assert metadata["research_agent"] == "deerflow_embedded"
+        assert metadata["research_assistant_id"] == "lead_agent"
+        assert metadata["research_confidence"]["level"] == "high"
+        assert metadata["research_sources"][0]["url"] == "https://example.com/official"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_research_report_when_agent_errors(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    class _ResearchAgent:
+        name = "deerflow_embedded"
+
+        async def run(self, job) -> ResearchResult:
+            raise RuntimeError("agent failed")
+
+    monkeypatch.setattr(orchestrator_module, "get_agent", lambda name, config=None: _ResearchAgent())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+
+    async with session_factory() as session:
+        with pytest.raises(RuntimeError, match="agent failed"):
+            await orchestrator.run_daily_pipeline(
+                db=session,
+                user_id=DEFAULT_USER_ID,
+                trigger_type="manual",
+                report_type="research",
+            )
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report).where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                    Report.report_type == "research",
+                )
+            )
+        ).scalars().all()
+        assert reports == []
 
 
 @pytest.mark.asyncio
@@ -575,7 +705,7 @@ async def test_orchestrator_keeps_renderer_content_structure_before_publish(
 
     class _ReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             return {
@@ -585,7 +715,7 @@ async def test_orchestrator_keeps_renderer_content_structure_before_publish(
             }
 
     def _fake_get_provider(stage: str, name: str):
-        if stage == "report" and name == "agent_codex":
+        if stage == "report" and name == "llm_openai":
             return _ReportProvider()
         raise KeyError(name)
 
@@ -616,9 +746,9 @@ async def test_orchestrator_keeps_renderer_content_structure_before_publish(
 
     orchestrator = Orchestrator(max_concurrency=2)
     orchestrator.routing_profile.stages.publish.targets = ["database", "notion_api"]
-    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
     orchestrator.routing_profile.stages.report.fallback = []
-    orchestrator.routing_profile.providers["agent_codex"] = {"auth_mode": "api_key", "api_key": "sk-test"}
+    orchestrator.routing_profile.providers["llm_openai"] = {"auth_mode": "api_key", "api_key": "sk-test"}
 
     async with session_factory() as session:
         result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
@@ -653,7 +783,7 @@ async def test_orchestrator_calls_report_provider_with_user_overrides(
                 "default_report_type": "daily",
                 "default_sink": "notion",
                 "providers": {
-                    "agent_codex": {
+                    "llm_openai": {
                         "enabled": True,
                         "config": {
                             "auth_mode": "oauth",
@@ -676,7 +806,7 @@ async def test_orchestrator_calls_report_provider_with_user_overrides(
 
     class _ReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             calls["count"] += 1
@@ -689,7 +819,7 @@ async def test_orchestrator_calls_report_provider_with_user_overrides(
             }
 
     def _fake_get_provider(stage: str, name: str):
-        if stage == "report" and name == "agent_codex":
+        if stage == "report" and name == "llm_openai":
             return _ReportProvider()
         raise KeyError(name)
 
@@ -716,7 +846,7 @@ async def test_orchestrator_calls_report_provider_with_user_overrides(
 
     orchestrator = Orchestrator(max_concurrency=2)
     orchestrator.routing_profile.stages.publish.targets = ["database", "notion_api"]
-    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
     orchestrator.routing_profile.stages.report.fallback = []
 
     async with session_factory() as session:
@@ -782,7 +912,7 @@ async def test_orchestrator_generates_global_summary_before_report_rewrite(
 
     class _ReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             captured_payloads["report"] = dict(payload)
@@ -813,7 +943,7 @@ async def test_orchestrator_generates_global_summary_before_report_rewrite(
     if orchestrator.routing_profile.stages.global_summary is not None:
         orchestrator.routing_profile.stages.global_summary.primary = "llm_openai"
         orchestrator.routing_profile.stages.global_summary.fallback = []
-    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
     orchestrator.routing_profile.stages.report.fallback = []
     orchestrator.routing_profile.stages.publish.targets = ["database"]
 
@@ -867,23 +997,23 @@ async def test_orchestrator_report_stage_falls_back_to_renderer_when_provider_fa
 
     class _FailingReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             attempts["count"] += 1
             raise RuntimeError("report provider down")
 
     def _fake_get_provider(stage: str, name: str):
-        if stage == "report" and name == "agent_codex":
+        if stage == "report" and name == "llm_openai":
             return _FailingReportProvider()
         raise KeyError(name)
 
     monkeypatch.setattr(orchestrator_module, "get_provider", _fake_get_provider)
 
     orchestrator = Orchestrator(max_concurrency=2)
-    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
     orchestrator.routing_profile.stages.report.fallback = ["llm_openai"]
-    orchestrator.routing_profile.providers["agent_codex"] = {"max_retry": 1}
+    orchestrator.routing_profile.providers["llm_openai"] = {"max_retry": 1}
 
     async with session_factory() as session:
         result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
@@ -919,14 +1049,14 @@ async def test_orchestrator_report_timeout_falls_back_to_renderer(
 
     class _TimeoutReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             attempts["count"] += 1
             raise TimeoutError("ReadTimeout")
 
     def _fake_get_provider(stage: str, name: str):
-        if stage == "report" and name == "agent_codex":
+        if stage == "report" and name == "llm_openai":
             return _TimeoutReportProvider()
         raise KeyError(name)
 
@@ -942,9 +1072,9 @@ async def test_orchestrator_report_timeout_falls_back_to_renderer(
 
     orchestrator = Orchestrator(max_concurrency=2)
     orchestrator.routing_profile.stages.publish.targets = ["database"]
-    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
     orchestrator.routing_profile.stages.report.fallback = []
-    orchestrator.routing_profile.providers["agent_codex"] = {"max_retry": 3}
+    orchestrator.routing_profile.providers["llm_openai"] = {"max_retry": 3}
 
     async with session_factory() as session:
         result = await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
@@ -1002,7 +1132,7 @@ async def test_orchestrator_records_report_stage_metrics_event(
 
     class _ReportProvider:
         stage = "report"
-        name = "agent_codex"
+        name = "llm_openai"
 
         async def run(self, payload: dict, config: dict | None = None) -> dict:
             attempts["count"] += 1
@@ -1013,7 +1143,7 @@ async def test_orchestrator_records_report_stage_metrics_event(
             }
 
     def _fake_get_provider(stage: str, name: str):
-        if stage == "report" and name == "agent_codex":
+        if stage == "report" and name == "llm_openai":
             return _ReportProvider()
         raise KeyError(name)
 
@@ -1029,7 +1159,7 @@ async def test_orchestrator_records_report_stage_metrics_event(
 
     orchestrator = Orchestrator(max_concurrency=2)
     orchestrator.routing_profile.stages.publish.targets = ["database"]
-    orchestrator.routing_profile.stages.report.primary = "agent_codex"
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
     orchestrator.routing_profile.stages.report.fallback = []
 
     async with session_factory() as session:
@@ -1048,7 +1178,7 @@ async def test_orchestrator_records_report_stage_metrics_event(
         ).scalars().all()
         assert events
         payload = events[0].payload or {}
-        assert payload["provider"] == "agent_codex"
+        assert payload["provider"] == "llm_openai"
         assert payload["input_content_chars"] == payload["output_content_chars"]
         assert payload["input_events"] >= 1
         assert "output_heading3_count" in payload

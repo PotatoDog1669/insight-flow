@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,12 +111,12 @@ async def get_monitor_ai_routing_defaults():
         stages={
             "filter": _resolve_default_stage_provider(
                 candidate=profile.stages.filter.primary,
-                allowed={"rule", "llm_openai", "agent_codex"},
+                allowed={"rule", "llm_openai"},
                 fallback="rule",
             ),
             "keywords": _resolve_default_stage_provider(
                 candidate=profile.stages.keywords.primary,
-                allowed={"rule", "llm_openai", "agent_codex"},
+                allowed={"rule", "llm_openai"},
                 fallback="rule",
             ),
             "global_summary": _resolve_default_stage_provider(
@@ -124,13 +125,13 @@ async def get_monitor_ai_routing_defaults():
                     if profile.stages.global_summary is not None
                     else profile.stages.report.primary
                 ),
-                allowed={"llm_openai", "agent_codex"},
-                fallback="agent_codex",
+                allowed={"llm_openai"},
+                fallback="llm_openai",
             ),
             "report": _resolve_default_stage_provider(
                 candidate=profile.stages.report.primary,
-                allowed={"llm_openai", "agent_codex"},
-                fallback="agent_codex",
+                allowed={"llm_openai"},
+                fallback="llm_openai",
             ),
         },
     )
@@ -513,7 +514,7 @@ def _normalize_ai_routing(payload: MonitorAIRouting | dict | None) -> dict:
         return {}
     try:
         return MonitorAIRouting.model_validate(payload).model_dump(exclude_none=True)
-    except Exception:
+    except ValidationError:
         return {}
 
 
@@ -522,7 +523,7 @@ def _safe_ai_routing(payload: dict | None) -> MonitorAIRouting:
         return MonitorAIRouting()
     try:
         return MonitorAIRouting.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return MonitorAIRouting()
 
 

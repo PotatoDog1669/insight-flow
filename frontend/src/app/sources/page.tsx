@@ -131,18 +131,18 @@ export default function SourcesPage() {
     <div className="mx-auto max-w-5xl relative px-4 sm:px-6 lg:px-8 py-8 md:py-12">
       <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight mb-2">Sources Dashboard</h1>
+          <h1 className="text-3xl font-bold tracking-tight mb-2">信息源</h1>
           <p className="text-muted-foreground text-sm max-w-2xl">
-            Monitor all configured information sources and maintain your global source pool.
+            监控所有已配置的信息源并维护全局信息源池。
           </p>
-          <p className="text-xs text-muted-foreground mt-2">Total sources: {sourceCount}</p>
+          <p className="text-xs text-muted-foreground mt-2">总信息源数: {sourceCount}</p>
         </div>
         <button
           onClick={() => setIsModalOpen(true)}
           className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-foreground text-background shadow hover:bg-foreground/90 h-9 px-4 py-2 group"
         >
           <Plus className="w-4 h-4 mr-2 transition-transform group-hover:rotate-90 duration-300" />
-          Add Source
+          添加信息源
         </button>
       </header>
 
@@ -163,7 +163,7 @@ export default function SourcesPage() {
           <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={() => setIsModalOpen(false)} />
           <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-lg overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
             <div className="bg-card/95 backdrop-blur-sm border-b border-border/40 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold tracking-tight">Add Information Source</h2>
+              <h2 className="text-xl font-semibold tracking-tight">添加信息源</h2>
               <button onClick={() => setIsModalOpen(false)} className="p-2 -mr-2 text-muted-foreground hover:bg-muted rounded-md transition-colors">
                 <X className="w-5 h-5" />
               </button>
@@ -171,13 +171,13 @@ export default function SourcesPage() {
 
             <div className="p-6 space-y-6">
               <div className="space-y-3">
-                <label className="text-sm font-medium">Source Type</label>
+                <label className="text-sm font-medium">信息源类型</label>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { id: "blog", label: "Tech Blog / RSS", icon: Rss },
-                    { id: "open_source", label: "Open Source", icon: Github },
-                    { id: "academic", label: "Academic", icon: BookOpen },
-                    { id: "social", label: "Social Media", icon: MessageSquare },
+                    { id: "blog", label: "科技博客 / RSS", icon: Rss },
+                    { id: "open_source", label: "开源项目", icon: Github },
+                    { id: "academic", label: "学术论文", icon: BookOpen },
+                    { id: "social", label: "社交媒体", icon: MessageSquare },
                   ].map((c) => {
                     const Icon = c.icon;
                     return (
@@ -198,18 +198,18 @@ export default function SourcesPage() {
               </div>
 
               <div className="space-y-3">
-                <label className="text-sm font-medium">Source Name</label>
+                <label className="text-sm font-medium">信息源名称</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. OpenAI Research Blog"
+                  placeholder="例如：OpenAI 官方博客"
                   className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 />
               </div>
 
               <div className="space-y-3">
-                <label className="text-sm font-medium">Target URL / ID</label>
+                <label className="text-sm font-medium">目标 URL / ID</label>
                 <div className="relative">
                   <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <input
@@ -221,7 +221,7 @@ export default function SourcesPage() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  System will infer collector strategy (RSS / blog scraper / GitHub Trending / Hugging Face).
+                  系统会自动推断抓取策略（例如：RSS / 博客爬虫 / GitHub 趋势 / Hugging Face）。
                 </p>
               </div>
             </div>
@@ -231,14 +231,14 @@ export default function SourcesPage() {
                 onClick={() => setIsModalOpen(false)}
                 className="px-4 py-2 text-sm font-medium hover:bg-muted rounded-md transition-colors"
               >
-                Cancel
+                取消
               </button>
               <button
                 onClick={handleSave}
                 disabled={!name || !url || submitting}
                 className="px-4 py-2 text-sm font-medium bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors shadow-sm"
               >
-                {submitting ? "Creating..." : "Create Source"}
+                {submitting ? "正在创建..." : "创建信息源"}
               </button>
             </div>
           </div>

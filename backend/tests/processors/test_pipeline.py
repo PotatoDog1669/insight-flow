@@ -48,8 +48,8 @@ def _make_raw_article(index: int) -> RawArticle:
 @pytest.mark.asyncio
 async def test_pipeline_filters_dedups_and_enriches(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_codex_json = _mock_codex_json_factory()
-    monkeypatch.setattr("app.providers.filter.run_codex_json", mock_codex_json)
-    monkeypatch.setattr("app.providers.keywords.run_codex_json", mock_codex_json)
+    monkeypatch.setattr("app.providers.filter.run_llm_json", mock_codex_json)
+    monkeypatch.setattr("app.providers.keywords.run_llm_json", mock_codex_json)
 
     raw_items = [
         RawArticle(
@@ -72,7 +72,7 @@ async def test_pipeline_filters_dedups_and_enriches(monkeypatch: pytest.MonkeyPa
         ),
     ]
 
-    pipeline = ProcessingPipeline(score_threshold=0.3, routing_profile="codex_mvp_v1")
+    pipeline = ProcessingPipeline(score_threshold=0.3, routing_profile="stable_v1")
     processed = await pipeline.process(raw_items)
 
     assert len(processed) == 1
@@ -88,9 +88,9 @@ async def test_pipeline_filters_dedups_and_enriches(monkeypatch: pytest.MonkeyPa
     assert item.category == "模型发布"
     assert item.who == "OpenAI"
     assert item.metrics == ["12%", "30%"]
-    assert pipeline.last_stage_trace["filter"]["provider"] == "agent_codex"
-    assert pipeline.last_stage_trace["keywords"]["provider"] == "agent_codex"
-    assert pipeline.last_stage_trace["summarizer"]["provider"] == "agent_codex"
+    assert pipeline.last_stage_trace["filter"]["provider"] == "llm_openai"
+    assert pipeline.last_stage_trace["keywords"]["provider"] == "llm_openai"
+    assert pipeline.last_stage_trace["summarizer"]["provider"] == "llm_openai"
 
 
 @pytest.mark.asyncio
@@ -174,21 +174,21 @@ async def test_run_stage_with_retry_retries_same_provider(monkeypatch: pytest.Mo
 
     def fake_get_provider(stage: str, name: str):  # noqa: ANN201
         assert stage == "filter"
-        assert name == "agent_codex"
+        assert name == "llm_openai"
         return _FlakyFilterProvider()
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
-    pipeline.routing_profile.providers["agent_codex"] = {"max_retry": 2}
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
+    pipeline.routing_profile.providers["llm_openai"] = {"max_retry": 2}
 
     output, provider_name = await pipeline._run_stage_with_retry(
         stage="filter",
-        provider_name="agent_codex",
+        provider_name="llm_openai",
         payload={"articles": []},
     )
 
-    assert provider_name == "agent_codex"
+    assert provider_name == "llm_openai"
     assert output["articles"] == []
     assert attempts["count"] == 2
 
@@ -211,7 +211,7 @@ async def test_run_stage_with_retry_falls_back_to_secondary_provider(monkeypatch
     def fake_get_provider(stage: str, name: str):  # noqa: ANN201
         assert stage == "filter"
         calls.append(name)
-        if name == "agent_codex":
+        if name == "llm_openai":
             return _AlwaysFailProvider()
         if name == "rule":
             return _FallbackFilterProvider()
@@ -219,20 +219,20 @@ async def test_run_stage_with_retry_falls_back_to_secondary_provider(monkeypatch
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
-    pipeline.routing_profile.providers["agent_codex"] = {"max_retry": 1}
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
+    pipeline.routing_profile.providers["llm_openai"] = {"max_retry": 1}
     pipeline.routing_profile.providers["rule"] = {"max_retry": 0}
 
     output, provider_name = await pipeline._run_stage_with_retry(
         stage="filter",
-        provider_name="agent_codex",
+        provider_name="llm_openai",
         payload={"articles": []},
         fallback_providers=["rule"],
     )
 
     assert provider_name == "rule"
     assert output["articles"] == []
-    assert calls == ["agent_codex", "rule"]
+    assert calls == ["llm_openai", "rule"]
     assert attempts["primary"] == 2
     assert attempts["fallback"] == 1
 
@@ -248,18 +248,18 @@ async def test_run_stage_with_retry_raises_after_retries(monkeypatch: pytest.Mon
 
     def fake_get_provider(stage: str, name: str):  # noqa: ANN201
         assert stage == "filter"
-        assert name == "agent_codex"
+        assert name == "llm_openai"
         return _AlwaysFailProvider()
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
-    pipeline.routing_profile.providers["agent_codex"] = {"max_retry": 1}
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
+    pipeline.routing_profile.providers["llm_openai"] = {"max_retry": 1}
 
     with pytest.raises(RuntimeError, match="still failing"):
         await pipeline._run_stage_with_retry(
             stage="filter",
-            provider_name="agent_codex",
+            provider_name="llm_openai",
             payload={"articles": []},
         )
 
@@ -277,21 +277,21 @@ async def test_run_stage_with_retry_passes_provider_config(monkeypatch: pytest.M
 
     def fake_get_provider(stage: str, name: str):  # noqa: ANN201
         assert stage == "filter"
-        assert name == "agent_codex"
+        assert name == "llm_openai"
         return _CaptureFilterProvider()
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
-    pipeline.routing_profile.providers["agent_codex"] = {"auth_mode": "oauth", "oauth_token": "token-value"}
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
+    pipeline.routing_profile.providers["llm_openai"] = {"auth_mode": "oauth", "oauth_token": "token-value"}
 
     output, provider_name = await pipeline._run_stage_with_retry(
         stage="filter",
-        provider_name="agent_codex",
+        provider_name="llm_openai",
         payload={"articles": []},
     )
 
-    assert provider_name == "agent_codex"
+    assert provider_name == "llm_openai"
     assert output["articles"] == []
     assert captured_config["auth_mode"] == "oauth"
     assert captured_config["oauth_token"] == "token-value"
@@ -330,7 +330,7 @@ async def test_pipeline_downgrades_weak_social_input_to_compact_detail(monkeypat
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
     processed = await pipeline.process(
         [
             RawArticle(
@@ -383,7 +383,7 @@ async def test_pipeline_records_candidate_cluster_trace(monkeypatch: pytest.Monk
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="codex_mvp_v1")
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
     await pipeline.process(
         [
             RawArticle(

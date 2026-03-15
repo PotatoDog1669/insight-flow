@@ -145,7 +145,7 @@ class _FakePipeline:
                 collect=StageRoute(primary="rss"),
                 filter=StageRoute(primary="rule"),
                 keywords=StageRoute(primary="rule"),
-                report=StageRoute(primary="agent_codex"),
+                report=StageRoute(primary="llm_openai"),
                 publish=PublishRoute(targets=[]),
             ),
             providers={},
@@ -237,7 +237,7 @@ def test_provider_overrides_from_user_settings_keeps_enabled_configs_and_sets_ll
                     "enabled": True,
                     "config": {"base_url": "https://example.com/v1", "model": "qwen-test", "timeout_sec": 60},
                 },
-                "agent_codex": {
+                "llm_openai": {
                     "enabled": False,
                     "config": {"base_url": "https://codex.example.com", "timeout_sec": 90},
                 },

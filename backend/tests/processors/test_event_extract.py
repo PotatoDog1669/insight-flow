@@ -66,7 +66,7 @@ async def test_run_event_extract_stage_emits_one_event_per_cluster(monkeypatch: 
 
     monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
 
-    pipeline = ProcessingPipeline(routing_profile="codex_mvp_v1")
+    pipeline = ProcessingPipeline(routing_profile="stable_v1")
     clusters = [
         CandidateCluster(
             cluster_id="cluster-1",

@@ -19,6 +19,7 @@ def test_openapi_contains_new_dashboard_routes(client: TestClient) -> None:
     assert "/api/v1/monitors/{monitor_id}/run" in paths
     assert "/api/v1/monitors/{monitor_id}/runs/{run_id}/cancel" in paths
     assert "/api/v1/reports" in paths
+    assert "/api/v1/reports/{report_id}" in paths
     assert "/api/v1/reports/filters" in paths
     assert "/api/v1/users/me" in paths
     assert "/api/v1/articles" in paths
@@ -26,6 +27,7 @@ def test_openapi_contains_new_dashboard_routes(client: TestClient) -> None:
     assert "/api/v1/destinations/{destination_id}" in paths
     assert "/api/v1/providers" in paths
     assert "/api/v1/providers/{provider_id}" in paths
+    assert "/api/v1/providers/{provider_id}/test" in paths
     assert "/api/v1/feed.xml" in paths
 
 
@@ -48,9 +50,9 @@ def test_monitors_ai_routing_defaults_contract(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["profile_name"]
-    assert data["stages"]["filter"] in {"rule", "llm_openai", "agent_codex"}
-    assert data["stages"]["keywords"] in {"rule", "llm_openai", "agent_codex"}
-    assert data["stages"]["report"] in {"llm_openai", "agent_codex"}
+    assert data["stages"]["filter"] in {"rule", "llm_openai"}
+    assert data["stages"]["keywords"] in {"rule", "llm_openai"}
+    assert data["stages"]["report"] == "llm_openai"
 
 
 def test_monitors_contract_supports_list_create_and_run(client: TestClient, monkeypatch) -> None:
@@ -82,12 +84,11 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
             },
             "ai_routing": {
                 "stages": {
-                    "filter": {"primary": "agent_codex"},
+                    "filter": {"primary": "llm_openai"},
                     "keywords": {"primary": "llm_openai"},
-                    "report": {"primary": "agent_codex"},
+                    "report": {"primary": "llm_openai"},
                 },
                 "providers": {
-                    "agent_codex": {"model": "gpt-5-codex"},
                     "llm_openai": {"model": "gpt-4o-mini"},
                 },
             },
@@ -104,10 +105,9 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert created["source_overrides"][created["source_ids"][0]]["limit"] == 12
     assert created["source_overrides"][created["source_ids"][0]]["max_results"] == 40
     assert created["source_overrides"][created["source_ids"][0]]["keywords"] == ["reasoning", "agent"]
-    assert created["ai_routing"]["stages"]["filter"]["primary"] == "agent_codex"
+    assert created["ai_routing"]["stages"]["filter"]["primary"] == "llm_openai"
     assert created["ai_routing"]["stages"]["keywords"]["primary"] == "llm_openai"
-    assert created["ai_routing"]["stages"]["report"]["primary"] == "agent_codex"
-    assert created["ai_routing"]["providers"]["agent_codex"]["model"] == "gpt-5-codex"
+    assert created["ai_routing"]["stages"]["report"]["primary"] == "llm_openai"
     assert created["ai_routing"]["providers"]["llm_openai"]["model"] == "gpt-4o-mini"
 
     captured: dict = {}
@@ -198,10 +198,9 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert captured["source_overrides"][created["source_ids"][0]]["limit"] == 12
     assert captured["source_overrides"][created["source_ids"][0]]["max_results"] == 40
     assert captured["source_overrides"][created["source_ids"][0]]["keywords"] == ["reasoning", "agent"]
-    assert captured["monitor_ai_routing"]["stages"]["filter"]["primary"] == "agent_codex"
+    assert captured["monitor_ai_routing"]["stages"]["filter"]["primary"] == "llm_openai"
     assert captured["monitor_ai_routing"]["stages"]["keywords"]["primary"] == "llm_openai"
-    assert captured["monitor_ai_routing"]["stages"]["report"]["primary"] == "agent_codex"
-    assert captured["monitor_ai_routing"]["providers"]["agent_codex"]["model"] == "gpt-5-codex"
+    assert captured["monitor_ai_routing"]["stages"]["report"]["primary"] == "llm_openai"
     assert captured["monitor_ai_routing"]["providers"]["llm_openai"]["model"] == "gpt-4o-mini"
 
     logs_response = client.get(f"/api/v1/monitors/{created['id']}/logs")
@@ -307,6 +306,8 @@ def test_reports_contract_supports_filters_endpoint(client: TestClient) -> None:
     assert "events" in reports[0]
     assert isinstance(reports[0]["events"], list)
     assert "global_tldr" in reports[0]
+    assert reports[0]["monitor_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    assert reports[0]["monitor_name"] == "Seed Monitor"
 
     filters_response = client.get("/api/v1/reports/filters")
     assert filters_response.status_code == 200
@@ -314,6 +315,10 @@ def test_reports_contract_supports_filters_endpoint(client: TestClient) -> None:
     assert "time_periods" in filters_data
     assert "report_types" in filters_data
     assert "categories" in filters_data
+    assert "monitors" in filters_data
+    assert filters_data["monitors"] == [
+        {"id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "name": "Seed Monitor"}
+    ]
 
 
 def test_users_me_contract_supports_profile_and_settings_update(client: TestClient) -> None:
@@ -385,28 +390,9 @@ def test_providers_contract_supports_list_and_update(client: TestClient) -> None
     assert list_response.status_code == 200
     items = list_response.json()
     assert isinstance(items, list)
-    assert any(item["id"] == "agent_codex" for item in items)
-    assert any(item["id"] == "llm_openai" for item in items)
-    llm_default = next(item for item in items if item["id"] == "llm_openai")
+    assert [item["id"] for item in items] == ["llm_openai"]
+    llm_default = items[0]
     assert llm_default["config"]["timeout_sec"] == 120
-
-    update_response = client.patch(
-        "/api/v1/providers/agent_codex",
-        json={
-            "enabled": True,
-            "config": {
-                "auth_mode": "api_key",
-                "base_url": "https://gmn.chuangzuoli.com",
-                "model": "gpt-5.3-codex",
-                "api_key": "sk-third-party",
-            },
-        },
-    )
-    assert update_response.status_code == 200
-    updated = update_response.json()
-    assert updated["id"] == "agent_codex"
-    assert updated["enabled"] is True
-    assert updated["config"]["base_url"] == "https://gmn.chuangzuoli.com"
 
     llm_update = client.patch(
         "/api/v1/providers/llm_openai",
@@ -428,3 +414,35 @@ def test_providers_contract_supports_list_and_update(client: TestClient) -> None
     assert llm_payload["config"]["base_url"] == "https://api.openai.com/v1"
     assert llm_payload["config"]["model"] == "gpt-4o-mini"
     assert llm_payload["config"]["max_retry"] == 3
+
+    missing = client.patch("/api/v1/providers/legacy_provider", json={"enabled": True})
+    assert missing.status_code == 422
+
+
+def test_providers_contract_supports_connectivity_test(client: TestClient, monkeypatch) -> None:
+    async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
+        assert "Return JSON" in prompt
+        assert config is not None
+        assert config["base_url"] == "https://api.openai.com/v1"
+        assert config["model"] == "gpt-4.1-mini"
+        return {"ok": True, "message": "pong"}
+
+    monkeypatch.setattr("app.api.v1.providers.run_llm_json", _fake_llm)
+
+    response = client.post(
+        "/api/v1/providers/llm_openai/test",
+        json={
+            "config": {
+                "base_url": "https://api.openai.com/v1/",
+                "model": "gpt-4.1-mini",
+                "timeout_sec": 8,
+            }
+        },
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["message"] == "pong"
+    assert payload["model"] == "gpt-4.1-mini"
+    assert isinstance(payload["latency_ms"], int)

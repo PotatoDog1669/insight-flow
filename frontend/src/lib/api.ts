@@ -55,7 +55,7 @@ export interface Monitor {
     updated_at: string;
 }
 
-export type MonitorAIProviderName = "rule" | "llm_openai" | "agent_codex";
+export type MonitorAIProviderName = "rule" | "llm_openai";
 export type MonitorAIStageName = "filter" | "keywords" | "report";
 
 export interface MonitorAIStageRoute {
@@ -88,15 +88,6 @@ export interface Destination {
     created_at?: string;
 }
 
-export interface AgentProviderConfig {
-    auth_mode: "api_key" | "oauth";
-    base_url: string;
-    model: string;
-    timeout_sec: number;
-    api_key: string;
-    oauth_token: string;
-}
-
 export interface LLMProviderConfig {
     base_url: string;
     model: string;
@@ -105,17 +96,6 @@ export interface LLMProviderConfig {
     max_output_tokens: number;
     temperature: number;
     api_key: string;
-}
-
-export type ProviderConfig = AgentProviderConfig | LLMProviderConfig;
-
-export interface AgentProvider {
-    id: "agent_codex";
-    name: string;
-    type: "agent";
-    description: string;
-    config: AgentProviderConfig;
-    enabled: boolean;
 }
 
 export interface LLMProvider {
@@ -127,7 +107,16 @@ export interface LLMProvider {
     enabled: boolean;
 }
 
-export type Provider = AgentProvider | LLMProvider;
+export type ProviderConfig = LLMProviderConfig;
+
+export type Provider = LLMProvider;
+
+export interface ProviderTestResponse {
+    success: boolean;
+    message: string;
+    latency_ms: number | null;
+    model: string | null;
+}
 
 export interface MonitorCreate {
     name: string;
@@ -227,6 +216,8 @@ export interface ReportEvent {
 export interface Report {
     id: string;
     user_id: string | null;
+    monitor_id: string | null;
+    monitor_name: string;
     time_period: "daily" | "weekly" | "custom";
     report_type: "daily" | "weekly" | "research";
     title: string;
@@ -247,6 +238,7 @@ export interface ReportFilters {
     time_periods: string[];
     report_types: string[];
     categories: string[];
+    monitors: { id: string; name: string }[];
 }
 
 export interface UserMe {
@@ -282,6 +274,7 @@ export interface CollectTask {
 export interface ReportListParams {
     time_period?: "daily" | "weekly" | "custom";
     report_type?: "daily" | "weekly" | "research";
+    monitor_id?: string;
     limit?: number;
     page?: number;
 }
@@ -304,7 +297,11 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
         ...options,
     });
     if (!res.ok) throw new Error(`API Error: ${res.status}`);
-    return res.json();
+    const text = await res.text();
+    if (!text.trim()) {
+        return undefined as T;
+    }
+    return JSON.parse(text) as T;
 }
 
 // ---- 信息源 ----
@@ -416,6 +413,9 @@ export const getReportById = (reportId: string) => fetchAPI<Report>(`/api/v1/rep
 
 export const getReportFilters = () => fetchAPI<ReportFilters>("/api/v1/reports/filters");
 
+export const deleteReport = (reportId: string) =>
+    fetchAPI<void>(`/api/v1/reports/${reportId}`, { method: "DELETE" });
+
 export const createCustomReport = (body: {
     title: string;
     prompt: string;
@@ -464,6 +464,15 @@ export const updateProvider = (
     fetchAPI<Provider>(`/api/v1/providers/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
+    });
+
+export const testProvider = (
+    id: Provider["id"],
+    body?: { config?: Partial<ProviderConfig> }
+) =>
+    fetchAPI<ProviderTestResponse>(`/api/v1/providers/${id}/test`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
     });
 
 // ---- 采集任务（兼容旧页面）----

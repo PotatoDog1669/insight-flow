@@ -68,7 +68,12 @@ def db_session_factory(tmp_path: Path):
                 title="Seed Daily Brief",
                 content="Seed content",
                 article_ids=[],
-                metadata_={"categories": ["blog"], "tldr": ["Seed TL;DR"]},
+                metadata_={
+                    "categories": ["blog"],
+                    "tldr": ["Seed TL;DR"],
+                    "monitor_id": str(monitor.id),
+                    "monitor_name": monitor.name,
+                },
                 published_to=["notion"],
                 report_date=date.today(),
                 created_at=now,

@@ -1,4 +1,4 @@
-"""Unified filter stage providers (rule / llm / agent)."""
+"""Unified filter stage providers (rule / llm)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 import re
 
 from app.providers.base import BaseStageProvider
-from app.providers.codex_agent import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -108,7 +107,7 @@ def _prepare_filter_snippet(article: object, *, max_chars: int = 420) -> str:
     return combined[:max_chars]
 
 
-async def _run_ai_filter(articles: list, config: dict | None = None, prompt_scope: str = "agent") -> dict:
+async def _run_ai_filter(articles: list, config: dict | None = None) -> dict:
     serialized_items = []
     for idx, article in enumerate(articles):
         metadata = getattr(article, "metadata", {}) or {}
@@ -130,15 +129,12 @@ async def _run_ai_filter(articles: list, config: dict | None = None, prompt_scop
         )
 
     prompt = render_prompt(
-        scope=prompt_scope,
+        scope="llm",
         name="filter",
         variables={"items_json": json.dumps(serialized_items, ensure_ascii=False)},
     )
     run_config = dict(config or {})
-    if prompt_scope == "llm":
-        output = await run_llm_json(prompt=prompt, config=run_config)
-    else:
-        output = await run_codex_json(prompt=prompt, config=run_config)
+    output = await run_llm_json(prompt=prompt, config=run_config)
     raw_indices = output.get("keep_indices", [])
     if not isinstance(raw_indices, list):
         raise ValueError("keep_indices must be a list")
@@ -169,16 +165,4 @@ class LLMFilterProvider(BaseStageProvider):
         articles = payload.get("articles", [])
         if not articles:
             return {"articles": []}
-        return await _run_ai_filter(articles=articles, config=config, prompt_scope="llm")
-
-
-@register(stage="filter", name="agent_codex")
-class AgentFilterProvider(BaseStageProvider):
-    stage = "filter"
-    name = "agent_codex"
-
-    async def run(self, payload: dict, config: dict | None = None) -> dict:
-        articles = payload.get("articles", [])
-        if not articles:
-            return {"articles": []}
-        return await _run_ai_filter(articles=articles, config=config, prompt_scope="agent")
+        return await _run_ai_filter(articles=articles, config=config)

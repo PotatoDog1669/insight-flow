@@ -161,14 +161,14 @@ export default function DestinationsPage() {
         <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8 md:py-12">
             <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div>
-                    <h1 className="text-3xl font-bold tracking-tight mb-2">Destinations</h1>
+                    <h1 className="text-3xl font-bold tracking-tight mb-2">输出配置</h1>
                     <p className="text-muted-foreground text-sm max-w-2xl">
-                        Activate built-in Model Context Protocol (MCP) integrations to continuously sync your AI research directly to your existing workflows.
+                        配置多端输出渠道，将自动生成的洞察报告持续同步到您的工作流中。
                     </p>
                 </div>
             </header>
 
-            {loading && <div className="py-10 text-sm text-muted-foreground">Loading destinations...</div>}
+            {loading && <div className="py-10 text-sm text-muted-foreground">正在加载输出配置...</div>}
             {error && <div className="py-4 text-sm text-red-500">{error}</div>}
 
             {!loading && (
@@ -207,7 +207,7 @@ export default function DestinationsPage() {
                                                     isConnected(dest) ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
                                                         "bg-muted text-muted-foreground"
                                                 )}>
-                                                    {isConnected(dest) ? "Active Sink" : "Disabled"}
+                                                    {isConnected(dest) ? "已生效" : "已停用"}
                                                 </Badge>
                                             </div>
                                         </div>
@@ -243,13 +243,13 @@ export default function DestinationsPage() {
                                     <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
                                         <div className="flex items-center gap-2 mb-2 text-foreground font-medium">
                                             <Key className="w-4 h-4 text-primary" />
-                                            Connection Credentials
+                                            连接凭证
                                         </div>
 
                                         {dest.type === "notion" && (
                                             <>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Integration Token (Secret)</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">集成令牌 (Token)</label>
                                                     <input
                                                         type="password"
                                                         value={editConfig.token || ""}
@@ -259,33 +259,33 @@ export default function DestinationsPage() {
                                                     />
                                                 </div>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Target Database ID</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">目标 Database ID</label>
                                                     <input
                                                         value={editConfig.database_id || ""}
                                                         onChange={(e) => setEditConfig({ ...editConfig, database_id: e.target.value })}
                                                         onBlur={() => normalizeEditConfigNotionId("database_id")}
-                                                        placeholder="Paste Notion database URL or ID"
+                                                        placeholder="粘贴 Notion 数据库链接或 ID"
                                                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                     <p className="text-[10px] text-muted-foreground leading-snug">
-                                                        Make sure you share this Database with your Internal Integration in Notion&apos;s top right menu.
+                                                        请确保在 Notion 数据库右上角菜单中已与您的内部集成共享了此数据库。
                                                     </p>
                                                 </div>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Parent Page ID (Optional)</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">父级 Page ID（可选）</label>
                                                     <input
                                                         value={editConfig.parent_page_id || ""}
                                                         onChange={(e) => setEditConfig({ ...editConfig, parent_page_id: e.target.value })}
                                                         onBlur={() => normalizeEditConfigNotionId("parent_page_id")}
-                                                        placeholder="Paste Notion page URL or ID"
+                                                        placeholder="粘贴 Notion 页面链接或 ID"
                                                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                     <p className="text-[10px] text-muted-foreground leading-snug">
-                                                        Use this when you want reports to be created as child pages under a normal Notion page.
+                                                        如果您希望报告作为普通的 Notion 页面的子页面创建，请在此设置。
                                                     </p>
                                                 </div>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Title Property Name</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">标题属性名称 (Title Property)</label>
                                                     <input
                                                         value={editConfig.title_property || "Name"}
                                                         onChange={(e) => setEditConfig({ ...editConfig, title_property: e.target.value })}
@@ -293,11 +293,11 @@ export default function DestinationsPage() {
                                                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                     <p className="text-[10px] text-muted-foreground leading-snug">
-                                                        Set this to your database title column (e.g. 名称).
+                                                        将其设置为您的数据库标题列（例如：名称、Name）。
                                                     </p>
                                                 </div>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Summary Property Name</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">摘要属性名称 (Summary Property)</label>
                                                     <input
                                                         value={editConfig.summary_property || "TL;DR"}
                                                         onChange={(e) => setEditConfig({ ...editConfig, summary_property: e.target.value })}
@@ -305,7 +305,7 @@ export default function DestinationsPage() {
                                                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                     <p className="text-[10px] text-muted-foreground leading-snug">
-                                                        This property receives the report-level summary + sharp comment.
+                                                        此属性将用于接收报告级别的摘要 + 犀利评论。
                                                     </p>
                                                 </div>
                                             </>
@@ -314,7 +314,7 @@ export default function DestinationsPage() {
                                         {dest.type === "obsidian" && (
                                             <>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Local REST API URL</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">本地 REST API URL</label>
                                                     <input
                                                         value={editConfig.api_url || ""}
                                                         onChange={(e) => setEditConfig({ ...editConfig, api_url: e.target.value })}
@@ -328,16 +328,16 @@ export default function DestinationsPage() {
                                                         type="password"
                                                         value={editConfig.api_key || ""}
                                                         onChange={(e) => setEditConfig({ ...editConfig, api_key: e.target.value })}
-                                                        placeholder="From Obsidian Local REST API settings"
+                                                        placeholder="来自 Obsidian 本地 REST API 设置"
                                                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                 </div>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Vault Target Folder (Optional)</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">Vault 目标活页夹（可选）</label>
                                                     <input
                                                         value={editConfig.target_folder || ""}
                                                         onChange={(e) => setEditConfig({ ...editConfig, target_folder: e.target.value })}
-                                                        placeholder="e.g. AI-Reports/"
+                                                        placeholder="例如：AI-Reports/"
                                                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                 </div>
@@ -347,7 +347,7 @@ export default function DestinationsPage() {
                                         {dest.type === "rss" && (
                                             <>
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Feed URL Endpoint</label>
+                                                    <label className="text-xs font-medium text-muted-foreground">订阅源 URL (Feed URL Endpoint)</label>
                                                     <div className="flex items-center gap-2">
                                                         <input
                                                             readOnly
@@ -357,13 +357,13 @@ export default function DestinationsPage() {
                                                         <button
                                                             onClick={() => navigator.clipboard.writeText(editConfig.feed_url || "http://localhost:8000/api/v1/feed.xml")}
                                                             className="h-9 px-3 rounded-md border bg-background hover:bg-muted transition-colors flex items-center justify-center shrink-0"
-                                                            title="Copy to clipboard"
+                                                            title="复制到剪贴板"
                                                         >
                                                             <Copy className="w-4 h-4 text-muted-foreground" />
                                                         </button>
                                                     </div>
                                                     <p className="text-[10px] text-muted-foreground leading-snug pt-1">
-                                                        Copy this URL into your RSS reader (e.g., Feedly, Reeder) to subscribe. The backend auto-generates this feed.
+                                                        将此 URL 复制到您的 RSS 阅读器（例如 Feedly、Reeder）中进行订阅。后端将自动生成此订阅源。
                                                     </p>
                                                 </div>
                                             </>
@@ -374,37 +374,37 @@ export default function DestinationsPage() {
                                                 onClick={() => setEditingId(null)}
                                                 className="px-3 py-1.5 text-xs font-medium bg-transparent hover:bg-muted text-muted-foreground rounded-md transition-colors"
                                             >
-                                                Cancel
+                                                取消
                                             </button>
                                             <button
                                                 onClick={() => void handleSaveConfig(dest.id)}
                                                 disabled={submitting}
                                                 className="px-3 py-1.5 text-xs font-medium bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 rounded-md transition-colors flex items-center"
                                             >
-                                                {submitting ? "Testing..." : <><Save className="w-3.5 h-3.5 mr-1" />Save & Connect</>}
+                                                {submitting ? "测试中..." : <><Save className="w-3.5 h-3.5 mr-1" />保存并连接</>}
                                             </button>
                                         </div>
                                     </div>
                                 ) : (
                                     <div className="space-y-3">
-                                        <div className="text-xs font-medium text-muted-foreground">Current Setup</div>
+                                        <div className="text-xs font-medium text-muted-foreground">当前配置</div>
 
                                         {dest.type === "notion" && (
                                             <div className="flex flex-col gap-1.5">
                                                 <div className="flex items-center text-xs">
                                                     <span className="w-24 text-muted-foreground">Token:</span>
-                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.token ? "••••••••••••" : "<Not Configured>"}</span>
+                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.token ? "••••••••••••" : "<未配置>"}</span>
                                                 </div>
                                                 <div className="flex items-center text-xs">
-                                                    <span className="w-24 text-muted-foreground">Database ID:</span>
-                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.database_id || "<Not Configured>"}</span>
+                                                    <span className="w-24 text-muted-foreground">数据库 ID:</span>
+                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.database_id || "<未配置>"}</span>
                                                 </div>
                                                 <div className="flex items-center text-xs">
-                                                    <span className="w-24 text-muted-foreground">Title Field:</span>
+                                                    <span className="w-24 text-muted-foreground">标题字段:</span>
                                                     <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.title_property || "Name"}</span>
                                                 </div>
                                                 <div className="flex items-center text-xs">
-                                                    <span className="w-24 text-muted-foreground">Summary:</span>
+                                                    <span className="w-24 text-muted-foreground">摘要:</span>
                                                     <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.summary_property || "TL;DR"}</span>
                                                 </div>
                                             </div>
@@ -413,11 +413,11 @@ export default function DestinationsPage() {
                                         {dest.type === "obsidian" && (
                                             <div className="flex flex-col gap-1.5">
                                                 <div className="flex items-center text-xs">
-                                                    <span className="w-24 text-muted-foreground">API Host:</span>
-                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border text-foreground/80 truncate">{dest.config.api_url || "<Not Configured>"}</span>
+                                                    <span className="w-24 text-muted-foreground">API 主机:</span>
+                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border text-foreground/80 truncate">{dest.config.api_url || "<未配置>"}</span>
                                                 </div>
                                                 <div className="flex items-center text-xs">
-                                                    <span className="w-24 text-muted-foreground">Vault Folder:</span>
+                                                    <span className="w-24 text-muted-foreground">活页夹:</span>
                                                     <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.target_folder || "/"}</span>
                                                 </div>
                                             </div>
@@ -426,8 +426,8 @@ export default function DestinationsPage() {
                                         {dest.type === "rss" && (
                                             <div className="flex flex-col gap-1.5">
                                                 <div className="flex items-center text-xs">
-                                                    <span className="w-24 text-muted-foreground shrink-0">Feed URL:</span>
-                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border text-foreground/80 truncate">{dest.config.feed_url || "Not Available"}</span>
+                                                    <span className="w-24 text-muted-foreground shrink-0">RSS 地址:</span>
+                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border text-foreground/80 truncate">{dest.config.feed_url || "<无效>"}</span>
                                                 </div>
                                             </div>
                                         )}
@@ -439,16 +439,16 @@ export default function DestinationsPage() {
                                 <CardFooter className="pt-0 justify-between bg-muted/20 border-border/40 pb-4 mt-auto">
                                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                                         {isConnected(dest) ? (
-                                            <><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> Ping OK</>
+                                            <><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> Ping 成功</>
                                         ) : (
-                                            <span className="opacity-50">Offline</span>
+                                            <span className="opacity-50">未连接</span>
                                         )}
                                     </div>
                                     <button
                                         onClick={() => startEditing(dest)}
                                         className="text-xs font-medium bg-secondary hover:bg-secondary/80 px-3 py-1.5 rounded-md transition-colors"
                                     >
-                                        Configure
+                                        配置
                                     </button>
                                 </CardFooter>
                             )}

@@ -3,8 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import ReportDetailPage from "@/app/reports/[id]/page";
 import { getArticleById, getReportById } from "@/lib/api";
 
+const pushMock = vi.fn();
+
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "report-1" }),
+  useRouter: () => ({ push: pushMock }),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -18,6 +21,7 @@ const mockedGetArticleById = vi.mocked(getArticleById);
 describe("ReportDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pushMock.mockReset();
   });
 
   it("renders document from report.content and outline", async () => {
@@ -53,6 +57,8 @@ describe("ReportDetailPage", () => {
       article_ids: [],
       published_to: [],
       metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
       created_at: "2026-03-02T00:00:00Z",
     } as never);
     mockedGetArticleById.mockResolvedValue(null as never);
@@ -61,6 +67,7 @@ describe("ReportDetailPage", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "概览" })).toBeInTheDocument());
     expect(screen.getByRole("navigation", { name: "Report outline" })).toBeInTheDocument();
+    expect(screen.getByText("Agent Watch")).toBeInTheDocument();
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });
 
@@ -81,6 +88,8 @@ describe("ReportDetailPage", () => {
       article_ids: ["article-1"],
       published_to: [],
       metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
       created_at: "2026-03-02T00:00:00Z",
     } as never);
     mockedGetArticleById.mockResolvedValue({
@@ -106,5 +115,36 @@ describe("ReportDetailPage", () => {
     await waitFor(() => expect(screen.getByText("Fallback article title")).toBeInTheDocument());
     expect(mockedGetArticleById).toHaveBeenCalledWith("article-1");
     expect(screen.queryByRole("heading", { name: "Outline" })).not.toBeInTheDocument();
+  });
+
+  it("does not render a delete action on report detail", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-1",
+      user_id: null,
+      time_period: "daily",
+      report_type: "daily",
+      title: "AI Daily",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# AI Daily\n\n## 全局总结与锐评\nA",
+      article_ids: [],
+      published_to: [],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Agent Watch")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "删除报告" })).not.toBeInTheDocument();
+    expect(pushMock).not.toHaveBeenCalled();
   });
 });

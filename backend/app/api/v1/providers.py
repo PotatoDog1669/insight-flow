@@ -4,40 +4,30 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from time import perf_counter
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import get_db
 from app.models.user import User
-from app.schemas.provider import ProviderId, ProviderResponse, ProviderUpdate
+from app.providers.llm_chat import run_llm_json
+from app.schemas.provider import ProviderId, ProviderResponse, ProviderTestRequest, ProviderTestResponse, ProviderUpdate
 
 router = APIRouter()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 
 PROVIDER_PRESETS: dict[ProviderId, dict] = {
-    "agent_codex": {
-        "name": "Codex Agent",
-        "type": "agent",
-        "description": "AI processing executor for filter / keywords / report stages.",
-        "default_config": {
-            "auth_mode": settings.codex_auth_mode or "api_key",
-            "base_url": settings.codex_base_url or "https://api.openai.com/v1",
-            "model": settings.codex_model or "gpt-5-codex",
-            "timeout_sec": settings.codex_timeout_sec or 90,
-            "api_key": "",
-            "oauth_token": "",
-        },
-    },
     "llm_openai": {
         "name": "LLM OpenAI",
         "type": "llm",
-        "description": "LLM executor for filter / keywords / report stages.",
+        "description": "用于 workflow 加工阶段的 LLM 配置。",
         "default_config": {
             "base_url": "https://api.openai.com/v1",
             "model": settings.llm_primary_model or "gpt-4o-mini",
@@ -70,13 +60,9 @@ async def update_provider(
     user = await _get_or_create_default_user(db)
     settings_data = dict(user.settings or {})
     providers_data = _load_providers_settings(settings_data)
+    config = _resolve_provider_config(provider_id, providers_data, payload.config)
 
     existing = providers_data.get(provider_id, {})
-    config = dict(existing.get("config") or PROVIDER_PRESETS[provider_id]["default_config"])
-    if payload.config is not None:
-        config.update(payload.config)
-    config = _normalize_provider_config(provider_id, config)
-
     enabled = existing.get("enabled", False) if payload.enabled is None else payload.enabled
     providers_data[provider_id] = {"enabled": bool(enabled), "config": config}
     settings_data["providers"] = providers_data
@@ -88,87 +74,91 @@ async def update_provider(
     return _to_provider_response(provider_id, providers_data)
 
 
+@router.post("/{provider_id}/test", response_model=ProviderTestResponse)
+async def test_provider(
+    provider_id: ProviderId,
+    payload: ProviderTestRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if provider_id not in PROVIDER_PRESETS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider not found")
+
+    user = await _get_or_create_default_user(db)
+    providers_data = _load_providers_settings(user.settings)
+    config = _resolve_provider_config(provider_id, providers_data, payload.config)
+    return await _run_provider_connectivity_test(provider_id, config)
+
+
 def _load_providers_settings(settings_data: dict | None) -> dict[str, dict]:
     raw = (settings_data or {}).get("providers", {})
     if not isinstance(raw, dict):
         return {}
-    normalized: dict[str, dict] = {}
-    for key, value in raw.items():
-        if isinstance(value, dict):
-            normalized[str(key)] = value
-    return normalized
+    llm_payload = raw.get("llm_openai")
+    if isinstance(llm_payload, dict):
+        return {"llm_openai": _normalize_provider_state("llm_openai", llm_payload)}
+    return {}
+
+
+def _resolve_provider_config(
+    provider_id: ProviderId,
+    providers_data: dict[str, dict],
+    overrides: dict | None = None,
+) -> dict:
+    existing = providers_data.get(provider_id, {})
+    config = dict(existing.get("config") or PROVIDER_PRESETS[provider_id]["default_config"])
+    if overrides is not None:
+        config.update(overrides)
+    return _normalize_provider_config(provider_id, config)
 
 
 def _normalize_provider_config(provider_id: ProviderId, config: dict) -> dict:
     normalized = dict(config)
+    base_url = str(normalized.get("base_url", "")).strip()
+    if base_url:
+        normalized["base_url"] = base_url.rstrip("/")
 
-    if provider_id == "agent_codex":
-        auth_mode = str(normalized.get("auth_mode", "api_key")).strip().lower()
-        normalized["auth_mode"] = auth_mode if auth_mode in {"api_key", "oauth"} else "api_key"
+    model = str(normalized.get("model", "")).strip()
+    if model:
+        normalized["model"] = model
 
-        base_url = str(normalized.get("base_url", "")).strip()
-        if base_url:
-            normalized["base_url"] = base_url.rstrip("/")
+    timeout_raw = normalized.get("timeout_sec")
+    try:
+        timeout_sec = int(timeout_raw)
+    except (TypeError, ValueError):
+        timeout_sec = int(PROVIDER_PRESETS[provider_id]["default_config"]["timeout_sec"])
+    normalized["timeout_sec"] = max(timeout_sec, 1)
 
-        model = str(normalized.get("model", "")).strip()
-        if model:
-            normalized["model"] = model
+    retry_raw = normalized.get("max_retry")
+    try:
+        max_retry = int(retry_raw)
+    except (TypeError, ValueError):
+        max_retry = int(PROVIDER_PRESETS[provider_id]["default_config"]["max_retry"])
+    normalized["max_retry"] = max(max_retry, 0)
 
-        timeout_raw = normalized.get("timeout_sec")
-        try:
-            timeout_sec = int(timeout_raw)
-        except Exception:
-            timeout_sec = int(PROVIDER_PRESETS[provider_id]["default_config"]["timeout_sec"])
-        normalized["timeout_sec"] = max(timeout_sec, 1)
+    max_tokens_raw = normalized.get("max_output_tokens")
+    try:
+        max_tokens = int(max_tokens_raw)
+    except (TypeError, ValueError):
+        max_tokens = int(PROVIDER_PRESETS[provider_id]["default_config"]["max_output_tokens"])
+    normalized["max_output_tokens"] = max(max_tokens, 1)
 
-        for key in ("api_key", "oauth_token"):
-            normalized[key] = str(normalized.get(key, "")).strip()
+    temperature_raw = normalized.get("temperature")
+    try:
+        temperature = float(temperature_raw)
+    except (TypeError, ValueError):
+        temperature = float(PROVIDER_PRESETS[provider_id]["default_config"]["temperature"])
+    normalized["temperature"] = temperature
 
-        return normalized
-
-    if provider_id == "llm_openai":
-        base_url = str(normalized.get("base_url", "")).strip()
-        if base_url:
-            normalized["base_url"] = base_url.rstrip("/")
-
-        model = str(normalized.get("model", "")).strip()
-        if model:
-            normalized["model"] = model
-
-        timeout_raw = normalized.get("timeout_sec")
-        try:
-            timeout_sec = int(timeout_raw)
-        except Exception:
-            timeout_sec = int(PROVIDER_PRESETS[provider_id]["default_config"]["timeout_sec"])
-        normalized["timeout_sec"] = max(timeout_sec, 1)
-
-        retry_raw = normalized.get("max_retry")
-        try:
-            max_retry = int(retry_raw)
-        except Exception:
-            max_retry = int(PROVIDER_PRESETS[provider_id]["default_config"]["max_retry"])
-        normalized["max_retry"] = max(max_retry, 0)
-
-        max_tokens_raw = normalized.get("max_output_tokens")
-        try:
-            max_tokens = int(max_tokens_raw)
-        except Exception:
-            max_tokens = int(PROVIDER_PRESETS[provider_id]["default_config"]["max_output_tokens"])
-        normalized["max_output_tokens"] = max(max_tokens, 1)
-
-        temperature_raw = normalized.get("temperature")
-        try:
-            temperature = float(temperature_raw)
-        except Exception:
-            temperature = float(PROVIDER_PRESETS[provider_id]["default_config"]["temperature"])
-        normalized["temperature"] = temperature
-
-        normalized["api_key"] = str(normalized.get("api_key", "")).strip()
-        return normalized
-
+    normalized["api_key"] = str(normalized.get("api_key", "")).strip()
     return normalized
 
 
+def _normalize_provider_state(provider_id: ProviderId, payload: dict) -> dict:
+    config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+    return {
+        "enabled": bool(payload.get("enabled", False)),
+        "config": _normalize_provider_config(provider_id, config),
+    }
 def _to_provider_response(provider_id: ProviderId, providers_data: dict[str, dict]) -> ProviderResponse:
     preset = PROVIDER_PRESETS[provider_id]
     current = providers_data.get(provider_id, {})
@@ -203,3 +193,40 @@ async def _get_or_create_default_user(db: AsyncSession) -> User:
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def _run_provider_connectivity_test(provider_id: ProviderId, config: dict) -> ProviderTestResponse:
+    started_at = perf_counter()
+    try:
+        result = await _execute_provider_test(provider_id, config)
+        latency_ms = max(int((perf_counter() - started_at) * 1000), 0)
+        message = str(result.get("message") or "Connection successful")
+        return ProviderTestResponse(success=True, message=message, latency_ms=latency_ms, model=str(config.get("model") or ""))
+    except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+        latency_ms = max(int((perf_counter() - started_at) * 1000), 0)
+        return ProviderTestResponse(
+            success=False,
+            message=_format_provider_test_error(exc),
+            latency_ms=latency_ms,
+            model=str(config.get("model") or ""),
+        )
+
+
+async def _execute_provider_test(provider_id: ProviderId, config: dict) -> dict:
+    prompt = (
+        'Return JSON only: {"ok": true, "message": "pong"}. '
+        "Do not include markdown fences or extra text."
+    )
+    request_config = dict(config)
+    request_config["temperature"] = 0
+    request_config["max_output_tokens"] = 32
+
+    return await run_llm_json(prompt=prompt, config=request_config)
+
+
+def _format_provider_test_error(exc: ValueError | RuntimeError | httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"Provider returned HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.RequestError):
+        return f"Network error: {exc}"
+    return str(exc)

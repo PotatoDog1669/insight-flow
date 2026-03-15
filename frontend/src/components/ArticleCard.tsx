@@ -5,6 +5,7 @@ import { ExternalLink, Star, FileText } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
 
 export interface Article {
     id: string;
@@ -41,7 +42,7 @@ export function ArticleCard({ article, index }: ArticleCardProps) {
                                     <span className="font-medium text-foreground/80">{article.source_name}</span>
                                 </span>
                                 <span className="text-muted-foreground/30">•</span>
-                                <span>{formatDistanceToNow(new Date(article.published_at), { addSuffix: true })}</span>
+                                <span>{formatDistanceToNow(new Date(article.published_at), { addSuffix: true, locale: zhCN })}</span>
                             </div>
 
                             {/* Score Badge */}

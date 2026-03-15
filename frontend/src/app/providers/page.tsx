@@ -7,12 +7,24 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { cn } from "@/lib/utils";
 import {
     getProviders,
+    testProvider,
     updateProvider,
-    type AgentProviderConfig,
     type LLMProviderConfig,
     type Provider,
-    type ProviderConfig,
+    type ProviderTestResponse,
 } from "@/lib/api";
+
+function buildProviderPayload(config: LLMProviderConfig): LLMProviderConfig {
+    return {
+        base_url: String(config.base_url || "").trim(),
+        model: String(config.model || "").trim(),
+        timeout_sec: Math.max(Number(config.timeout_sec || 30), 1),
+        max_retry: Math.max(Number(config.max_retry || 0), 0),
+        max_output_tokens: Math.max(Number(config.max_output_tokens || 1200), 1),
+        temperature: Number(config.temperature || 0.3),
+        api_key: String(config.api_key || "").trim(),
+    };
+}
 
 export default function ProvidersPage() {
     const [providers, setProviders] = useState<Provider[]>([]);
@@ -20,8 +32,11 @@ export default function ProvidersPage() {
     const [error, setError] = useState<string | null>(null);
 
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [editConfig, setEditConfig] = useState<ProviderConfig | null>(null);
+    const [editConfig, setEditConfig] = useState<LLMProviderConfig | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    const [testingId, setTestingId] = useState<Provider["id"] | null>(null);
+    const [testResult, setTestResult] = useState<ProviderTestResponse | null>(null);
+    const [testError, setTestError] = useState<string | null>(null);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -30,7 +45,7 @@ export default function ProvidersPage() {
             const data = await getProviders();
             setProviders(data || []);
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to load providers");
+            setError(err instanceof Error ? err.message : "加载模型配置失败");
         } finally {
             setLoading(false);
         }
@@ -40,30 +55,24 @@ export default function ProvidersPage() {
         void loadData();
     }, [loadData]);
 
+    useEffect(() => {
+        setTestResult(null);
+        setTestError(null);
+    }, [editingId, editConfig]);
+
     const handleEnableToggle = async (provider: Provider) => {
         const nextEnabled = !provider.enabled;
         try {
-            setProviders(prev => prev.map(item => item.id === provider.id ? { ...item, enabled: nextEnabled } : item));
+            setProviders((prev) => prev.map((item) => (item.id === provider.id ? { ...item, enabled: nextEnabled } : item)));
             await updateProvider(provider.id, { enabled: nextEnabled });
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to update provider status");
+            setError(err instanceof Error ? err.message : "更新模型状态失败");
             void loadData();
         }
     };
 
     const startEditing = (provider: Provider) => {
         setEditingId(provider.id);
-        if (provider.id === "agent_codex") {
-            setEditConfig({
-                auth_mode: provider.config.auth_mode || "api_key",
-                base_url: provider.config.base_url || "",
-                model: provider.config.model || "gpt-5-codex",
-                timeout_sec: Number(provider.config.timeout_sec || 90),
-                api_key: provider.config.api_key || "",
-                oauth_token: provider.config.oauth_token || "",
-            });
-            return;
-        }
         setEditConfig({
             base_url: provider.config.base_url || "https://api.openai.com/v1",
             model: provider.config.model || "gpt-4o-mini",
@@ -75,100 +84,91 @@ export default function ProvidersPage() {
         });
     };
 
-    const handleSave = async (providerId: Provider["id"]) => {
+    const handleTest = async (provider: Provider) => {
         if (!editConfig) {
             return;
         }
-        const provider = providers.find(item => item.id === providerId);
-        if (!provider) {
+        setTestingId(provider.id);
+        setTestError(null);
+        setTestResult(null);
+        try {
+            const result = await testProvider(provider.id, { config: buildProviderPayload(editConfig) });
+            setTestResult(result);
+        } catch (err) {
+            setTestError(err instanceof Error ? err.message : "测试模型连接失败");
+        } finally {
+            setTestingId(null);
+        }
+    };
+
+    const handleSave = async (providerId: Provider["id"]) => {
+        if (!editConfig) {
             return;
         }
         setSubmitting(true);
         setError(null);
         try {
-            let payload: ProviderConfig;
-            if (provider.id === "agent_codex") {
-                const config = editConfig as AgentProviderConfig;
-                payload = {
-                    auth_mode: config.auth_mode,
-                    base_url: String(config.base_url || "").trim(),
-                    model: String(config.model || "").trim(),
-                    timeout_sec: Math.max(Number(config.timeout_sec || 90), 1),
-                    api_key: String(config.api_key || "").trim(),
-                    oauth_token: String(config.oauth_token || "").trim(),
-                };
-            } else {
-                const config = editConfig as LLMProviderConfig;
-                payload = {
-                    base_url: String(config.base_url || "").trim(),
-                    model: String(config.model || "").trim(),
-                    timeout_sec: Math.max(Number(config.timeout_sec || 30), 1),
-                    max_retry: Math.max(Number(config.max_retry || 0), 0),
-                    max_output_tokens: Math.max(Number(config.max_output_tokens || 1200), 1),
-                    temperature: Number(config.temperature || 0.3),
-                    api_key: String(config.api_key || "").trim(),
-                };
-            }
-            const updated = await updateProvider(providerId, { config: payload, enabled: true });
-            setProviders(prev => prev.map(item => item.id === providerId ? updated : item));
+            const updated = await updateProvider(providerId, {
+                config: buildProviderPayload(editConfig),
+                enabled: true,
+            });
+            setProviders((prev) => prev.map((item) => (item.id === providerId ? updated : item)));
             setEditingId(null);
             setEditConfig(null);
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to save provider config");
+            setError(err instanceof Error ? err.message : "保存模型配置失败");
         } finally {
             setSubmitting(false);
         }
     };
 
     return (
-        <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8 md:py-12">
+        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8 md:py-12">
             <header className="mb-8">
-                <h1 className="text-3xl font-bold tracking-tight mb-2">Providers</h1>
-                <p className="text-muted-foreground text-sm max-w-2xl">
-                    Manage AI executors for processing stages. Configure Codex Agent and LLM provider credentials/models in one place.
+                <h1 className="mb-2 text-3xl font-bold tracking-tight">模型配置</h1>
+                <p className="max-w-2xl text-sm text-muted-foreground">
+                    保留统一管理工作流使用的 LLM 配置。
                 </p>
             </header>
 
-            {loading && <div className="py-10 text-sm text-muted-foreground">Loading providers...</div>}
+            {loading && <div className="py-10 text-sm text-muted-foreground">正在加载模型配置...</div>}
             {error && <div className="py-4 text-sm text-red-500">{error}</div>}
 
             {!loading && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
                     {providers.map((provider) => (
                         <Card
                             key={provider.id}
                             className={cn(
-                                "border-border/40 transition-all duration-300 flex flex-col relative overflow-hidden",
-                                provider.enabled ? "border-green-500/30 shadow-sm" : "hover:border-border/80 shadow-sm hover:shadow-md"
+                                "relative flex flex-col overflow-hidden border-border/40 transition-all duration-300",
+                                provider.enabled ? "border-green-500/30 shadow-sm" : "shadow-sm hover:border-border/80 hover:shadow-md",
                             )}
                         >
-                            {provider.enabled && (
-                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-green-400 to-emerald-500" />
-                            )}
+                            {provider.enabled && <div className="absolute left-0 top-0 h-1 w-full bg-gradient-to-r from-green-400 to-emerald-500" />}
 
                             <CardHeader className="pb-4">
                                 <div className="flex items-start justify-between">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm border bg-slate-900 text-white border-slate-800">
-                                            <Bot className="w-5 h-5" />
+                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-800 bg-slate-900 text-white shadow-sm">
+                                            <Bot className="h-5 w-5" />
                                         </div>
                                         <div>
                                             <CardTitle className="text-lg font-bold leading-snug tracking-tight">{provider.name}</CardTitle>
-                                            <div className="flex items-center mt-1 gap-2 text-xs">
+                                            <div className="mt-1 flex items-center gap-2 text-xs">
                                                 <Badge
                                                     variant="secondary"
                                                     className={cn(
-                                                        "border-none mt-0.5",
-                                                        provider.enabled ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"
+                                                        "mt-0.5 border-none",
+                                                        provider.enabled ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground",
                                                     )}
                                                 >
-                                                    {provider.enabled ? "Enabled" : "Disabled"}
+                                                    {provider.enabled ? "已启用" : "已停用"}
                                                 </Badge>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <label className="flex items-center cursor-pointer">
+                                    <label className="flex cursor-pointer items-center">
                                         <div className="relative">
                                             <input
                                                 type="checkbox"
@@ -177,245 +177,182 @@ export default function ProvidersPage() {
                                                 onChange={() => void handleEnableToggle(provider)}
                                                 disabled={editingId === provider.id}
                                             />
-                                            <div className={cn("block w-10 h-6 rounded-full transition-colors", provider.enabled ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-700")} />
-                                            <div className={cn("dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform", provider.enabled ? "transform translate-x-4" : "")} />
+                                            <div className={cn("block h-6 w-10 rounded-full transition-colors", provider.enabled ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-700")} />
+                                            <div className={cn("dot absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform", provider.enabled ? "translate-x-4 transform" : "")} />
                                         </div>
                                     </label>
                                 </div>
-                                <p className="text-sm text-muted-foreground mt-4 leading-relaxed">{provider.description}</p>
+                                <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{provider.description}</p>
                             </CardHeader>
 
-                            <CardContent className="pb-6 flex-1 text-sm bg-muted/20 border-t border-border/20 pt-4">
+                            <CardContent className="flex-1 border-t border-border/20 bg-muted/20 pb-6 pt-4 text-sm">
                                 {editingId === provider.id && editConfig ? (
-                                    <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
-                                        <div className="flex items-center gap-2 mb-2 text-foreground font-medium">
-                                            <KeyRound className="w-4 h-4 text-primary" />
-                                            Provider Configuration
+                                    <div className="animate-in zoom-in-95 fade-in space-y-4 duration-200">
+                                        <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
+                                            <KeyRound className="h-4 w-4 text-primary" />
+                                            模型连接配置
                                         </div>
-                                        {provider.id === "agent_codex" && "auth_mode" in editConfig ? (
-                                            <>
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Auth Mode</label>
-                                                    <select
-                                                        value={editConfig.auth_mode}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, auth_mode: e.target.value as "api_key" | "oauth" })}
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    >
-                                                        <option value="api_key">API Key</option>
-                                                        <option value="oauth">OAuth Token</option>
-                                                    </select>
-                                                </div>
 
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Base URL</label>
-                                                    <input
-                                                        value={editConfig.base_url}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, base_url: e.target.value })}
-                                                        placeholder="https://api.openai.com/v1"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-xs font-medium text-muted-foreground">Base URL</label>
+                                            <input
+                                                value={editConfig.base_url}
+                                                onChange={(e) => setEditConfig({ ...editConfig, base_url: e.target.value })}
+                                                placeholder="https://api.openai.com/v1"
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                            />
+                                        </div>
 
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Model</label>
-                                                    <input
-                                                        value={editConfig.model}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, model: e.target.value })}
-                                                        placeholder="gpt-5-codex"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-xs font-medium text-muted-foreground">模型</label>
+                                            <input
+                                                value={editConfig.model}
+                                                onChange={(e) => setEditConfig({ ...editConfig, model: e.target.value })}
+                                                placeholder="gpt-4o-mini"
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                            />
+                                        </div>
 
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Timeout (sec)</label>
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        value={editConfig.timeout_sec}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, timeout_sec: Number(e.target.value || 90) })}
-                                                        placeholder="90"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                </div>
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-medium text-muted-foreground">超时（秒）</label>
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    value={editConfig.timeout_sec}
+                                                    onChange={(e) => setEditConfig({ ...editConfig, timeout_sec: Number(e.target.value) })}
+                                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-medium text-muted-foreground">重试次数</label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={editConfig.max_retry}
+                                                    onChange={(e) => setEditConfig({ ...editConfig, max_retry: Number(e.target.value) })}
+                                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                />
+                                            </div>
+                                        </div>
 
-                                                {editConfig.auth_mode === "api_key" ? (
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-muted-foreground">API Key</label>
-                                                        <input
-                                                            type="password"
-                                                            value={editConfig.api_key}
-                                                            onChange={(e) => setEditConfig({ ...editConfig, api_key: e.target.value })}
-                                                            placeholder="sk-..."
-                                                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                        />
-                                                    </div>
-                                                ) : (
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-muted-foreground">OAuth Access Token</label>
-                                                        <input
-                                                            type="password"
-                                                            value={editConfig.oauth_token}
-                                                            onChange={(e) => setEditConfig({ ...editConfig, oauth_token: e.target.value })}
-                                                            placeholder="oauth token"
-                                                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                        />
-                                                    </div>
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-medium text-muted-foreground">最大输出 Tokens</label>
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    value={editConfig.max_output_tokens}
+                                                    onChange={(e) => setEditConfig({ ...editConfig, max_output_tokens: Number(e.target.value) })}
+                                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-medium text-muted-foreground">Temperature</label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    step="0.1"
+                                                    value={editConfig.temperature}
+                                                    onChange={(e) => setEditConfig({ ...editConfig, temperature: Number(e.target.value) })}
+                                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <label className="text-xs font-medium text-muted-foreground">API Key</label>
+                                            <input
+                                                value={editConfig.api_key}
+                                                onChange={(e) => setEditConfig({ ...editConfig, api_key: e.target.value })}
+                                                placeholder="sk-..."
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                            />
+                                        </div>
+
+                                        {testError && (
+                                            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                                                {testError}
+                                            </div>
+                                        )}
+                                        {testResult && (
+                                            <div
+                                                className={cn(
+                                                    "rounded-md border px-3 py-2 text-xs",
+                                                    testResult.success
+                                                        ? "border-green-200 bg-green-50 text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300"
+                                                        : "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
                                                 )}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Base URL</label>
-                                                    <input
-                                                        value={editConfig.base_url}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, base_url: e.target.value })}
-                                                        placeholder="https://api.openai.com/v1"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
+                                            >
+                                                <div className="font-medium">{testResult.message}</div>
+                                                <div className="mt-1 text-[11px] opacity-80">
+                                                    {testResult.model || provider.config.model || "-"} · {testResult.latency_ms ?? 0} ms
                                                 </div>
-
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Model</label>
-                                                    <input
-                                                        value={editConfig.model}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, model: e.target.value })}
-                                                        placeholder="gpt-4o-mini"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                </div>
-
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">Timeout (sec)</label>
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        value={editConfig.timeout_sec}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, timeout_sec: Number(e.target.value || 30) })}
-                                                        placeholder="30"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                </div>
-
-                                                {"max_retry" in editConfig && (
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-muted-foreground">Max Retry</label>
-                                                        <input
-                                                            type="number"
-                                                            min={0}
-                                                            value={editConfig.max_retry}
-                                                            onChange={(e) => setEditConfig({ ...editConfig, max_retry: Number(e.target.value || 0) })}
-                                                            placeholder="2"
-                                                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                        />
-                                                    </div>
-                                                )}
-
-                                                {"max_output_tokens" in editConfig && (
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-muted-foreground">Max Output Tokens</label>
-                                                        <input
-                                                            type="number"
-                                                            min={1}
-                                                            value={editConfig.max_output_tokens}
-                                                            onChange={(e) => setEditConfig({ ...editConfig, max_output_tokens: Number(e.target.value || 1) })}
-                                                            placeholder="2048"
-                                                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                        />
-                                                    </div>
-                                                )}
-
-                                                {"temperature" in editConfig && (
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-muted-foreground">Temperature</label>
-                                                        <input
-                                                            type="number"
-                                                            step="0.1"
-                                                            value={editConfig.temperature}
-                                                            onChange={(e) => setEditConfig({ ...editConfig, temperature: Number(e.target.value || 0) })}
-                                                            placeholder="0.3"
-                                                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                        />
-                                                    </div>
-                                                )}
-
-                                                <div className="space-y-1.5">
-                                                    <label className="text-xs font-medium text-muted-foreground">API Key</label>
-                                                    <input
-                                                        type="password"
-                                                        value={editConfig.api_key}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, api_key: e.target.value })}
-                                                        placeholder="sk-..."
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                                    />
-                                                </div>
-                                            </>
+                                            </div>
                                         )}
                                     </div>
                                 ) : (
                                     <div className="space-y-3">
-                                        {provider.id === "agent_codex" && (
-                                            <div className="flex justify-between border-b border-border/30 pb-2">
-                                                <span className="text-muted-foreground text-xs">Auth Mode</span>
-                                                <span className="font-mono text-xs text-foreground">{provider.config.auth_mode || "-"}</span>
-                                            </div>
-                                        )}
                                         <div className="flex justify-between border-b border-border/30 pb-2">
-                                            <span className="text-muted-foreground text-xs">Base URL</span>
-                                            <span className="font-mono text-xs text-foreground truncate max-w-[65%] text-right">{provider.config.base_url || "-"}</span>
+                                            <span className="text-xs text-muted-foreground">Base URL</span>
+                                            <span className="max-w-[65%] truncate text-right font-mono text-xs text-foreground">{provider.config.base_url}</span>
                                         </div>
                                         <div className="flex justify-between border-b border-border/30 pb-2">
-                                            <span className="text-muted-foreground text-xs">Model</span>
-                                            <span className="font-mono text-xs text-foreground">{provider.config.model || "-"}</span>
+                                            <span className="text-xs text-muted-foreground">模型</span>
+                                            <span className="font-mono text-xs text-foreground">{provider.config.model}</span>
                                         </div>
-                                        {provider.id === "llm_openai" && (
-                                            <div className="flex justify-between border-b border-border/30 pb-2">
-                                                <span className="text-muted-foreground text-xs">Max Retry</span>
-                                                <span className="font-mono text-xs text-foreground">{provider.config.max_retry ?? "-"}</span>
-                                            </div>
-                                        )}
+                                        <div className="flex justify-between border-b border-border/30 pb-2">
+                                            <span className="text-xs text-muted-foreground">重试次数</span>
+                                            <span className="font-mono text-xs text-foreground">{provider.config.max_retry ?? 0}</span>
+                                        </div>
                                         <div className="flex justify-between">
-                                            <span className="text-muted-foreground text-xs">Timeout</span>
-                                            <span className="font-mono text-xs text-foreground">{provider.config.timeout_sec || "-"}s</span>
+                                            <span className="text-xs text-muted-foreground">超时</span>
+                                            <span className="font-mono text-xs text-foreground">{provider.config.timeout_sec}s</span>
                                         </div>
                                     </div>
                                 )}
                             </CardContent>
 
-                            <CardFooter className="pt-4 flex justify-between gap-3">
-                                {editingId === provider.id ? (
+                            <CardFooter className="flex items-center justify-between gap-3 pt-4">
+                                {editingId === provider.id && editConfig ? (
                                     <>
                                         <button
                                             onClick={() => {
                                                 setEditingId(null);
                                                 setEditConfig(null);
                                             }}
-                                            className="flex-1 border border-border rounded-md py-2 text-sm hover:bg-muted transition-colors"
+                                            className="flex-1 rounded-md border border-border py-2 text-sm transition-colors hover:bg-muted"
                                         >
-                                            Cancel
+                                            取消
+                                        </button>
+                                        <button
+                                            onClick={() => void handleTest(provider)}
+                                            disabled={testingId === provider.id || submitting}
+                                            className="flex-1 rounded-md border border-border py-2 text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {testingId === provider.id ? "测试中..." : "测试连接"}
                                         </button>
                                         <button
                                             onClick={() => void handleSave(provider.id)}
-                                            disabled={submitting}
-                                            className="flex-1 bg-foreground text-background rounded-md py-2 text-sm hover:bg-foreground/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                            disabled={submitting || testingId === provider.id}
+                                            className="flex flex-1 items-center justify-center gap-2 rounded-md bg-foreground py-2 text-sm text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
-                                            <Save className="w-4 h-4" />
-                                            {submitting ? "Saving..." : "Save"}
+                                            <Save className="h-4 w-4" />
+                                            {submitting ? "保存中..." : "保存"}
                                         </button>
                                     </>
                                 ) : (
                                     <>
                                         <button
                                             onClick={() => startEditing(provider)}
-                                            className="flex-1 border border-border rounded-md py-2 text-sm hover:bg-muted transition-colors"
+                                            className="flex-1 rounded-md border border-border py-2 text-sm transition-colors hover:bg-muted"
                                         >
-                                            Configure
+                                            配置
                                         </button>
-                                        {provider.enabled && (
-                                            <div className="flex items-center gap-2 text-green-600 text-xs px-3">
-                                                <CheckCircle2 className="w-4 h-4" />
-                                                Active
-                                            </div>
-                                        )}
+                                        <div className="flex items-center gap-2 px-3 text-xs text-green-600">
+                                            <CheckCircle2 className="h-4 w-4" />
+                                            {provider.enabled ? "已生效" : "未启用"}
+                                        </div>
                                     </>
                                 )}
                             </CardFooter>

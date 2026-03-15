@@ -13,6 +13,11 @@ class ReportTopic(BaseModel):
     weight: int = Field(ge=1)
 
 
+class ReportFilterMonitorOption(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
 class ReportEvent(BaseModel):
     event_id: str
     index: int = Field(ge=1)
@@ -39,6 +44,8 @@ class ReportEvent(BaseModel):
 class ReportResponse(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID | None = None
+    monitor_id: uuid.UUID | None = None
+    monitor_name: str = ""
     time_period: Literal["daily", "weekly", "custom"]
     report_type: Literal["daily", "weekly", "research"]
     title: str
@@ -62,6 +69,7 @@ class ReportFiltersResponse(BaseModel):
     time_periods: list[str]
     report_types: list[str]
     categories: list[str]
+    monitors: list[ReportFilterMonitorOption] = Field(default_factory=list)
 
 
 class ReportCustomRequest(BaseModel):

@@ -24,22 +24,21 @@ async def test_run_report_with_retry_uses_fallback_provider_after_failure() -> N
         assert stage == "report"
         if name == "llm_openai":
             return _FailingProvider()
-        if name == "agent_codex":
+        if name == "llm_backup":
             return _FallbackProvider()
         raise KeyError(name)
 
     result, provider_name = await run_report_with_retry(
-        route=StageRoute(primary="llm_openai", fallback=["agent_codex"]),
+        route=StageRoute(primary="llm_openai", fallback=["llm_backup"]),
         providers={
             "llm_openai": {"max_retry": 0},
-            "agent_codex": {"max_retry": 0},
+            "llm_backup": {"max_retry": 0},
         },
         provider_overrides={},
         payload={"content": "hello"},
         provider_getter=_get_provider,
     )
 
-    assert provider_name == "agent_codex"
+    assert provider_name == "llm_backup"
     assert result["global_tldr"] == "done"
     assert calls == ["primary", "fallback"]
-

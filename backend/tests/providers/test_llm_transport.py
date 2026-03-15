@@ -11,18 +11,13 @@ from app.providers.report import LLMReportProvider
 
 @pytest.mark.asyncio
 async def test_llm_filter_provider_uses_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"llm": 0, "codex": 0}
+    calls = {"llm": 0}
 
     async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
         calls["llm"] += 1
         return {"keep_indices": [0]}
 
-    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
-        calls["codex"] += 1
-        return {"keep_indices": [0]}
-
     monkeypatch.setattr("app.providers.filter.run_llm_json", _fake_llm)
-    monkeypatch.setattr("app.providers.filter.run_codex_json", _fake_codex)
 
     provider = LLMFilterProvider()
     articles = [SimpleNamespace(title="OpenAI model update", content="AI release details")]
@@ -30,12 +25,11 @@ async def test_llm_filter_provider_uses_llm_transport(monkeypatch: pytest.Monkey
 
     assert len(output["articles"]) == 1
     assert calls["llm"] == 1
-    assert calls["codex"] == 0
 
 
 @pytest.mark.asyncio
 async def test_llm_keywords_provider_uses_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"llm": 0, "codex": 0}
+    calls = {"llm": 0}
 
     async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
         calls["llm"] += 1
@@ -55,12 +49,7 @@ async def test_llm_keywords_provider_uses_llm_transport(monkeypatch: pytest.Monk
             "evidence": "官方博客更新说明",
         }
 
-    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
-        calls["codex"] += 1
-        return {"keywords": ["codex"], "summary": "should not be used"}
-
     monkeypatch.setattr("app.providers.keywords.run_llm_json", _fake_llm)
-    monkeypatch.setattr("app.providers.keywords.run_codex_json", _fake_codex)
 
     provider = LLMKeywordProvider()
     article = SimpleNamespace(title="Qwen 3.5 发布", content="支持 chat completions")
@@ -73,23 +62,17 @@ async def test_llm_keywords_provider_uses_llm_transport(monkeypatch: pytest.Monk
     assert output["who"] == "阿里云"
     assert output["metrics"] == ["12%", "$0.25/M"]
     assert calls["llm"] == 1
-    assert calls["codex"] == 0
 
 
 @pytest.mark.asyncio
 async def test_llm_report_provider_uses_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"llm": 0, "codex": 0}
+    calls = {"llm": 0}
 
     async def _fake_llm(prompt: str, config: dict | None = None) -> dict:
         calls["llm"] += 1
         return {"title": "LLM report", "content": "LLM summary content", "global_tldr": "LLM TLDR"}
 
-    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
-        calls["codex"] += 1
-        return {"title": "codex report", "content": "should not be used"}
-
     monkeypatch.setattr("app.providers.report.run_llm_json", _fake_llm)
-    monkeypatch.setattr("app.providers.report.run_codex_json", _fake_codex)
 
     provider = LLMReportProvider()
     output = await provider.run(
@@ -106,7 +89,6 @@ async def test_llm_report_provider_uses_llm_transport(monkeypatch: pytest.Monkey
     assert output["content"] == "raw markdown"
     assert output["global_tldr"] == "LLM TLDR"
     assert calls["llm"] == 1
-    assert calls["codex"] == 0
 
 
 @pytest.mark.asyncio
@@ -119,11 +101,7 @@ async def test_llm_report_provider_builds_prompt_from_event_payload_not_full_con
         captured_prompt["text"] = prompt
         return {"title": "LLM report", "content": "LLM summary content", "global_tldr": "LLM TLDR"}
 
-    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
-        return {"title": "codex report", "content": "should not be used"}
-
     monkeypatch.setattr("app.providers.report.run_llm_json", _fake_llm)
-    monkeypatch.setattr("app.providers.report.run_codex_json", _fake_codex)
 
     provider = LLMReportProvider()
     tail_marker = "TAIL_MARKER_SHOULD_EXIST"
@@ -158,8 +136,6 @@ async def test_llm_report_provider_removes_count_and_distribution_style_tldr(
         }
 
     monkeypatch.setattr("app.providers.report.run_llm_json", _fake_llm)
-    monkeypatch.setattr("app.providers.report.run_codex_json", _fake_llm)
-
     provider = LLMReportProvider()
     output = await provider.run(
         payload={

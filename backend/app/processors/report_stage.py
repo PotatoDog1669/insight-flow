@@ -37,7 +37,12 @@ async def run_report_with_retry(
     payload: dict,
     provider_getter: Callable[..., object] = get_provider,
 ) -> tuple[dict, str]:
-    provider_chain = [name for name in [route.primary, *(route.fallback or [])] if str(name or "").strip()]
+    provider_chain: list[str] = []
+    for raw_name in [route.primary, *(route.fallback or [])]:
+        provider_name = str(raw_name or "").strip()
+        if not provider_name or provider_name in provider_chain:
+            continue
+        provider_chain.append(provider_name)
     last_exc: Exception | None = None
     for provider_name in provider_chain:
         config = _merge_provider_config(

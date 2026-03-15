@@ -7,12 +7,12 @@ import { cn } from "@/lib/utils";
 import { useState } from "react";
 
 const NAV_ITEMS = [
-    { href: "/", label: "Discover", icon: Telescope },
-    { href: "/monitors", label: "Monitors", icon: Activity },
-    { href: "/library", label: "Library", icon: Library },
-    { href: "/sources", label: "Sources", icon: Globe },
-    { href: "/providers", label: "Providers", icon: Bot },
-    { href: "/destinations", label: "Destinations", icon: Settings },
+    { href: "/", label: "报告", icon: Telescope },
+    { href: "/monitors", label: "任务", icon: Activity },
+    { href: "/library", label: "归档", icon: Library },
+    { href: "/sources", label: "信息源", icon: Globe },
+    { href: "/providers", label: "模型配置", icon: Bot },
+    { href: "/destinations", label: "输出配置", icon: Settings },
 ];
 
 export function Sidebar() {

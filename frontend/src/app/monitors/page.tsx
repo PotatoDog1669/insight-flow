@@ -32,12 +32,12 @@ import { cn } from "@/lib/utils";
 import type { Destination } from "@/lib/api";
 
 const STAGE_PROVIDER_OPTIONS: Record<MonitorAIStageName, MonitorAIProviderName[]> = {
-  filter: ["rule", "llm_openai", "agent_codex"],
-  keywords: ["rule", "llm_openai", "agent_codex"],
-  report: ["llm_openai", "agent_codex"],
+  filter: ["rule", "llm_openai"],
+  keywords: ["rule", "llm_openai"],
+  report: ["llm_openai"],
 };
 
-const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["agent_codex", "llm_openai"];
+const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_openai"];
 const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
 const isActiveRunStatus = (status: string) =>
   ACTIVE_RUN_STATUSES.includes(status as (typeof ACTIVE_RUN_STATUSES)[number]);
@@ -606,9 +606,9 @@ export default function MonitorsPage() {
     <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8 md:py-12">
       <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight mb-2">Monitors</h1>
+          <h1 className="text-3xl font-bold tracking-tight mb-2">任务</h1>
           <p className="text-muted-foreground text-sm max-w-2xl">
-            Configure automated research tasks and run them on demand.
+            配置自动化研究任务并按需运行。
           </p>
         </div>
         <button
@@ -616,7 +616,7 @@ export default function MonitorsPage() {
           className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors bg-foreground text-background shadow hover:bg-foreground/90 h-9 px-4 py-2"
         >
           <Plus className="w-4 h-4 mr-2" />
-          Create Monitor
+          创建任务
         </button>
       </header>
 
@@ -658,10 +658,10 @@ export default function MonitorsPage() {
                 <CardTitle className="text-lg font-semibold leading-snug">{monitor.name}</CardTitle>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant="secondary" className="capitalize bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-none">
-                    {monitor.report_type}
+                    {monitor.report_type === "daily" ? "日报" : monitor.report_type === "weekly" ? "周报" : monitor.report_type === "research" ? "研究" : monitor.report_type}
                   </Badge>
                   <Badge variant="secondary" className={monitor.enabled ? "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}>
-                    {monitor.enabled ? "active" : "paused"}
+                    {monitor.enabled ? "运行中" : "已暂停"}
                   </Badge>
                 </div>
               </CardHeader>
@@ -669,7 +669,7 @@ export default function MonitorsPage() {
               <CardContent className="pb-4 flex-1 text-sm text-muted-foreground space-y-2">
                 <div className="flex items-center space-x-2">
                   <Server className="w-4 h-4" />
-                  <span>{monitor.source_ids.length} sources</span>
+                  <span>{monitor.source_ids.length} 个信息源</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Calendar className="w-4 h-4" />
@@ -677,13 +677,13 @@ export default function MonitorsPage() {
                     {monitor.time_period === "custom" && monitor.custom_schedule
                       ? monitor.custom_schedule
                       : monitor.time_period === "daily"
-                        ? "Daily schedule"
-                        : "Weekly schedule"}
+                        ? "每日更新"
+                        : "每周更新"}
                   </span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Clock className="w-4 h-4" />
-                  <span>{monitor.last_run ? new Date(monitor.last_run).toLocaleString() : "Never run"}</span>
+                  <span>{monitor.last_run ? new Date(monitor.last_run).toLocaleString() : "从未运行"}</span>
                 </div>
                 <div className="text-xs text-muted-foreground/80">
                   {monitor.source_ids.map((sourceId) => sourceMap.get(sourceId)?.name ?? sourceId).join(", ")}
@@ -706,7 +706,7 @@ export default function MonitorsPage() {
                       : "bg-green-50 hover:bg-green-100 text-green-700 dark:bg-green-900/30 dark:hover:bg-green-900/40 dark:text-green-300"
                   )}
                 >
-                  {togglingMonitorIds[monitor.id] ? "Updating..." : monitor.enabled ? "Pause" : "Resume"}
+                  {togglingMonitorIds[monitor.id] ? "更新中..." : monitor.enabled ? "暂停" : "恢复"}
                 </button>
                 <div className="flex items-center justify-end gap-1.5 ml-2">
                   <button
@@ -724,7 +724,7 @@ export default function MonitorsPage() {
                     ) : (
                       <>
                         <History className="w-3.5 h-3.5 mr-1" />
-                        Logs
+                        日志
                       </>
                     )}
                   </button>
@@ -741,12 +741,12 @@ export default function MonitorsPage() {
                     {startingRunIds[monitor.id] ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
-                        Starting...
+                        启动中...
                       </>
                     ) : (
                       <>
                         <Play className="w-3.5 h-3.5 mr-1" />
-                        Run
+                        运行
                       </>
                     )}
                   </button>
@@ -785,36 +785,36 @@ export default function MonitorsPage() {
           <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeModal} />
           <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-xl z-50 flex flex-col max-h-[85vh]">
             <div className="px-6 py-4 border-b border-border/40 shrink-0">
-              <h2 className="text-xl font-semibold tracking-tight">{editingMonitorId ? "Edit Monitor" : "Create Monitor"}</h2>
+              <h2 className="text-xl font-semibold tracking-tight">{editingMonitorId ? "编辑任务" : "创建任务"}</h2>
             </div>
 
             <div className="p-6 space-y-5 overflow-y-auto">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Name</label>
+                <label className="text-sm font-medium">名称</label>
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Daily AI Brief"
+                  placeholder="例如：每日 AI 简报"
                   className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label htmlFor="monitor-time-period" className="text-sm font-medium">Frequency</label>
+                  <label htmlFor="monitor-time-period" className="text-sm font-medium">更新频率</label>
                   <select
                     id="monitor-time-period"
                     value={timePeriod}
                     onChange={(e) => setTimePeriod(e.target.value as "daily" | "weekly" | "custom")}
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                   >
-                    <option value="daily">daily</option>
-                    <option value="weekly">weekly</option>
-                    <option value="custom">custom</option>
+                    <option value="daily">每日</option>
+                    <option value="weekly">每周</option>
+                    <option value="custom">自定义</option>
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Window (hours)</label>
+                  <label className="text-sm font-medium">时间窗口（小时）</label>
                   <input
                     type="number"
                     min={1}
@@ -826,7 +826,7 @@ export default function MonitorsPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label htmlFor="monitor-report-type" className="text-sm font-medium">Template</label>
+                  <label htmlFor="monitor-report-type" className="text-sm font-medium">报告模板</label>
                   <select
                     id="monitor-report-type"
                     value={timePeriod === "daily" ? "daily" : timePeriod === "weekly" ? "weekly" : reportType}
@@ -834,31 +834,31 @@ export default function MonitorsPage() {
                     disabled={timePeriod !== "custom"}
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                   >
-                    <option value="">select template</option>
-                    <option value="daily">daily</option>
-                    <option value="weekly">weekly</option>
-                    <option value="research">research</option>
+                    <option value="">选择模板</option>
+                    <option value="daily">日报</option>
+                    <option value="weekly">周报</option>
+                    <option value="research">研究</option>
                   </select>
                 </div>
               </div>
 
               {timePeriod === "custom" && (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Custom Schedule (Cron)</label>
+                  <label className="text-sm font-medium">自定义时间表 (Cron)</label>
                   <input
                     value={customSchedule}
                     onChange={(e) => setCustomSchedule(e.target.value)}
-                    placeholder="e.g. 0 9 * * 1-5"
+                    placeholder="例如：0 9 * * 1-5"
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                   />
                 </div>
               )}
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Sources</label>
+                <label className="text-sm font-medium">信息源</label>
                 <div className="max-h-52 overflow-y-auto border border-border/40 rounded-md p-2 space-y-2">
                   {sourceGroups.length === 0 && (
-                    <div className="text-xs text-muted-foreground p-2">No sources configured yet.</div>
+                    <div className="text-xs text-muted-foreground p-2">暂未配置任何信息源。</div>
                   )}
                   {sourceGroups.map(([category, groupedSources]) => (
                     <div key={category} className="space-y-1">
@@ -868,7 +868,7 @@ export default function MonitorsPage() {
                         aria-expanded={expandedSourceCategories[category] ?? true}
                         className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground rounded hover:bg-muted/40"
                       >
-                        <span>{`Category: ${category}`}</span>
+                        <span>{`分类: ${category}`}</span>
                         <ChevronDown
                           className={cn(
                             "w-3.5 h-3.5 transition-transform",
@@ -919,7 +919,7 @@ export default function MonitorsPage() {
                               </label>
                               {isSelected && (
                                 <div className="ml-6 mt-2 flex items-center gap-2">
-                                  <span className="text-xs text-muted-foreground">Fetch limit</span>
+                                  <span className="text-xs text-muted-foreground">获取限制</span>
                                   <input
                                     type="number"
                                     min={1}
@@ -955,10 +955,10 @@ export default function MonitorsPage() {
                                       });
                                     }}
                                     aria-label={`Fetch limit for ${source.name}`}
-                                    placeholder="default"
+                                    placeholder="默认"
                                     className="h-8 w-24 rounded-md border border-input bg-transparent px-2 text-xs"
                                   />
-                                  <span className="text-[11px] text-muted-foreground">default: daily 5 / others 20</span>
+                                  <span className="text-[11px] text-muted-foreground">默认：每日 5 篇 / 其他 20 篇</span>
                                 </div>
                               )}
                               {isSelected && isArxivApi && (
@@ -1040,7 +1040,7 @@ export default function MonitorsPage() {
                               )}
                               {isSelected && isTwitterSnaplytics && availableUsernames.length > 0 && (
                                 <div className="ml-6 mt-2 space-y-2">
-                                  <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">Accounts</div>
+                                  <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">账号列表</div>
                                   <div className="grid grid-cols-2 gap-2">
                                     {availableUsernames.map((username) => {
                                       const isSubSelected = selectedUsernames.includes(username);
@@ -1088,15 +1088,15 @@ export default function MonitorsPage() {
 
               <div className="space-y-3 border border-border/40 rounded-md p-3">
                 <div>
-                  <label className="text-sm font-medium">AI Routing (Advanced)</label>
+                  <label className="text-sm font-medium">AI 路由配置（高级）</label>
                   <p className="text-[11px] text-muted-foreground mt-1">
-                    Override stage provider/model for this monitor. Empty values inherit global defaults
-                    {aiRoutingDefaults?.profile_name ? ` (${aiRoutingDefaults.profile_name}).` : "."}
+                    在此覆盖该任务中不同阶段的模型配置。如果留空，则继承全局默认设置。
+                    {aiRoutingDefaults?.profile_name ? `（当前为 ${aiRoutingDefaults.profile_name}）` : ""}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-filter-provider" className="text-xs font-medium text-muted-foreground">Filter stage provider</label>
+                    <label htmlFor="monitor-ai-filter-provider" className="text-xs font-medium text-muted-foreground">过滤阶段提供商</label>
                     <select
                       id="monitor-ai-filter-provider"
                       value={aiRouting.stages?.filter?.primary ?? ""}
@@ -1110,7 +1110,7 @@ export default function MonitorsPage() {
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-keywords-provider" className="text-xs font-medium text-muted-foreground">Keywords stage provider</label>
+                    <label htmlFor="monitor-ai-keywords-provider" className="text-xs font-medium text-muted-foreground">提取关键字阶段提供商</label>
                     <select
                       id="monitor-ai-keywords-provider"
                       value={aiRouting.stages?.keywords?.primary ?? ""}
@@ -1124,7 +1124,7 @@ export default function MonitorsPage() {
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-report-provider" className="text-xs font-medium text-muted-foreground">Report stage provider</label>
+                    <label htmlFor="monitor-ai-report-provider" className="text-xs font-medium text-muted-foreground">生成报告阶段提供商</label>
                     <select
                       id="monitor-ai-report-provider"
                       value={aiRouting.stages?.report?.primary ?? ""}
@@ -1143,29 +1143,29 @@ export default function MonitorsPage() {
                     {MODEL_PROVIDER_OPTIONS.filter((provider) => selectedAiProviders.includes(provider)).map((provider) => (
                       <div key={provider} className="grid grid-cols-1 md:grid-cols-3 gap-2">
                         <div className="space-y-1.5">
-                          <label htmlFor={`monitor-ai-model-${provider}`} className="text-xs font-medium text-muted-foreground">{`Model for ${provider}`}</label>
+                          <label htmlFor={`monitor-ai-model-${provider}`} className="text-xs font-medium text-muted-foreground">{`模型 (${provider})`}</label>
                           <input
                             id={`monitor-ai-model-${provider}`}
                             value={aiRouting.providers?.[provider]?.model ?? ""}
                             onChange={(e) => handleAiProviderConfigChange(provider, "model", e.target.value)}
-                            placeholder={provider === "agent_codex" ? "gpt-5-codex" : "gpt-4o-mini"}
+                            placeholder="gpt-4o-mini"
                             className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <label htmlFor={`monitor-ai-timeout-${provider}`} className="text-xs font-medium text-muted-foreground">Timeout (sec)</label>
+                          <label htmlFor={`monitor-ai-timeout-${provider}`} className="text-xs font-medium text-muted-foreground">超时（秒）</label>
                           <input
                             id={`monitor-ai-timeout-${provider}`}
                             type="number"
                             min={1}
                             value={typeof aiRouting.providers?.[provider]?.timeout_sec === "number" ? aiRouting.providers?.[provider]?.timeout_sec : ""}
                             onChange={(e) => handleAiProviderConfigChange(provider, "timeout_sec", e.target.value)}
-                            placeholder={provider === "agent_codex" ? "90" : "30"}
+                            placeholder="30"
                             className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <label htmlFor={`monitor-ai-retry-${provider}`} className="text-xs font-medium text-muted-foreground">Max retry</label>
+                          <label htmlFor={`monitor-ai-retry-${provider}`} className="text-xs font-medium text-muted-foreground">最大重试次数</label>
                           <input
                             id={`monitor-ai-retry-${provider}`}
                             type="number"
@@ -1183,11 +1183,11 @@ export default function MonitorsPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Destinations (Optional)</label>
+                <label className="text-sm font-medium">输出配置（可选）</label>
                 <div className="max-h-40 overflow-y-auto border border-border/40 rounded-md p-2 space-y-1">
                   {destinations.filter(d => d.enabled).length === 0 && (
                     <div className="text-xs text-muted-foreground p-2">
-                      No active destinations configured. Please set them up in the Destinations tab.
+                      当前没有任何激活的输出流配置，请前往“输出配置”页配置。
                     </div>
                   )}
                   {destinations.filter(d => d.enabled).map((dest) => (
@@ -1210,20 +1210,20 @@ export default function MonitorsPage() {
                     </label>
                   ))}
                 </div>
-                <p className="text-[10px] text-muted-foreground">Select where to push the generated reports dynamically. Only active destinations are shown.</p>
+                <p className="text-[10px] text-muted-foreground">选择将生成的洞察报告发送到何处。此处仅显示处于活动状态的配置。</p>
               </div>
             </div>
 
             <div className="px-6 py-4 border-t border-border/40 flex items-center justify-end gap-3 shrink-0">
               <button onClick={closeModal} className="px-4 py-2 text-sm font-medium hover:bg-muted rounded-md transition-colors">
-                Cancel
+                取消
               </button>
               <button
                 onClick={() => void handleSubmit()}
                 disabled={!name || selectedSources.length === 0 || (timePeriod === "custom" && !reportType) || submitting}
                 className="px-4 py-2 text-sm font-medium bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
               >
-                {editingMonitorId ? submitting ? "Saving..." : "Save" : submitting ? "Creating..." : "Create"}
+                {editingMonitorId ? submitting ? "保存中..." : "保存" : submitting ? "创建中..." : "创建"}
               </button>
             </div>
           </div>

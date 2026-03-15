@@ -14,7 +14,7 @@ interface TransparentLogSection {
   items: Array<Record<string, unknown>>;
 }
 
-interface TransparentLogPayload {
+interface TransparentLogPayload extends Record<string, unknown> {
   kind: "transparent_log";
   summary: Record<string, unknown>;
   sections: TransparentLogSection[];

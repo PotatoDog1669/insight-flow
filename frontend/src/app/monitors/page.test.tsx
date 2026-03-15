@@ -140,11 +140,11 @@ describe("MonitorsPage", () => {
       },
     ]);
     mockedGetMonitorAIRoutingDefaults.mockResolvedValue({
-      profile_name: "codex_mvp_v1",
+      profile_name: "stable_v1",
       stages: {
-        filter: "agent_codex",
-        keywords: "agent_codex",
-        report: "agent_codex",
+        filter: "llm_openai",
+        keywords: "llm_openai",
+        report: "llm_openai",
       },
     });
     mockedGetMonitorLogs.mockResolvedValue([
@@ -352,18 +352,15 @@ describe("MonitorsPage", () => {
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
 
     fireEvent.change(screen.getByLabelText("Filter stage provider"), {
-      target: { value: "agent_codex" },
+      target: { value: "llm_openai" },
     });
     fireEvent.change(screen.getByLabelText("Keywords stage provider"), {
       target: { value: "llm_openai" },
     });
     fireEvent.change(screen.getByLabelText("Report stage provider"), {
-      target: { value: "agent_codex" },
+      target: { value: "llm_openai" },
     });
 
-    fireEvent.change(screen.getByLabelText("Model for agent_codex"), {
-      target: { value: "gpt-5-codex" },
-    });
     fireEvent.change(screen.getByLabelText("Model for llm_openai"), {
       target: { value: "gpt-4o-mini" },
     });
@@ -376,12 +373,11 @@ describe("MonitorsPage", () => {
           name: "Routing Monitor",
           ai_routing: {
             stages: {
-              filter: { primary: "agent_codex" },
+              filter: { primary: "llm_openai" },
               keywords: { primary: "llm_openai" },
-              report: { primary: "agent_codex" },
+              report: { primary: "llm_openai" },
             },
             providers: {
-              agent_codex: { model: "gpt-5-codex" },
               llm_openai: { model: "gpt-4o-mini" },
             },
           },
@@ -396,10 +392,10 @@ describe("MonitorsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
 
-    const inheritOptions = screen.getAllByRole("option", {
-      name: "inherit (current: agent_codex)",
+    const llmInheritOptions = screen.getAllByRole("option", {
+      name: "inherit (current: llm_openai)",
     });
-    expect(inheritOptions.length).toBeGreaterThan(0);
+    expect(llmInheritOptions.length).toBeGreaterThan(0);
   });
 
   it("sends ai_routing null on edit when advanced routing is cleared", async () => {
@@ -416,7 +412,7 @@ describe("MonitorsPage", () => {
         source_overrides: {},
         ai_routing: {
           stages: {
-            filter: { primary: "agent_codex" },
+            filter: { primary: "llm_openai" },
           },
         },
         enabled: true,
@@ -446,6 +442,18 @@ describe("MonitorsPage", () => {
         })
       );
     });
+  });
+
+  it("exposes only supported provider options", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
+
+    const optionTexts = screen.getAllByRole("option").map((option) => option.textContent?.trim() ?? "");
+    expect(optionTexts).toContain("llm_openai");
+    expect(optionTexts).toContain("rule");
+    expect(optionTexts).not.toContain("legacy_agent");
   });
 
   it("sends arxiv keywords and max_results override when creating monitor", async () => {

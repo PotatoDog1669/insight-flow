@@ -43,7 +43,7 @@ async def test_llm_filter_prompt_includes_source_context_and_metadata(monkeypatc
         return {"keep_indices": [0]}
 
     monkeypatch.setattr("app.providers.filter.run_llm_json", _fake_llm)
-    monkeypatch.setattr("app.providers.filter.run_codex_json", _fake_llm)
+    monkeypatch.setattr("app.providers.filter.run_llm_json", _fake_llm)
 
     provider = LLMFilterProvider()
     article = SimpleNamespace(

@@ -1,4 +1,4 @@
-"""Unified report stage providers (llm / agent)."""
+"""Unified report stage providers."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 import re
 
 from app.providers.base import BaseStageProvider
-from app.providers.codex_agent import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -41,7 +40,7 @@ def _build_events_prompt_payload(events: object) -> str:
     return json.dumps(compact, ensure_ascii=False)
 
 
-async def _run_ai_report(payload: dict, config: dict | None = None, prompt_scope: str = "agent") -> dict:
+async def _run_ai_report(payload: dict, config: dict | None = None) -> dict:
     title = str(payload.get("title", "AI Daily Report"))
     content = str(payload.get("content", ""))
     global_tldr = str(payload.get("global_tldr", ""))
@@ -49,7 +48,7 @@ async def _run_ai_report(payload: dict, config: dict | None = None, prompt_scope
     report_date = str(payload.get("date", "")).strip()
     prompt_content = _build_events_prompt_payload(events)
     prompt = render_prompt(
-        scope=prompt_scope,
+        scope="llm",
         name="report",
         variables={
             "title": title,
@@ -59,10 +58,7 @@ async def _run_ai_report(payload: dict, config: dict | None = None, prompt_scope
         },
     )
     run_config = dict(config or {})
-    if prompt_scope == "llm":
-        output = await run_llm_json(prompt=prompt, config=run_config)
-    else:
-        output = await run_codex_json(prompt=prompt, config=run_config)
+    output = await run_llm_json(prompt=prompt, config=run_config)
     generated_title = str(output.get("title") or title).strip() or title
     generated_tldr = _sanitize_global_tldr(str(output.get("global_tldr") or global_tldr).strip())
     return {
@@ -120,13 +116,4 @@ class LLMReportProvider(BaseStageProvider):
     name = "llm_openai"
 
     async def run(self, payload: dict, config: dict | None = None) -> dict:
-        return await _run_ai_report(payload=payload, config=config, prompt_scope="llm")
-
-
-@register(stage="report", name="agent_codex")
-class AgentReportProvider(BaseStageProvider):
-    stage = "report"
-    name = "agent_codex"
-
-    async def run(self, payload: dict, config: dict | None = None) -> dict:
-        return await _run_ai_report(payload=payload, config=config, prompt_scope="agent")
+        return await _run_ai_report(payload=payload, config=config)
