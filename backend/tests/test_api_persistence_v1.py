@@ -229,6 +229,41 @@ def test_update_provider_persists_to_user_settings(client: TestClient, db_sessio
     assert providers["llm_openai"]["config"]["base_url"] == "https://api.openai.com/v1"
     assert providers["llm_openai"]["config"]["model"] == "gpt-4.1-mini"
 
+
+def test_update_codex_provider_persists_to_user_settings(client: TestClient, db_session_factory) -> None:
+    response = client.patch(
+        "/api/v1/providers/llm_codex",
+        json={
+            "enabled": True,
+            "config": {
+                "base_url": "https://api.openai.com/v1/",
+                "model": "gpt-5-codex",
+                "timeout_sec": 90,
+                "max_retry": 1,
+                "api_key": "sk-codex-provider",
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    session_factory, _ = db_session_factory
+
+    async def _fetch_settings() -> dict:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(User).where(User.id == uuid.UUID("99999999-9999-9999-9999-999999999999"))
+            )
+            user = result.scalar_one_or_none()
+            assert user is not None
+            return user.settings
+
+    settings = asyncio.run(_fetch_settings())
+    providers = settings.get("providers", {})
+    assert providers["llm_codex"]["enabled"] is True
+    assert providers["llm_codex"]["config"]["base_url"] == "https://api.openai.com/v1"
+    assert providers["llm_codex"]["config"]["model"] == "gpt-5-codex"
+    assert providers["llm_codex"]["config"]["max_retry"] == 1
+
 def test_update_llm_provider_persists_to_user_settings(client: TestClient, db_session_factory) -> None:
     response = client.patch(
         "/api/v1/providers/llm_openai",

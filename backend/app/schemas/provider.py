@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ProviderId = Literal["llm_openai"]
+ProviderId = Literal["llm_codex", "llm_openai"]
 ProviderType = Literal["llm"]
 
 

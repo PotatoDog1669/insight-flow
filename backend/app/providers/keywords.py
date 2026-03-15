@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from typing import Awaitable, Callable
 
 from app.providers.base import BaseStageProvider
+from app.providers.codex_transport import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -140,7 +142,10 @@ def _normalize_metrics(raw: object) -> list[str]:
     return metrics
 
 
-async def _run_ai_keywords(article: object, config: dict | None = None) -> dict:
+JsonRunner = Callable[[str, dict | None], Awaitable[dict]]
+
+
+async def _run_ai_keywords(article: object, runner: JsonRunner, config: dict | None = None) -> dict:
     title = str(getattr(article, "title", "") or "").strip()
     content = _prepare_content_for_prompt(getattr(article, "content", ""))
     prompt = render_prompt(
@@ -152,7 +157,7 @@ async def _run_ai_keywords(article: object, config: dict | None = None) -> dict:
         },
     )
     run_config = dict(config or {})
-    output = await run_llm_json(prompt=prompt, config=run_config)
+    output = await runner(prompt=prompt, config=run_config)
     keywords = _normalize_keywords(output.get("keywords"))
     if not keywords:
         raise ValueError("Missing keywords from AI provider")
@@ -361,4 +366,16 @@ class LLMKeywordProvider(BaseStageProvider):
         article = _resolve_article_from_payload(payload)
         if article is None:
             return {"keywords": [], "summary": ""}
-        return await _run_ai_keywords(article=article, config=config)
+        return await _run_ai_keywords(article=article, runner=run_llm_json, config=config)
+
+
+@register(stage="keywords", name="llm_codex")
+class CodexKeywordProvider(BaseStageProvider):
+    stage = "keywords"
+    name = "llm_codex"
+
+    async def run(self, payload: dict, config: dict | None = None) -> dict:
+        article = _resolve_article_from_payload(payload)
+        if article is None:
+            return {"keywords": [], "summary": ""}
+        return await _run_ai_keywords(article=article, runner=run_codex_json, config=config)

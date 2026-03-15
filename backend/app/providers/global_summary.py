@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from typing import Awaitable, Callable
 
 from app.providers.base import BaseStageProvider
+from app.providers.codex_transport import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -49,7 +51,10 @@ def _sanitize_global_tldr(text: str) -> str:
     return "。".join(cleaned) + "。"
 
 
-async def _run_ai_summary(payload: dict, config: dict | None = None) -> dict:
+JsonRunner = Callable[[str, dict | None], Awaitable[dict]]
+
+
+async def _run_ai_summary(payload: dict, runner: JsonRunner, config: dict | None = None) -> dict:
     events = payload.get("events", [])
     prompt_content = _build_events_prompt_payload(events)
     prompt = render_prompt(
@@ -58,7 +63,7 @@ async def _run_ai_summary(payload: dict, config: dict | None = None) -> dict:
         variables={"events_json": prompt_content},
     )
     run_config = dict(config or {})
-    output = await run_llm_json(prompt=prompt, config=run_config)
+    output = await runner(prompt=prompt, config=run_config)
     generated = _sanitize_global_tldr(str(output.get("global_tldr") or "").strip())
     return {
         "global_tldr": generated,
@@ -76,4 +81,13 @@ class LLMGlobalSummaryProvider(BaseStageProvider):
     name = "llm_openai"
 
     async def run(self, payload: dict, config: dict | None = None) -> dict:
-        return await _run_ai_summary(payload=payload, config=config)
+        return await _run_ai_summary(payload=payload, runner=run_llm_json, config=config)
+
+
+@register(stage="global_summary", name="llm_codex")
+class CodexGlobalSummaryProvider(BaseStageProvider):
+    stage = "global_summary"
+    name = "llm_codex"
+
+    async def run(self, payload: dict, config: dict | None = None) -> dict:
+        return await _run_ai_summary(payload=payload, runner=run_codex_json, config=config)

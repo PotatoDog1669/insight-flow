@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Awaitable, Callable
 
 from app.providers.base import BaseStageProvider
+from app.providers.codex_transport import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.providers.registry import register
 from app.prompts.registry import render_prompt
@@ -107,7 +109,10 @@ def _prepare_filter_snippet(article: object, *, max_chars: int = 420) -> str:
     return combined[:max_chars]
 
 
-async def _run_ai_filter(articles: list, config: dict | None = None) -> dict:
+JsonRunner = Callable[[str, dict | None], Awaitable[dict]]
+
+
+async def _run_ai_filter(articles: list, runner: JsonRunner, config: dict | None = None) -> dict:
     serialized_items = []
     for idx, article in enumerate(articles):
         metadata = getattr(article, "metadata", {}) or {}
@@ -134,7 +139,7 @@ async def _run_ai_filter(articles: list, config: dict | None = None) -> dict:
         variables={"items_json": json.dumps(serialized_items, ensure_ascii=False)},
     )
     run_config = dict(config or {})
-    output = await run_llm_json(prompt=prompt, config=run_config)
+    output = await runner(prompt=prompt, config=run_config)
     raw_indices = output.get("keep_indices", [])
     if not isinstance(raw_indices, list):
         raise ValueError("keep_indices must be a list")
@@ -165,4 +170,16 @@ class LLMFilterProvider(BaseStageProvider):
         articles = payload.get("articles", [])
         if not articles:
             return {"articles": []}
-        return await _run_ai_filter(articles=articles, config=config)
+        return await _run_ai_filter(articles=articles, runner=run_llm_json, config=config)
+
+
+@register(stage="filter", name="llm_codex")
+class CodexFilterProvider(BaseStageProvider):
+    stage = "filter"
+    name = "llm_codex"
+
+    async def run(self, payload: dict, config: dict | None = None) -> dict:
+        articles = payload.get("articles", [])
+        if not articles:
+            return {"articles": []}
+        return await _run_ai_filter(articles=articles, runner=run_codex_json, config=config)

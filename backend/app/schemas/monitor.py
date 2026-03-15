@@ -10,8 +10,8 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 
-ProviderName = Literal["rule", "llm_openai"]
-ReportProviderName = Literal["llm_openai"]
+ProviderName = Literal["rule", "llm_codex", "llm_openai"]
+ReportProviderName = Literal["llm_codex", "llm_openai"]
 
 
 class MonitorStageRoute(BaseModel):

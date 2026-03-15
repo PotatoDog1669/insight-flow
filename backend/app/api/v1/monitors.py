@@ -111,12 +111,12 @@ async def get_monitor_ai_routing_defaults():
         stages={
             "filter": _resolve_default_stage_provider(
                 candidate=profile.stages.filter.primary,
-                allowed={"rule", "llm_openai"},
+                allowed={"rule", "llm_openai", "llm_codex"},
                 fallback="rule",
             ),
             "keywords": _resolve_default_stage_provider(
                 candidate=profile.stages.keywords.primary,
-                allowed={"rule", "llm_openai"},
+                allowed={"rule", "llm_openai", "llm_codex"},
                 fallback="rule",
             ),
             "global_summary": _resolve_default_stage_provider(
@@ -125,12 +125,12 @@ async def get_monitor_ai_routing_defaults():
                     if profile.stages.global_summary is not None
                     else profile.stages.report.primary
                 ),
-                allowed={"llm_openai"},
+                allowed={"llm_openai", "llm_codex"},
                 fallback="llm_openai",
             ),
             "report": _resolve_default_stage_provider(
                 candidate=profile.stages.report.primary,
-                allowed={"llm_openai"},
+                allowed={"llm_openai", "llm_codex"},
                 fallback="llm_openai",
             ),
         },

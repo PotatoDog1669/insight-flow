@@ -127,7 +127,8 @@ export default function ProvidersPage() {
             <header className="mb-8">
                 <h1 className="mb-2 text-3xl font-bold tracking-tight">模型配置</h1>
                 <p className="max-w-2xl text-sm text-muted-foreground">
-                    保留统一管理工作流使用的 LLM 配置。
+                    统一管理工作流使用的 LLM provider。OpenAI 与 Codex 复用同一套 prompts 和 workflow，
+                    这里只决定底层模型与连接参数。
                 </p>
             </header>
 

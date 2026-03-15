@@ -32,12 +32,13 @@ import { cn } from "@/lib/utils";
 import type { Destination } from "@/lib/api";
 
 const STAGE_PROVIDER_OPTIONS: Record<MonitorAIStageName, MonitorAIProviderName[]> = {
-  filter: ["rule", "llm_openai"],
-  keywords: ["rule", "llm_openai"],
-  report: ["llm_openai"],
+  filter: ["rule", "llm_codex", "llm_openai"],
+  keywords: ["rule", "llm_codex", "llm_openai"],
+  global_summary: ["llm_codex", "llm_openai"],
+  report: ["llm_codex", "llm_openai"],
 };
 
-const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_openai"];
+const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_codex", "llm_openai"];
 const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
 const isActiveRunStatus = (status: string) =>
   ACTIVE_RUN_STATUSES.includes(status as (typeof ACTIVE_RUN_STATUSES)[number]);
@@ -1099,6 +1100,7 @@ export default function MonitorsPage() {
                     <label htmlFor="monitor-ai-filter-provider" className="text-xs font-medium text-muted-foreground">过滤阶段提供商</label>
                     <select
                       id="monitor-ai-filter-provider"
+                      aria-label="Filter stage provider"
                       value={aiRouting.stages?.filter?.primary ?? ""}
                       onChange={(e) => handleAiStageProviderChange("filter", e.target.value)}
                       className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
@@ -1113,6 +1115,7 @@ export default function MonitorsPage() {
                     <label htmlFor="monitor-ai-keywords-provider" className="text-xs font-medium text-muted-foreground">提取关键字阶段提供商</label>
                     <select
                       id="monitor-ai-keywords-provider"
+                      aria-label="Keywords stage provider"
                       value={aiRouting.stages?.keywords?.primary ?? ""}
                       onChange={(e) => handleAiStageProviderChange("keywords", e.target.value)}
                       className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
@@ -1124,9 +1127,25 @@ export default function MonitorsPage() {
                     </select>
                   </div>
                   <div className="space-y-1.5">
+                    <label htmlFor="monitor-ai-global-summary-provider" className="text-xs font-medium text-muted-foreground">全局摘要阶段提供商</label>
+                    <select
+                      id="monitor-ai-global-summary-provider"
+                      aria-label="Global summary stage provider"
+                      value={aiRouting.stages?.global_summary?.primary ?? ""}
+                      onChange={(e) => handleAiStageProviderChange("global_summary", e.target.value)}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
+                    >
+                      <option value="">{aiRoutingInheritLabel("global_summary")}</option>
+                      {STAGE_PROVIDER_OPTIONS.global_summary.map((provider) => (
+                        <option key={provider} value={provider}>{provider}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
                     <label htmlFor="monitor-ai-report-provider" className="text-xs font-medium text-muted-foreground">生成报告阶段提供商</label>
                     <select
                       id="monitor-ai-report-provider"
+                      aria-label="Report stage provider"
                       value={aiRouting.stages?.report?.primary ?? ""}
                       onChange={(e) => handleAiStageProviderChange("report", e.target.value)}
                       className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
@@ -1146,6 +1165,7 @@ export default function MonitorsPage() {
                           <label htmlFor={`monitor-ai-model-${provider}`} className="text-xs font-medium text-muted-foreground">{`模型 (${provider})`}</label>
                           <input
                             id={`monitor-ai-model-${provider}`}
+                            aria-label={`Model for ${provider}`}
                             value={aiRouting.providers?.[provider]?.model ?? ""}
                             onChange={(e) => handleAiProviderConfigChange(provider, "model", e.target.value)}
                             placeholder="gpt-4o-mini"
@@ -1156,6 +1176,7 @@ export default function MonitorsPage() {
                           <label htmlFor={`monitor-ai-timeout-${provider}`} className="text-xs font-medium text-muted-foreground">超时（秒）</label>
                           <input
                             id={`monitor-ai-timeout-${provider}`}
+                            aria-label={`Timeout for ${provider}`}
                             type="number"
                             min={1}
                             value={typeof aiRouting.providers?.[provider]?.timeout_sec === "number" ? aiRouting.providers?.[provider]?.timeout_sec : ""}
@@ -1168,6 +1189,7 @@ export default function MonitorsPage() {
                           <label htmlFor={`monitor-ai-retry-${provider}`} className="text-xs font-medium text-muted-foreground">最大重试次数</label>
                           <input
                             id={`monitor-ai-retry-${provider}`}
+                            aria-label={`Max retry for ${provider}`}
                             type="number"
                             min={0}
                             value={typeof aiRouting.providers?.[provider]?.max_retry === "number" ? aiRouting.providers?.[provider]?.max_retry : ""}

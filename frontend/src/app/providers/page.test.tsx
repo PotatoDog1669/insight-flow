@@ -22,10 +22,26 @@ describe("ProvidersPage", () => {
     vi.clearAllMocks();
     mockedGetProviders.mockResolvedValue([
       {
+        id: "llm_codex",
+        name: "LLM Codex",
+        type: "llm",
+        description: "用于 workflow 加工阶段的 Codex LLM 配置，与 OpenAI 共享同一套 prompts 和 workflow。",
+        enabled: false,
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5-codex",
+          timeout_sec: 45,
+          max_retry: 2,
+          max_output_tokens: 2048,
+          temperature: 0.3,
+          api_key: "",
+        },
+      },
+      {
         id: "llm_openai",
         name: "LLM OpenAI",
         type: "llm",
-        description: "LLM executor for filter / keywords / report stages.",
+        description: "用于 workflow 加工阶段的 OpenAI LLM 配置，与 Codex 共享同一套 prompts 和 workflow。",
         enabled: true,
         config: {
           base_url: "https://api.openai.com/v1",
@@ -42,7 +58,7 @@ describe("ProvidersPage", () => {
       id: "llm_openai",
       name: "LLM OpenAI",
       type: "llm",
-      description: "LLM executor for filter / keywords / report stages.",
+      description: "用于 workflow 加工阶段的 OpenAI LLM 配置，与 Codex 共享同一套 prompts 和 workflow。",
       enabled: true,
       config: {
         base_url: "https://api.openai.com/v1",
@@ -66,9 +82,12 @@ describe("ProvidersPage", () => {
     render(<ProvidersPage />);
 
     await screen.findByRole("heading", { name: "模型配置" });
-    expect(screen.getByText("统一管理工作流使用的 LLM 配置。后续 Agent 会走独立通道，不在这里配置。")).toBeInTheDocument();
+    expect(
+      screen.getByText(/统一管理工作流使用的 LLM provider。OpenAI 与 Codex 复用同一套 prompts 和 workflow/)
+    ).toBeInTheDocument();
+    expect(screen.getByText("LLM Codex")).toBeInTheDocument();
     expect(screen.getByText("LLM OpenAI")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "配置" })[1]);
     fireEvent.change(screen.getByPlaceholderText("sk-..."), {
       target: { value: "sk-live" },
     });

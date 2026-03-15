@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     llm_fallback_model: str = Field(default=_yaml.get("llm", {}).get("fallback_model", "deepseek-chat"))
     llm_max_tokens: int = Field(default=_yaml.get("llm", {}).get("max_tokens", 2048))
     llm_temperature: float = Field(default=_yaml.get("llm", {}).get("temperature", 0.3))
+    codex_api_key: str = Field(default="")
+    codex_base_url: str = Field(default="https://api.openai.com/v1")
+    codex_model: str = Field(default="gpt-5-codex")
+    codex_timeout_sec: int = Field(default=120)
 
     # Scheduler
     daily_collect_time: str = Field(default=_yaml.get("scheduler", {}).get("daily_collect_time", "06:30"))

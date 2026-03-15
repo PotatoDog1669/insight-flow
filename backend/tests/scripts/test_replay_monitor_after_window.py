@@ -237,7 +237,7 @@ def test_provider_overrides_from_user_settings_keeps_enabled_configs_and_sets_ll
                     "enabled": True,
                     "config": {"base_url": "https://example.com/v1", "model": "qwen-test", "timeout_sec": 60},
                 },
-                "llm_openai": {
+                "llm_codex": {
                     "enabled": False,
                     "config": {"base_url": "https://codex.example.com", "timeout_sec": 90},
                 },

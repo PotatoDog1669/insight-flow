@@ -144,6 +144,7 @@ describe("MonitorsPage", () => {
       stages: {
         filter: "llm_openai",
         keywords: "llm_openai",
+        global_summary: "llm_openai",
         report: "llm_openai",
       },
     });
@@ -357,12 +358,18 @@ describe("MonitorsPage", () => {
     fireEvent.change(screen.getByLabelText("Keywords stage provider"), {
       target: { value: "llm_openai" },
     });
+    fireEvent.change(screen.getByLabelText("Global summary stage provider"), {
+      target: { value: "llm_codex" },
+    });
     fireEvent.change(screen.getByLabelText("Report stage provider"), {
-      target: { value: "llm_openai" },
+      target: { value: "llm_codex" },
     });
 
     fireEvent.change(screen.getByLabelText("Model for llm_openai"), {
       target: { value: "gpt-4o-mini" },
+    });
+    fireEvent.change(screen.getByLabelText("Model for llm_codex"), {
+      target: { value: "gpt-5-codex" },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -375,9 +382,11 @@ describe("MonitorsPage", () => {
             stages: {
               filter: { primary: "llm_openai" },
               keywords: { primary: "llm_openai" },
-              report: { primary: "llm_openai" },
+              global_summary: { primary: "llm_codex" },
+              report: { primary: "llm_codex" },
             },
             providers: {
+              llm_codex: { model: "gpt-5-codex" },
               llm_openai: { model: "gpt-4o-mini" },
             },
           },
@@ -451,6 +460,7 @@ describe("MonitorsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
 
     const optionTexts = screen.getAllByRole("option").map((option) => option.textContent?.trim() ?? "");
+    expect(optionTexts).toContain("llm_codex");
     expect(optionTexts).toContain("llm_openai");
     expect(optionTexts).toContain("rule");
     expect(optionTexts).not.toContain("legacy_agent");

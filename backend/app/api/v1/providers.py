@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.database import get_db
 from app.models.user import User
+from app.providers.codex_transport import run_codex_json
 from app.providers.llm_chat import run_llm_json
 from app.schemas.provider import ProviderId, ProviderResponse, ProviderTestRequest, ProviderTestResponse, ProviderUpdate
 
@@ -24,10 +25,24 @@ router = APIRouter()
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 
 PROVIDER_PRESETS: dict[ProviderId, dict] = {
+    "llm_codex": {
+        "name": "LLM Codex",
+        "type": "llm",
+        "description": "用于 workflow 加工阶段的 Codex LLM 配置，与 OpenAI 共享同一套 prompts 和 workflow。",
+        "default_config": {
+            "base_url": settings.codex_base_url or "https://api.openai.com/v1",
+            "model": settings.codex_model or "gpt-5-codex",
+            "timeout_sec": settings.codex_timeout_sec or 120,
+            "max_retry": 2,
+            "max_output_tokens": settings.llm_max_tokens or 2048,
+            "temperature": settings.llm_temperature or 0.3,
+            "api_key": "",
+        },
+    },
     "llm_openai": {
         "name": "LLM OpenAI",
         "type": "llm",
-        "description": "用于 workflow 加工阶段的 LLM 配置。",
+        "description": "用于 workflow 加工阶段的 OpenAI LLM 配置，与 Codex 共享同一套 prompts 和 workflow。",
         "default_config": {
             "base_url": "https://api.openai.com/v1",
             "model": settings.llm_primary_model or "gpt-4o-mini",
@@ -93,10 +108,12 @@ def _load_providers_settings(settings_data: dict | None) -> dict[str, dict]:
     raw = (settings_data or {}).get("providers", {})
     if not isinstance(raw, dict):
         return {}
-    llm_payload = raw.get("llm_openai")
-    if isinstance(llm_payload, dict):
-        return {"llm_openai": _normalize_provider_state("llm_openai", llm_payload)}
-    return {}
+    normalized: dict[str, dict] = {}
+    for provider_id in PROVIDER_PRESETS:
+        payload = raw.get(provider_id)
+        if isinstance(payload, dict):
+            normalized[provider_id] = _normalize_provider_state(provider_id, payload)
+    return normalized
 
 
 def _resolve_provider_config(
@@ -221,6 +238,8 @@ async def _execute_provider_test(provider_id: ProviderId, config: dict) -> dict:
     request_config["temperature"] = 0
     request_config["max_output_tokens"] = 32
 
+    if provider_id == "llm_codex":
+        return await run_codex_json(prompt=prompt, config=request_config)
     return await run_llm_json(prompt=prompt, config=request_config)
 
 

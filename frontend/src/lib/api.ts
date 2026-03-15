@@ -55,8 +55,8 @@ export interface Monitor {
     updated_at: string;
 }
 
-export type MonitorAIProviderName = "rule" | "llm_openai";
-export type MonitorAIStageName = "filter" | "keywords" | "report";
+export type MonitorAIProviderName = "rule" | "llm_codex" | "llm_openai";
+export type MonitorAIStageName = "filter" | "keywords" | "global_summary" | "report";
 
 export interface MonitorAIStageRoute {
     primary: MonitorAIProviderName;
@@ -99,7 +99,7 @@ export interface LLMProviderConfig {
 }
 
 export interface LLMProvider {
-    id: "llm_openai";
+    id: "llm_codex" | "llm_openai";
     name: string;
     type: "llm";
     description: string;

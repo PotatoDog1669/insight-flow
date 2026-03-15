@@ -52,12 +52,12 @@ logger = structlog.get_logger()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 _AI_STAGE_ALLOWED_PROVIDERS: dict[str, set[str]] = {
-    "filter": {"rule", "llm_openai"},
-    "keywords": {"rule", "llm_openai"},
-    "global_summary": {"llm_openai"},
-    "report": {"llm_openai"},
+    "filter": {"rule", "llm_codex", "llm_openai"},
+    "keywords": {"rule", "llm_codex", "llm_openai"},
+    "global_summary": {"llm_codex", "llm_openai"},
+    "report": {"llm_codex", "llm_openai"},
 }
-_AI_PROVIDER_NAMES = {"rule", "llm_openai"}
+_AI_PROVIDER_NAMES = {"rule", "llm_codex", "llm_openai"}
 _ORIGINAL_PIPELINE_PROCESS = ProcessingPipeline.process
 
 

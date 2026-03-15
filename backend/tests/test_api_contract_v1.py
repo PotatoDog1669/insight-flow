@@ -50,9 +50,9 @@ def test_monitors_ai_routing_defaults_contract(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["profile_name"]
-    assert data["stages"]["filter"] in {"rule", "llm_openai"}
-    assert data["stages"]["keywords"] in {"rule", "llm_openai"}
-    assert data["stages"]["report"] == "llm_openai"
+    assert data["stages"]["filter"] in {"rule", "llm_openai", "llm_codex"}
+    assert data["stages"]["keywords"] in {"rule", "llm_openai", "llm_codex"}
+    assert data["stages"]["report"] in {"llm_openai", "llm_codex"}
 
 
 def test_monitors_contract_supports_list_create_and_run(client: TestClient, monkeypatch) -> None:
@@ -390,8 +390,12 @@ def test_providers_contract_supports_list_and_update(client: TestClient) -> None
     assert list_response.status_code == 200
     items = list_response.json()
     assert isinstance(items, list)
-    assert [item["id"] for item in items] == ["llm_openai"]
+    assert [item["id"] for item in items] == ["llm_codex", "llm_openai"]
+    codex_default = items[0]
     llm_default = items[0]
+    assert codex_default["id"] == "llm_codex"
+    assert codex_default["config"]["timeout_sec"] == 120
+    llm_default = items[1]
     assert llm_default["config"]["timeout_sec"] == 120
 
     llm_update = client.patch(
@@ -445,4 +449,33 @@ def test_providers_contract_supports_connectivity_test(client: TestClient, monke
     assert payload["success"] is True
     assert payload["message"] == "pong"
     assert payload["model"] == "gpt-4.1-mini"
+    assert isinstance(payload["latency_ms"], int)
+
+
+def test_providers_contract_supports_codex_connectivity_test(client: TestClient, monkeypatch) -> None:
+    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
+        assert "Return JSON" in prompt
+        assert config is not None
+        assert config["base_url"] == "https://api.openai.com/v1"
+        assert config["model"] == "gpt-5-codex"
+        return {"ok": True, "message": "codex-pong"}
+
+    monkeypatch.setattr("app.api.v1.providers.run_codex_json", _fake_codex)
+
+    response = client.post(
+        "/api/v1/providers/llm_codex/test",
+        json={
+            "config": {
+                "base_url": "https://api.openai.com/v1/",
+                "model": "gpt-5-codex",
+                "timeout_sec": 8,
+            }
+        },
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["message"] == "codex-pong"
+    assert payload["model"] == "gpt-5-codex"
     assert isinstance(payload["latency_ms"], int)
