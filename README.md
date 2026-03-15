@@ -52,6 +52,19 @@ make dev-local
 - 后端 API 文档：`http://localhost:8000/docs`
 - 健康检查：`http://localhost:8000/health`
 
+## Mint 文档预览
+
+仓库内的 Mint 配置文件位于 `docs/docs.json`。
+
+本地预览文档站：
+
+```bash
+cd docs
+npx mint dev
+```
+
+如果你需要查看完整的后端 OpenAPI 文档，请单独启动后端服务后访问 `http://localhost:8000/docs`。
+
 如果你会用到浏览器采集能力，再额外执行：
 
 ```bash

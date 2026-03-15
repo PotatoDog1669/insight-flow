@@ -1,0 +1,44 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "LexDeepResearch",
+  "colors": {
+    "primary": "#4F46E5"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "开始",
+        "pages": [
+          "introduction",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "API 参考",
+        "pages": [
+          "api-reference/sources",
+          "api-reference/articles",
+          "api-reference/tasks",
+          "api-reference/reports"
+        ]
+      },
+      {
+        "group": "用户指南",
+        "pages": [
+          "guides/add-source",
+          "guides/configure-sink",
+          "guides/custom-template"
+        ]
+      },
+      {
+        "group": "开发者",
+        "pages": [
+          "development/architecture",
+          "development/collector-plugin",
+          "development/deployment"
+        ]
+      }
+    ]
+  }
+}
