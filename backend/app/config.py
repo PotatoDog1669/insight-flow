@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     """应用配置 — 环境变量自动覆盖同名字段"""
 
     # App
-    app_name: str = Field(default=_yaml.get("app", {}).get("name", "LexDeepResearch"))
+    app_name: str = Field(default=_yaml.get("app", {}).get("name", "Insight Flow"))
     app_debug: bool = Field(default=_yaml.get("app", {}).get("debug", False))
     app_log_level: str = Field(default=_yaml.get("app", {}).get("log_level", "INFO"))
 

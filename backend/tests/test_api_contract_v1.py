@@ -8,6 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import CollectTask
 
+
+def test_health_contract_uses_insight_flow_brand(client: TestClient) -> None:
+    res = client.get("/health")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["service"] == "Insight Flow"
+
+
 def test_openapi_contains_new_dashboard_routes(client: TestClient) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200

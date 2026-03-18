@@ -1,5 +1,5 @@
 """
-LexDeepResearch — FastAPI 入口
+Insight Flow — FastAPI 入口
 """
 
 from contextlib import asynccontextmanager
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    description="自动化信息获取与深度研究平台",
+    description="Insight Flow 自动化信息获取与深度研究平台",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -53,4 +53,4 @@ app.include_router(api_router, prefix="/api")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "LexDeepResearch"}
+    return {"status": "ok", "service": "Insight Flow"}
