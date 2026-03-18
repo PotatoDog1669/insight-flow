@@ -156,9 +156,9 @@ output/    运行日志与调试产物（task events + run artifacts）
 
 代码中标注为 “P1 预留” 但接口已可用：
 
-- `GET /monitors/{id}/logs`
-- `PATCH /monitors/{id}`
-- `DELETE /monitors/{id}`
+- `GET /api/v1/monitors/{id}/logs`
+- `PATCH /api/v1/monitors/{id}`
+- `DELETE /api/v1/monitors/{id}`
 
 ## 5) 任务执行主链路（run monitor -> prepare task -> execute orchestrator -> collect/process/persist/report/publish）
 
