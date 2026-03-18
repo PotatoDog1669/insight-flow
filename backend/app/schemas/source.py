@@ -27,6 +27,7 @@ class SourceUpdate(BaseModel):
 
 class SourceResponse(SourceBase):
     id: uuid.UUID
+    target_url: str | None = None
     status: Literal["healthy", "error", "running"] = "healthy"
     last_run: datetime | None = Field(default=None, description="最近一次任务运行时间（可为空）")
     last_collected: datetime | None = None
@@ -47,7 +48,20 @@ class SampleArticle(BaseModel):
     published_at: datetime | None = None
 
 
+class SourceTestRequest(BaseModel):
+    keywords: list[str] = Field(default_factory=list)
+    max_results: int | None = Field(default=None, ge=1, le=200)
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+
+
 class SourceTestResponse(BaseModel):
     success: bool
     message: str | None = None
+    fetched_count: int | None = None
+    matched_count: int | None = None
+    effective_keywords: list[str] = Field(default_factory=list)
+    effective_max_results: int | None = None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
     sample_articles: list[SampleArticle] = Field(default_factory=list)

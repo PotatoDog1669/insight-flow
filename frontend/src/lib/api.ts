@@ -11,6 +11,7 @@ export interface Source {
     category: string;
     collect_method: string;
     config: Record<string, unknown>;
+    target_url?: string | null;
     enabled: boolean;
     status: "healthy" | "error" | "running";
     last_run: string | null;
@@ -341,6 +342,12 @@ export const deleteSource = (sourceId: string) =>
 export interface SourceTestResponse {
     success: boolean;
     message: string | null;
+    fetched_count?: number | null;
+    matched_count?: number | null;
+    effective_keywords?: string[];
+    effective_max_results?: number | null;
+    window_start?: string | null;
+    window_end?: string | null;
     sample_articles: {
         title: string;
         url: string | null;
@@ -348,9 +355,17 @@ export interface SourceTestResponse {
     }[];
 }
 
-export const testSource = (sourceId: string) =>
+export interface SourceTestRequest {
+    keywords?: string[];
+    max_results?: number;
+    start_at?: string;
+    end_at?: string;
+}
+
+export const testSource = (sourceId: string, body?: SourceTestRequest) =>
     fetchAPI<SourceTestResponse>(`/api/v1/sources/${sourceId}/test`, {
         method: "POST",
+        body: JSON.stringify(body ?? {}),
     });
 
 // ---- 文章 ----

@@ -215,7 +215,7 @@ async def _get_or_create_default_user(db: AsyncSession) -> User:
 async def _run_provider_connectivity_test(provider_id: ProviderId, config: dict) -> ProviderTestResponse:
     started_at = perf_counter()
     try:
-        result = await _execute_provider_test(provider_id, config)
+        result = await _execute_provider_test_with_retry(provider_id, config)
         latency_ms = max(int((perf_counter() - started_at) * 1000), 0)
         message = str(result.get("message") or "Connection successful")
         return ProviderTestResponse(success=True, message=message, latency_ms=latency_ms, model=str(config.get("model") or ""))
@@ -241,6 +241,29 @@ async def _execute_provider_test(provider_id: ProviderId, config: dict) -> dict:
     if provider_id == "llm_codex":
         return await run_codex_json(prompt=prompt, config=request_config)
     return await run_llm_json(prompt=prompt, config=request_config)
+
+
+async def _execute_provider_test_with_retry(provider_id: ProviderId, config: dict) -> dict:
+    max_retry = int(config.get("max_retry") or 0)
+    last_exc: ValueError | RuntimeError | httpx.HTTPError | None = None
+
+    for attempt in range(max_retry + 1):
+        try:
+            return await _execute_provider_test(provider_id, config)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            last_exc = exc
+            if attempt >= max_retry or not _is_retryable_provider_test_error(exc):
+                raise
+
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Provider connectivity test failed without an error")
+
+
+def _is_retryable_provider_test_error(exc: ValueError | RuntimeError | httpx.HTTPError) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in {408, 409, 429, 500, 502, 503, 504}
+    return isinstance(exc, httpx.RequestError)
 
 
 def _format_provider_test_error(exc: ValueError | RuntimeError | httpx.HTTPError) -> str:

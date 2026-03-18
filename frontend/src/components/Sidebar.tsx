@@ -25,17 +25,11 @@ export function Sidebar() {
 
     return (
         <>
-            {/* Mobile top bar */}
-            <div className="md:hidden flex items-center justify-between p-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-                <div className="font-semibold tracking-tight text-lg flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-md bg-foreground flex items-center justify-center">
-                        <span className="text-background text-xs font-bold leading-none">I</span>
-                    </div>
-                    Insight Flow
-                </div>
+            <div className="md:hidden fixed top-4 left-4 z-50">
                 <button
                     onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                    className="p-2 text-muted-foreground hover:bg-muted rounded-md"
+                    aria-label={isMobileMenuOpen ? "关闭导航菜单" : "打开导航菜单"}
+                    className="rounded-md border border-border/60 bg-background/95 p-2 text-muted-foreground shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/60"
                 >
                     <Menu className="w-5 h-5" />
                 </button>
@@ -54,15 +48,7 @@ export function Sidebar() {
                 "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-border/40 bg-background md:bg-transparent transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col",
                 isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             )}>
-                <div className="flex flex-col h-full py-6 px-4 relative">
-
-                    {/* Logo */}
-                    <div className="hidden md:flex items-center gap-2 px-2 pb-8">
-                        <div className="w-7 h-7 rounded-lg bg-foreground flex items-center justify-center shadow-sm">
-                            <span className="text-background text-sm font-bold leading-none tracking-tighter">I</span>
-                        </div>
-                        <span className="font-semibold tracking-tight text-lg">Insight Flow</span>
-                    </div>
+                <div className="relative flex h-full flex-col px-4 pb-6 pt-16 md:pt-6">
 
                     {/* Navigation Links */}
                     <nav className="space-y-1 flex-1">

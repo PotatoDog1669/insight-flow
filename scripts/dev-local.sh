@@ -96,13 +96,21 @@ PY
   return 0
 }
 
+recover_infra_after_probe_timeout() {
+  echo "[dev-local] Retrying infra with force-recreate after probe timeout..."
+  docker compose up -d --force-recreate postgres redis
+  wait_for_postgres
+}
+
 trap cleanup EXIT INT TERM
 
 echo "[dev-local] Starting infra (postgres, redis)..."
 cd "$ROOT_DIR"
 docker compose up -d postgres redis
 
-wait_for_postgres
+if ! wait_for_postgres; then
+  recover_infra_after_probe_timeout
+fi
 
 echo "[dev-local] Running migrations..."
 cd "$BACKEND_DIR"
@@ -153,6 +161,6 @@ BACKEND_PID=$!
 
 sleep 1
 
-echo "[dev-local] Starting frontend on :3000..."
+echo "[dev-local] Starting frontend on :3018..."
 cd "$FRONTEND_DIR"
 npm run dev

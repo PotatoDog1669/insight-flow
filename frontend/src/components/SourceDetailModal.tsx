@@ -31,13 +31,19 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<SourceTestResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [testKeywords, setTestKeywords] = useState("");
+    const [testMaxResults, setTestMaxResults] = useState("30");
+    const [testStartDate, setTestStartDate] = useState("");
+    const [testEndDate, setTestEndDate] = useState("");
+    const [testValidationError, setTestValidationError] = useState<string | null>(null);
 
     const canEditUrl = source.collect_method === "blog_scraper" || source.collect_method === "deepbrowse" || source.collect_method === "rss";
     const canEditTwitterUsers = source.collect_method === "twitter_snaplytics";
+    const isArxivTestSource = isArxivSource(source);
 
     useEffect(() => {
         // Extract url from config
-        let initialUrl = "";
+        let initialUrl = source.target_url ?? "";
         const sourceConfig = asObject(source.config) ?? {};
         if (source.collect_method === "blog_scraper" || source.collect_method === "deepbrowse") {
             const profile = asObject(sourceConfig.profile);
@@ -48,7 +54,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                 initialUrl = sourceConfig.url;
             }
         } else if (source.collect_method === "rss") {
-            initialUrl = typeof sourceConfig.feed_url === "string" ? sourceConfig.feed_url : "";
+            initialUrl = typeof sourceConfig.feed_url === "string" ? sourceConfig.feed_url : initialUrl;
         }
         if (source.collect_method === "twitter_snaplytics") {
             const usernames = asStringArray(sourceConfig.usernames);
@@ -59,6 +65,16 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
             }
             setUsernameDraft("");
         }
+        if (isArxivSource(source)) {
+            setTestKeywords(asStringArray(sourceConfig.keywords).join(", "));
+            setTestMaxResults(resolveInitialArxivMaxResults(sourceConfig));
+        } else {
+            setTestKeywords("");
+            setTestMaxResults("30");
+        }
+        setTestStartDate("");
+        setTestEndDate("");
+        setTestValidationError(null);
         setUrl(initialUrl);
     }, [source]);
 
@@ -137,12 +153,23 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
     };
 
     const handleTest = async () => {
+        const testPayload = isArxivTestSource ? buildArxivTestPayload({
+            keywordsValue: testKeywords,
+            maxResultsValue: testMaxResults,
+            startDate: testStartDate,
+            endDate: testEndDate,
+        }) : null;
+        if (isArxivTestSource && !testPayload.success) {
+            setTestValidationError(testPayload.message);
+            return;
+        }
         setTesting(true);
         setTestResult(null);
         setError(null);
+        setTestValidationError(null);
         try {
-            // It uses the latest saved config, so if users want to test a new url, they should save first.
-            const res = await testSource(source.id);
+            // URL edits still require save first, but arXiv test params are request-local only.
+            const res = await testSource(source.id, testPayload?.payload);
             setTestResult(res);
         } catch (err) {
             setTestResult({
@@ -260,7 +287,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
 
                     <div className="space-y-3">
                         <div className="flex items-center justify-between">
-                            <label className="text-sm font-medium">Connectivity Test</label>
+                            <label className="text-sm font-medium">{isArxivTestSource ? "arXiv Test" : "Connectivity Test"}</label>
                             <button
                                 onClick={handleTest}
                                 disabled={testing}
@@ -271,10 +298,117 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                             </button>
                         </div>
 
+                        {isArxivTestSource && (
+                            <div className="space-y-4 rounded-lg border border-border/50 bg-muted/20 p-4">
+                                <div className="space-y-2">
+                                    <label htmlFor="arxiv-test-keywords" className="text-xs font-medium text-muted-foreground">
+                                        Keywords
+                                    </label>
+                                    <input
+                                        id="arxiv-test-keywords"
+                                        aria-label="Keywords for arXiv test"
+                                        type="text"
+                                        value={testKeywords}
+                                        onChange={(e) => setTestKeywords(e.target.value)}
+                                        placeholder="reasoning, agent, multimodal"
+                                        className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                    />
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Test-only keywords. Leave empty to reuse saved source keywords.
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="arxiv-test-max-results" className="text-xs font-medium text-muted-foreground">
+                                        Max Results
+                                    </label>
+                                    <input
+                                        id="arxiv-test-max-results"
+                                        aria-label="Max results for arXiv test"
+                                        type="number"
+                                        min={1}
+                                        max={200}
+                                        value={testMaxResults}
+                                        onChange={(e) => setTestMaxResults(e.target.value)}
+                                        className="flex h-10 w-40 rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                    />
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Test-only fetch cap. Uses the saved source limit when available.
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <span className="text-xs font-medium text-muted-foreground">Quick Ranges</span>
+                                    <div className="flex flex-wrap gap-2">
+                                        {[
+                                            { label: "Last 24 Hours", amount: 1, unit: "hours" as const },
+                                            { label: "Last 7 Days", amount: 7, unit: "days" as const },
+                                            { label: "Last 15 Days", amount: 15, unit: "days" as const },
+                                            { label: "Last 30 Days", amount: 30, unit: "days" as const },
+                                        ].map((preset) => (
+                                            <button
+                                                key={preset.label}
+                                                type="button"
+                                                onClick={() => {
+                                                    const range = buildPresetRange(preset.amount, preset.unit);
+                                                    setTestStartDate(range.startDate);
+                                                    setTestEndDate(range.endDate);
+                                                    setTestValidationError(null);
+                                                }}
+                                                className="rounded-md border border-border/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                                            >
+                                                {preset.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <div className="space-y-2">
+                                        <label htmlFor="arxiv-test-start-date" className="text-xs font-medium text-muted-foreground">
+                                            Start Date
+                                        </label>
+                                        <input
+                                            id="arxiv-test-start-date"
+                                            aria-label="Start date for arXiv test"
+                                            type="date"
+                                            value={testStartDate}
+                                            onChange={(e) => setTestStartDate(e.target.value)}
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label htmlFor="arxiv-test-end-date" className="text-xs font-medium text-muted-foreground">
+                                            End Date
+                                        </label>
+                                        <input
+                                            id="arxiv-test-end-date"
+                                            aria-label="End date for arXiv test"
+                                            type="date"
+                                            value={testEndDate}
+                                            onChange={(e) => setTestEndDate(e.target.value)}
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                        />
+                                    </div>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Date-only ranges use the full local day: start at 00:00 and end at 23:59.
+                                </p>
+
+                                {testValidationError && (
+                                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
+                                        {testValidationError}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {testing && (
                             <div className="h-32 rounded-lg border border-dashed border-border/60 bg-muted/20 flex items-center justify-center flex-col gap-2">
                                 <div className="w-5 h-5 rounded-full border-2 border-foreground border-t-transparent animate-spin" />
-                                <p className="text-sm text-muted-foreground">Running dry-run collector...</p>
+                                <p className="text-sm text-muted-foreground">
+                                    {isArxivTestSource ? "Running arXiv retrieval test..." : "Running dry-run collector..."}
+                                </p>
                             </div>
                         )}
 
@@ -290,14 +424,33 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                     </div>
                                 </div>
 
+                                {isArxivTestSource && testResult.success && (
+                                    <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                                        <p>Fetched: {testResult.fetched_count ?? 0}</p>
+                                        <p>Matched: {testResult.matched_count ?? 0}</p>
+                                        <p className="sm:col-span-2">
+                                            Keywords: {(testResult.effective_keywords ?? []).join(", ") || "Saved source defaults"}
+                                        </p>
+                                        <p className="sm:col-span-2">
+                                            Max results: {testResult.effective_max_results ?? "Default"}
+                                        </p>
+                                        <p className="sm:col-span-2">
+                                            Window: {formatWindowRange(testResult.window_start, testResult.window_end)}
+                                        </p>
+                                    </div>
+                                )}
+
                                 {testResult.sample_articles.length > 0 && (
                                     <div className="space-y-2 mt-4 pt-4 border-t border-border/30">
-                                        <p className="text-xs font-medium text-foreground">Sample Items Fetched:</p>
+                                        <p className="text-xs font-medium text-foreground">
+                                            {isArxivTestSource ? "Matched Sample Articles:" : "Sample Items Fetched:"}
+                                        </p>
                                         <div className="space-y-2">
                                             {testResult.sample_articles.map((article, idx) => (
                                                 <div key={idx} className="bg-background/80 rounded border border-border/50 p-2 text-xs">
-                                                    <p className="font-medium truncate" title={article.title}>{article.title}</p>
-                                                    {article.url && <p className="text-muted-foreground truncate mt-0.5">{article.url}</p>}
+                                                    <p className="font-medium whitespace-normal break-words" title={article.title}>{article.title}</p>
+                                                    {article.url && <p className="text-muted-foreground whitespace-normal break-all mt-0.5">{article.url}</p>}
+                                                    {article.published_at && <p className="text-muted-foreground mt-1">Published: {article.published_at}</p>}
                                                 </div>
                                             ))}
                                         </div>
@@ -326,5 +479,116 @@ function normalizeTwitterUsername(value: string): string {
     }
     normalized = normalized.trim();
     if (!normalized || /[\s/]/.test(normalized)) return "";
+    return normalized;
+}
+
+function isArxivSource(source: Source): boolean {
+    const sourceConfig = asObject(source.config) ?? {};
+    return source.category === "academic" && source.collect_method === "rss" && Boolean(sourceConfig.arxiv_api);
+}
+
+function buildPresetRange(amount: number, unit: "hours" | "days"): {
+    startDate: string;
+    endDate: string;
+} {
+    const end = new Date();
+    const start = new Date(end.getTime());
+    if (unit === "hours") {
+        start.setHours(start.getHours() - amount);
+    } else {
+        start.setDate(start.getDate() - amount);
+    }
+    return {
+        startDate: formatDateInput(start),
+        endDate: formatDateInput(end),
+    };
+}
+
+function buildArxivTestPayload({
+    keywordsValue,
+    maxResultsValue,
+    startDate,
+    endDate,
+}: {
+    keywordsValue: string;
+    maxResultsValue: string;
+    startDate: string;
+    endDate: string;
+}): { success: true; payload: { keywords?: string[]; start_at?: string; end_at?: string } } | { success: false; message: string } {
+    if ((startDate && !endDate) || (!startDate && endDate)) {
+        return { success: false, message: "Please provide both start and end dates." };
+    }
+
+    const startAt = startDate ? toLocalIso(startDate, true) : undefined;
+    const endAt = endDate ? toLocalIso(endDate, false) : undefined;
+    if (startAt && endAt && new Date(startAt).getTime() > new Date(endAt).getTime()) {
+        return { success: false, message: "Start date must be on or before end date." };
+    }
+
+    const keywords = keywordsValue
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    const payload: { keywords?: string[]; max_results?: number; start_at?: string; end_at?: string } = {};
+    const normalizedMaxResults = normalizeMaxResults(maxResultsValue);
+    if (normalizedMaxResults === null) {
+        return { success: false, message: "Max results must be between 1 and 200." };
+    }
+    if (keywords.length > 0) {
+        payload.keywords = Array.from(new Set(keywords)).slice(0, 20);
+    }
+    payload.max_results = normalizedMaxResults;
+    if (startAt) {
+        payload.start_at = startAt;
+    }
+    if (endAt) {
+        payload.end_at = endAt;
+    }
+    return { success: true, payload };
+}
+
+function toLocalIso(dateValue: string, isStartOfDay: boolean): string {
+    const [year, month, day] = dateValue.split("-").map(Number);
+    const date = isStartOfDay
+        ? new Date(year, (month || 1) - 1, day || 1, 0, 0, 0, 0)
+        : new Date(year, (month || 1) - 1, day || 1, 23, 59, 59, 999);
+    return date.toISOString();
+}
+
+function formatDateInput(value: Date): string {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
+function formatWindowRange(start: string | null | undefined, end: string | null | undefined): string {
+    if (!start && !end) return "No time window";
+    return `${start ?? "Unbounded"} -> ${end ?? "Unbounded"}`;
+}
+
+function resolveInitialArxivMaxResults(sourceConfig: ConfigObject): string {
+    const candidates = [sourceConfig.max_results, sourceConfig.max_items];
+    for (const candidate of candidates) {
+        if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 1 && candidate <= 200) {
+            return String(Math.floor(candidate));
+        }
+        if (typeof candidate === "string") {
+            const normalized = normalizeMaxResults(candidate);
+            if (normalized !== null) {
+                return String(normalized);
+            }
+        }
+    }
+    return "30";
+}
+
+function normalizeMaxResults(value: string): number | null {
+    const raw = value.trim();
+    if (!raw) return 30;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    const normalized = Math.floor(parsed);
+    if (normalized < 1 || normalized > 200) return null;
     return normalized;
 }

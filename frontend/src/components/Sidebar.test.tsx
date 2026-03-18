@@ -10,6 +10,7 @@ describe("Sidebar", () => {
   it("renders Chinese navigation labels", () => {
     render(<Sidebar />);
 
+    expect(screen.queryAllByText("LexDeepResearch")).toHaveLength(0);
     expect(screen.getByRole("link", { name: "报告" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "任务" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "归档" })).toBeInTheDocument();

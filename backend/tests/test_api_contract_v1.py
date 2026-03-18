@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import uuid
 
 from fastapi.testclient import TestClient
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import CollectTask
@@ -57,6 +58,7 @@ def test_sources_contract_includes_runtime_status_fields(client: TestClient) -> 
     item = data[0]
     assert "status" in item
     assert "last_run" in item
+    assert "target_url" in item
     assert item["status"] in {"healthy", "error", "running"}
 
 
@@ -494,3 +496,39 @@ def test_providers_contract_supports_codex_connectivity_test(client: TestClient,
     assert payload["message"] == "codex-pong"
     assert payload["model"] == "gpt-5-codex"
     assert isinstance(payload["latency_ms"], int)
+
+
+def test_providers_contract_retries_transient_codex_connectivity_errors(client: TestClient, monkeypatch) -> None:
+    calls = {"count": 0}
+
+    async def _fake_codex(prompt: str, config: dict | None = None) -> dict:
+        assert "Return JSON" in prompt
+        calls["count"] += 1
+        if calls["count"] == 1:
+            request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+            response = httpx.Response(502, request=request)
+            raise httpx.HTTPStatusError("Bad gateway", request=request, response=response)
+        assert config is not None
+        assert config["max_retry"] == 1
+        return {"ok": True, "message": "codex-pong"}
+
+    monkeypatch.setattr("app.api.v1.providers.run_codex_json", _fake_codex)
+
+    response = client.post(
+        "/api/v1/providers/llm_codex/test",
+        json={
+            "config": {
+                "base_url": "https://api.openai.com/v1/",
+                "model": "gpt-5.4",
+                "timeout_sec": 8,
+                "max_retry": 1,
+            }
+        },
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert calls["count"] == 2
+    assert payload["success"] is True
+    assert payload["message"] == "codex-pong"
+    assert payload["model"] == "gpt-5.4"

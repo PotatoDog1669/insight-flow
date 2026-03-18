@@ -2376,7 +2376,7 @@ class Orchestrator:
         elif normalized == "rss":
             config = {
                 "feed_url": "http://localhost:8000/api/v1/feed.xml",
-                "site_url": "http://localhost:3000",
+                "site_url": "http://localhost:3018",
                 "feed_title": "LexDeepResearch Reports",
                 "feed_description": "Latest generated reports from LexDeepResearch.",
                 "max_items": 20,

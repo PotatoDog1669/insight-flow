@@ -25,7 +25,7 @@ from app.sinks.base import BaseSink, PublishResult
 ATOM_NS = "http://www.w3.org/2005/Atom"
 CONTENT_NS = "http://purl.org/rss/1.0/modules/content/"
 DEFAULT_FEED_URL = "http://localhost:8000/api/v1/feed.xml"
-DEFAULT_SITE_URL = "http://localhost:3000"
+DEFAULT_SITE_URL = "http://localhost:3018"
 DEFAULT_FEED_TITLE = "LexDeepResearch Reports"
 DEFAULT_FEED_DESCRIPTION = "Latest generated reports from LexDeepResearch."
 DEFAULT_MAX_ITEMS = 20
@@ -169,7 +169,7 @@ def _resolve_site_url(raw: object, feed_url: str) -> str:
     parsed = urlparse(feed_url)
     if parsed.scheme and parsed.netloc:
         if parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port == 8000:
-            return f"{parsed.scheme}://{parsed.hostname}:3000"
+            return f"{parsed.scheme}://{parsed.hostname}:3018"
         return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
     return DEFAULT_SITE_URL
 

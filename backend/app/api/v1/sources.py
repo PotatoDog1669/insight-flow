@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -17,9 +18,11 @@ from app.schemas.source import CategoryStats
 from app.schemas.source import SampleArticle
 from app.schemas.source import SourceCreate
 from app.schemas.source import SourceResponse
+from app.schemas.source import SourceTestRequest
 from app.schemas.source import SourceTestResponse
 from app.schemas.source import SourceUpdate
 from app.collectors.registry import get_collector
+from app.collectors.site_profile_loader import load_site_profile
 
 router = APIRouter()
 
@@ -77,7 +80,11 @@ async def create_source(payload: SourceCreate, db: AsyncSession = Depends(get_db
 
 
 @router.post("/{source_id}/test", response_model=SourceTestResponse)
-async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
+async def test_source(
+    source_id: str,
+    payload: SourceTestRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """测试信息源连接"""
     source = await db.get(Source, _parse_uuid(source_id))
     if not source:
@@ -85,9 +92,43 @@ async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
 
     try:
         collector = get_collector(source.collect_method)
-        raw_articles = await collector.collect(source.config or {})
-        
-        sample = raw_articles[:3]
+        config = dict(source.config or {})
+        is_arxiv_source = _is_arxiv_source(source=source, config=config)
+        requested_keywords = [item.strip() for item in (payload.keywords if payload else []) if item.strip()]
+        if is_arxiv_source and requested_keywords:
+            config["keywords"] = list(dict.fromkeys(requested_keywords))[:20]
+        effective_max_results = None
+        if is_arxiv_source:
+            effective_max_results = _resolve_arxiv_test_limit(config=config, requested_limit=payload.max_results if payload else None)
+            config["max_results"] = effective_max_results
+            config["max_items"] = effective_max_results
+
+        raw_articles = await collector.collect(config)
+        filtered_articles = raw_articles
+        fetched_count = None
+        matched_count = None
+        effective_keywords: list[str] = []
+        window_start = None
+        window_end = None
+
+        if is_arxiv_source:
+            fetched_count = len(raw_articles)
+            window_start = payload.start_at if payload else None
+            window_end = payload.end_at if payload else None
+            effective_keywords = [
+                item.strip()
+                for item in (config.get("keywords") if isinstance(config.get("keywords"), list) else [])
+                if isinstance(item, str) and item.strip()
+            ]
+            filtered_articles = _filter_articles_for_test_window(
+                raw_articles=raw_articles,
+                start_at=window_start,
+                end_at=window_end,
+            )
+            matched_count = len(filtered_articles)
+
+        sample_limit = effective_max_results if is_arxiv_source and isinstance(effective_max_results, int) else 3
+        sample = filtered_articles[:sample_limit]
         sample_articles = [
             SampleArticle(
                 title=a.title,
@@ -95,10 +136,20 @@ async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
                 published_at=a.published_at
             ) for a in sample
         ]
-        
+
         return SourceTestResponse(
             success=True,
-            message=f"Connection successful. Retrieved {len(raw_articles)} items.",
+            message=(
+                f"Fetched {fetched_count} arXiv items, matched {matched_count} items in the requested window."
+                if is_arxiv_source
+                else f"Connection successful. Retrieved {len(raw_articles)} items."
+            ),
+            fetched_count=fetched_count,
+            matched_count=matched_count,
+            effective_keywords=effective_keywords,
+            effective_max_results=effective_max_results,
+            window_start=window_start,
+            window_end=window_end,
             sample_articles=sample_articles
         )
     except Exception as e:
@@ -176,6 +227,7 @@ def _to_source_response(source: Source, latest_task: CollectTask | None) -> Sour
         category=source.category,
         collect_method=source.collect_method,
         config=source.config or {},
+        target_url=_resolve_target_url(source.collect_method, source.config or {}),
         enabled=source.enabled,
         status=_status_from_task(latest_task),  # type: ignore[arg-type]
         last_run=(
@@ -194,3 +246,90 @@ def _parse_uuid(raw_id: str) -> uuid.UUID:
         return uuid.UUID(raw_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid UUID") from exc
+
+
+def _resolve_target_url(collect_method: str, config: dict[str, Any]) -> str | None:
+    if collect_method == "rss":
+        for key in ("feed_url", "url", "rss_url"):
+            value = config.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
+    if collect_method not in {"blog_scraper", "deepbrowse"}:
+        return None
+
+    profile = config.get("profile")
+    if isinstance(profile, dict):
+        start_urls = profile.get("start_urls")
+        if isinstance(start_urls, list):
+            for item in start_urls:
+                if isinstance(item, str) and item.strip():
+                    return item
+
+    url = config.get("url")
+    if isinstance(url, str) and url.strip():
+        return url
+
+    site_key = config.get("site_key")
+    if not isinstance(site_key, str) or not site_key.strip():
+        return None
+    try:
+        site_profile = load_site_profile(site_key)
+    except (FileNotFoundError, ValueError):
+        return None
+    start_urls = site_profile.get("start_urls")
+    if not isinstance(start_urls, list):
+        return None
+    for item in start_urls:
+        if isinstance(item, str) and item.strip():
+            return item
+    return None
+
+
+def _is_arxiv_source(*, source: Source, config: dict[str, Any]) -> bool:
+    return (
+        source.category == "academic"
+        and source.collect_method == "rss"
+        and bool(config.get("arxiv_api"))
+    )
+
+
+def _filter_articles_for_test_window(
+    *,
+    raw_articles: list[Any],
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> list[Any]:
+    if start_at is None and end_at is None:
+        return raw_articles
+
+    filtered: list[Any] = []
+    for item in raw_articles:
+        published_at = item.published_at
+        if not isinstance(published_at, datetime):
+            continue
+        if start_at is not None and published_at < start_at:
+            continue
+        if end_at is not None and published_at > end_at:
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _resolve_arxiv_test_limit(*, config: dict[str, Any], requested_limit: int | None) -> int:
+    candidates = [
+        requested_limit,
+        config.get("max_results"),
+        config.get("max_items"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, int) and 1 <= candidate <= 200:
+            return candidate
+        if isinstance(candidate, str):
+            value = candidate.strip()
+            if value.isdigit():
+                normalized = int(value)
+                if 1 <= normalized <= 200:
+                    return normalized
+    return 30

@@ -48,7 +48,7 @@ make dev-local
 
 启动后访问：
 
-- 前端：`http://localhost:3000`
+- 前端：`http://localhost:3018`
 - 后端 API 文档：`http://localhost:8000/docs`
 - 健康检查：`http://localhost:8000/health`
 

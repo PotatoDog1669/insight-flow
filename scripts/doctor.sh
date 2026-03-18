@@ -105,7 +105,7 @@ PY
 fi
 
 check_port 8000
-check_port 3000
+check_port 3018
 
 if [ "$FAILURES" -gt 0 ]; then
   echo "[doctor] completed with $FAILURES failure(s), $WARNINGS warning(s)"

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { SourceDetailModal } from "@/components/SourceDetailModal";
 import { testSource, updateSource, type Source } from "@/lib/api";
@@ -22,6 +22,29 @@ function makeTwitterSource(overrides: Partial<Source> = {}): Source {
     category: overrides.category ?? "social",
     collect_method: overrides.collect_method ?? "twitter_snaplytics",
     config: overrides.config ?? { usernames: ["anthropic"] },
+    enabled: overrides.enabled ?? true,
+    status: overrides.status ?? "healthy",
+    last_run: overrides.last_run ?? null,
+    last_collected: overrides.last_collected ?? null,
+    created_at: overrides.created_at ?? "2026-03-05T00:00:00Z",
+    updated_at: overrides.updated_at ?? "2026-03-05T00:00:00Z",
+  };
+}
+
+function makeArxivSource(overrides: Partial<Source> = {}): Source {
+  return {
+    id: overrides.id ?? "source-arxiv",
+    name: overrides.name ?? "arXiv",
+    category: overrides.category ?? "academic",
+    collect_method: overrides.collect_method ?? "rss",
+    config:
+      overrides.config ??
+      {
+        arxiv_api: true,
+        feed_url: "https://export.arxiv.org/api/query",
+        keywords: ["reasoning"],
+        categories: ["cs.AI"],
+      },
     enabled: overrides.enabled ?? true,
     status: overrides.status ?? "healthy",
     last_run: overrides.last_run ?? null,
@@ -55,16 +78,118 @@ describe("SourceDetailModal social usernames", () => {
     fireEvent.change(screen.getByPlaceholderText("@OpenAI"), {
       target: { value: "@OpenAI" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
-    await waitFor(() => {
-      expect(mockedUpdateSource).toHaveBeenCalledWith("source-twitter", {
-        config: expect.objectContaining({
-          usernames: ["anthropic", "OpenAI"],
-        }),
-      });
+    expect(mockedUpdateSource).toHaveBeenCalledWith("source-twitter", {
+      config: expect.objectContaining({
+        usernames: ["anthropic", "OpenAI"],
+      }),
     });
     expect(onUpdated).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+});
+
+describe("SourceDetailModal target url", () => {
+  it("prefills blog scraper url from target_url when config only has site_key", () => {
+    const source = {
+      ...makeTwitterSource({
+        id: "source-blog",
+        name: "Anthropic",
+        category: "blog",
+        collect_method: "blog_scraper",
+        config: { site_key: "anthropic", max_items: 20 },
+      }),
+      target_url: "https://anthropic.com/news",
+    } as Source;
+
+    render(
+      <SourceDetailModal
+        source={source}
+        onClose={vi.fn()}
+        onUpdated={vi.fn()}
+      />
+    );
+
+    expect(screen.getByDisplayValue("https://anthropic.com/news")).toBeInTheDocument();
+  });
+});
+
+describe("SourceDetailModal arXiv test controls", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedUpdateSource.mockResolvedValue(makeArxivSource() as never);
+    mockedTestSource.mockResolvedValue({
+      success: true,
+      message: "ok",
+      fetched_count: 12,
+      matched_count: 3,
+      effective_keywords: ["agent", "multimodal"],
+      effective_max_results: 12,
+      window_start: "2026-03-01T00:00:00Z",
+      window_end: "2026-03-15T23:59:59Z",
+      sample_articles: [],
+    });
+  });
+
+  it("renders arxiv-specific test controls and submits test-only params", async () => {
+    render(
+      <SourceDetailModal
+        source={makeArxivSource()}
+        onClose={vi.fn()}
+        onUpdated={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("arXiv Test")).toBeInTheDocument();
+    expect(screen.getByLabelText("Keywords for arXiv test")).toBeInTheDocument();
+    expect(screen.getByLabelText("Max results for arXiv test")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Last 15 Days" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Start time for arXiv test")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("End time for arXiv test")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Keywords for arXiv test"), {
+      target: { value: "agent, multimodal" },
+    });
+    fireEvent.change(screen.getByLabelText("Max results for arXiv test"), {
+      target: { value: "40" },
+    });
+    fireEvent.change(screen.getByLabelText("Start date for arXiv test"), {
+      target: { value: "2026-03-01" },
+    });
+    fireEvent.change(screen.getByLabelText("End date for arXiv test"), {
+      target: { value: "2026-03-15" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Test" }));
+
+    await waitFor(() => {
+      expect(mockedTestSource).toHaveBeenCalledWith(
+        "source-arxiv",
+        {
+          keywords: ["agent", "multimodal"],
+          max_results: 40,
+          start_at: new Date(2026, 2, 1, 0, 0, 0, 0).toISOString(),
+          end_at: new Date(2026, 2, 15, 23, 59, 59, 999).toISOString(),
+        }
+      );
+    });
+  });
+
+  it("keeps generic sources on the old connectivity test UI", () => {
+    render(
+      <SourceDetailModal
+        source={makeTwitterSource()}
+        onClose={vi.fn()}
+        onUpdated={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Connectivity Test")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Keywords for arXiv test")).not.toBeInTheDocument();
   });
 });

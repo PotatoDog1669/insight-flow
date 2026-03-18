@@ -90,11 +90,28 @@ class BlogScraperCollector(BaseCollector):
 def _resolve_profile(config: dict) -> dict[str, Any]:
     profile = config.get("profile")
     if isinstance(profile, dict):
+        site_key = config.get("site_key")
+        if isinstance(site_key, str) and site_key:
+            try:
+                base_profile = load_site_profile(site_key)
+            except (FileNotFoundError, ValueError):
+                return profile
+            return _deep_merge_profile(base_profile, profile)
         return profile
     site_key = config.get("site_key")
     if site_key:
         return load_site_profile(str(site_key))
     raise ValueError("BlogScraper collector requires profile dict or site_key")
+
+
+def _deep_merge_profile(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merged[key] = _deep_merge_profile(base[key], value)
+            continue
+        merged[key] = value
+    return merged
 
 
 def _extract_list_entries(
