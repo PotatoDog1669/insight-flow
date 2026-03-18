@@ -1,5 +1,5 @@
 /**
- * LexDeepResearch — 后端 API 调用封装
+ * Insight Flow — 后端 API 调用封装
  */
 
 // Use same-origin API by default so browser clients work in remote/devbox access too.

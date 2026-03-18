@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LexDeepResearch",
+  title: "Insight Flow",
   description: "AI-powered automated research and insight generation Dashboard",
 };
 
