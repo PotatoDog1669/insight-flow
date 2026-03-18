@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" width="1200" height="500">
   <defs>
     <style>
-      .bg { fill: #ffffff; stroke: #e5e7eb; stroke-width: 2; }
+      .bg { fill: transparent; stroke: none; }
       .text-black { fill: #0f1115; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-weight: 800; font-size: 130px; letter-spacing: -4px; }
       .text-blue { fill: #2563EB; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-weight: 700; font-size: 110px; letter-spacing: -3px; }
       .code { fill: #d1d5db; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 24px; font-weight: 500; text-anchor: start; }
@@ -78,14 +78,20 @@
   <!-- Foreground Title Logo -->
   <g transform="translate(80, 210)">
     
-    <!-- 1. "Insight" Text (Black) -->
+    <!-- 1. "Insight" Text (Black) with Mask for Cutouts -->
+    <mask id="insight-cutout">
+      <!-- Everything white under the mask is visible -->
+      <rect x="-50" y="-150" width="800" height="300" fill="white" />
+      <!-- Black cuts out the text -->
+      <rect fill="black" x="145" y="-115" width="22" height="22" /> <!-- Cutout near 'n' -->
+    </mask>
+
     <!-- Used tight tracking, heavy weight -->
-    <text class="text-black" x="0" y="0">Insight</text>
+    <text class="text-black" x="0" y="0" mask="url(#insight-cutout)">Insight</text>
     
     <!-- Stylized block overlays to imitate LiveKit logo dots/cuts -->
     <!-- In LiveKit, i dot is a square, some letters have square bits. We'll add some square decorations. -->
     <rect fill="#0f1115" x="120" y="-120" width="22" height="22" /> <!-- Dot for i? -->
-    <rect fill="#ffffff" x="145" y="-115" width="22" height="22" /> <!-- Cutout near 'n' -->
     <rect fill="#0f1115" x="375" y="-30"  width="24" height="24" />  <!-- Block near 'h' -->
     <rect fill="#0f1115" x="220" y="-130" width="18" height="18" />  <!-- Small block near 's' -->
 
