@@ -17,4 +17,11 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "模型配置" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "输出配置" })).toBeInTheDocument();
   });
+
+  it("uses Insight Flow brand and no legacy brand text", () => {
+    render(<Sidebar />);
+
+    expect(screen.getAllByText("Insight Flow").length).toBeGreaterThan(0);
+    expect(screen.queryByText("LexDeepResearch")).not.toBeInTheDocument();
+  });
 });

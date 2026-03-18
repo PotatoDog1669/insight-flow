@@ -29,9 +29,9 @@ export function Sidebar() {
             <div className="md:hidden flex items-center justify-between p-4 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
                 <div className="font-semibold tracking-tight text-lg flex items-center gap-2">
                     <div className="w-6 h-6 rounded-md bg-foreground flex items-center justify-center">
-                        <span className="text-background text-xs font-bold leading-none">L</span>
+                        <span className="text-background text-xs font-bold leading-none">I</span>
                     </div>
-                    LexDeepResearch
+                    Insight Flow
                 </div>
                 <button
                     onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -59,9 +59,9 @@ export function Sidebar() {
                     {/* Logo */}
                     <div className="hidden md:flex items-center gap-2 px-2 pb-8">
                         <div className="w-7 h-7 rounded-lg bg-foreground flex items-center justify-center shadow-sm">
-                            <span className="text-background text-sm font-bold leading-none tracking-tighter">L</span>
+                            <span className="text-background text-sm font-bold leading-none tracking-tighter">I</span>
                         </div>
-                        <span className="font-semibold tracking-tight text-lg">LexDeepResearch</span>
+                        <span className="font-semibold tracking-tight text-lg">Insight Flow</span>
                     </div>
 
                     {/* Navigation Links */}

@@ -16,6 +16,13 @@ def test_health_contract_uses_insight_flow_brand(client: TestClient) -> None:
     assert payload["service"] == "Insight Flow"
 
 
+def test_openapi_title_uses_insight_flow_brand(client: TestClient) -> None:
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["info"]["title"] == "Insight Flow"
+
+
 def test_openapi_contains_new_dashboard_routes(client: TestClient) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
