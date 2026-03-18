@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Settings, ExternalLink, HardDrive, Key, Save, CheckCircle2, Rss, Copy } from "lucide-react";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SecretField, SecretValue } from "@/components/secret-field";
 import { cn } from "@/lib/utils";
 import { getDestinations, updateDestination, type Destination } from "@/lib/api";
 
@@ -250,12 +251,11 @@ export default function DestinationsPage() {
                                             <>
                                                 <div className="space-y-1.5">
                                                     <label className="text-xs font-medium text-muted-foreground">集成令牌 (Token)</label>
-                                                    <input
-                                                        type="password"
+                                                    <SecretField
+                                                        label="集成令牌 (Token)"
                                                         value={editConfig.token || ""}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, token: e.target.value })}
+                                                        onChange={(value) => setEditConfig({ ...editConfig, token: value })}
                                                         placeholder="secret_..."
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                 </div>
                                                 <div className="space-y-1.5">
@@ -324,12 +324,11 @@ export default function DestinationsPage() {
                                                 </div>
                                                 <div className="space-y-1.5">
                                                     <label className="text-xs font-medium text-muted-foreground">API Key</label>
-                                                    <input
-                                                        type="password"
+                                                    <SecretField
+                                                        label="API Key"
                                                         value={editConfig.api_key || ""}
-                                                        onChange={(e) => setEditConfig({ ...editConfig, api_key: e.target.value })}
+                                                        onChange={(value) => setEditConfig({ ...editConfig, api_key: value })}
                                                         placeholder="来自 Obsidian 本地 REST API 设置"
-                                                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                                     />
                                                 </div>
                                                 <div className="space-y-1.5">
@@ -393,7 +392,11 @@ export default function DestinationsPage() {
                                             <div className="flex flex-col gap-1.5">
                                                 <div className="flex items-center text-xs">
                                                     <span className="w-24 text-muted-foreground">Token:</span>
-                                                    <span className="font-mono bg-background px-1.5 py-0.5 rounded border">{dest.config.token ? "••••••••••••" : "<未配置>"}</span>
+                                                    <SecretValue
+                                                        label="Notion Token"
+                                                        value={dest.config.token}
+                                                        className="font-mono bg-background px-1.5 py-0.5 rounded border"
+                                                    />
                                                 </div>
                                                 <div className="flex items-center text-xs">
                                                     <span className="w-24 text-muted-foreground">数据库 ID:</span>

@@ -1,22 +1,56 @@
-# Insight Flow
+<div align="center">
+  <img src="docs/banner.svg" alt="Insight Flow banner" />
 
-Insight Flow 是一个面向研究与信息监控场景的工作台，用来持续采集信息源、生成日报/周报/研究报告，并把结果同步到你配置的输出渠道。
+  <p>
+    <a href="https://insight-flow.potatodog.cc/zh/introduction">
+      <img src="https://img.shields.io/badge/docs-home-0EA5E9?style=flat-square" alt="Documentation">
+    </a>
+    <a href="backend/">
+      <img src="https://img.shields.io/badge/backend-FastAPI-009688?style=flat-square" alt="Backend: FastAPI">
+    </a>
+    <a href="frontend/">
+      <img src="https://img.shields.io/badge/frontend-Next.js-111111?style=flat-square" alt="Frontend: Next.js">
+    </a>
+    <a href="https://insight-flow.potatodog.cc/zh/quickstart">
+      <img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
+    </a>
+    <a href="https://insight-flow.potatodog.cc/zh/introduction">
+      <img src="https://img.shields.io/badge/status-active-65A30D?style=flat-square" alt="Status: active">
+    </a>
+  </p>
+  <p>
+    <a href="https://insight-flow.potatodog.cc/en/introduction">English</a>
+    |
+    <a href="https://insight-flow.potatodog.cc/zh/introduction">简体中文</a>
+  </p>
+</div>
 
-Insight Flow 仓库包含：
+Insight Flow 是一个面向研究与信息监控场景的工作台，用来持续采集信息源、生成日报、周报和研究报告，并把结果同步到你配置的输出渠道。
 
-- `backend/`：FastAPI API、调度器、采集器、报告生成与落盘逻辑
-- `frontend/`：Next.js 管理界面，覆盖报告、任务、信息源、模型配置和输出配置
-- `agents/`：浏览器采集相关能力
-- `docs/`：补充文档与设计记录
+## 文档入口
 
-## 主要能力
+- [文档首页](https://insight-flow.potatodog.cc/zh/introduction)：产品简介、能力说明与使用场景
+- [快速开始](https://insight-flow.potatodog.cc/zh/quickstart)：首次启动、基础配置与本地访问方式
+- [功能说明](https://insight-flow.potatodog.cc/zh/features/sources)：信息源、监控任务、AI 路由、输出配置与归档
+- [架构设计](https://insight-flow.potatodog.cc/zh/development/architecture)：系统模块、运行链路与开发视角
+- [API Reference](https://insight-flow.potatodog.cc/zh/api-reference/introduction)：资源模型与接口入口
+- [贡献指南](https://insight-flow.potatodog.cc/zh/development/contributing)：开发约定与协作方式
+
+## 核心能力
 
 - 统一管理信息源，支持 RSS、站点抓取、GitHub Trending、Hugging Face 等采集方式
 - 创建监控任务，按 `daily`、`weekly`、`research` 生成报告
 - 为 `filter`、`keywords`、`global_summary`、`report` 阶段配置 AI 路由
-- 配置 `llm_openai` / `llm_codex` 模型连接参数并在线测试
+- 配置 `llm_openai` 与 `llm_codex` 模型连接参数并在线测试
 - 将生成结果输出到 Notion、Obsidian 或 RSS
 - 查看任务运行历史、事件日志和报告归档
+
+## 仓库结构
+
+- `backend/`：FastAPI API、调度器、采集器、报告生成与落盘逻辑
+- `frontend/`：Next.js 管理界面，覆盖报告、任务、信息源、模型配置和输出配置
+- `agents/`：浏览器采集相关能力
+- `docs/`：文档站内容、开发文档与设计记录
 
 ## 环境要求
 
@@ -42,7 +76,7 @@ make dev-local
 
 说明：
 
-- `make bootstrap`：首次执行，或依赖/虚拟环境损坏时再执行
+- `make bootstrap`：首次执行，或依赖、虚拟环境损坏时再执行
 - `make doctor`：环境自检，首次推荐执行，之后在怀疑本地环境有问题时再执行
 - `make dev-local`：日常开发启动命令，每次本地跑项目时执行
 
@@ -52,11 +86,17 @@ make dev-local
 - 后端 API 文档：`http://localhost:8000/docs`
 - 健康检查：`http://localhost:8000/health`
 
-## Mint 文档预览
+## 使用方式
+
+1. 在“模型配置”页面填写 `llm_openai` 或 `llm_codex` 的连接信息。
+2. 在“输出配置”页面启用 Notion、Obsidian 或 RSS。
+3. 在“信息源”页面检查预置源，或添加你自己的源。
+4. 在“任务”页面创建 monitor，选择信息源、报告类型、输出渠道和 AI 路由。
+5. 手动运行任务后，在“报告”与“归档”页面查看生成结果。
+
+## 本地文档预览
 
 仓库内的 Mint 配置文件位于 `docs/docs.json`。
-
-本地预览文档站：
 
 ```bash
 cd docs
@@ -72,14 +112,6 @@ make backend-browser-deps
 ```
 
 首次启动后端时，系统会自动初始化默认用户，并把 `backend/app/collectors/source_presets.yaml` 中的预置信息源同步到数据库。
-
-## 使用方式
-
-1. 在“模型配置”页面填写 `llm_openai` 或 `llm_codex` 的连接信息。
-2. 在“输出配置”页面启用 Notion、Obsidian 或 RSS。
-3. 在“信息源”页面检查预置源，或添加你自己的源。
-4. 在“任务”页面创建 monitor，选择信息源、报告类型、输出渠道和 AI 路由。
-5. 手动运行任务后，在“报告”与“归档”页面查看生成结果。
 
 ## 常用命令
 

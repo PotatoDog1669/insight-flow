@@ -50,6 +50,12 @@ export function Sidebar() {
             )}>
                 <div className="relative flex h-full flex-col px-4 pb-6 pt-16 md:pt-6">
 
+                    {/* Brand Logo */}
+                    <Link href="/" className="flex items-center gap-3 px-3 mb-8 transition-opacity hover:opacity-80" onClick={() => setIsMobileMenuOpen(false)}>
+                        <img src="/icon.svg" alt="Insight Flow Logo" className="w-8 h-8 rounded-lg shadow-sm" />
+                        <span className="font-bold text-lg tracking-tight">Insight Flow</span>
+                    </Link>
+
                     {/* Navigation Links */}
                     <nav className="space-y-1 flex-1">
                         {NAV_ITEMS.map((item) => {

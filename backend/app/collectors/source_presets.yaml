@@ -41,6 +41,11 @@ sources:
       usernames:
         - OpenAI
         - AnthropicAI
+        - Google
+        - karpathy
+        - cursor_ai
+        - Alibaba_Qwen
+        - perplexity_ai
         - GoogleDeepMind
       max_items: 30
       max_pages: 1

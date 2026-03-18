@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Bot, KeyRound, Save, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { SecretField } from "@/components/secret-field";
 import { cn } from "@/lib/utils";
 import {
     getProviders,
@@ -263,11 +264,11 @@ export default function ProvidersPage() {
 
                                         <div className="space-y-1.5">
                                             <label className="text-xs font-medium text-muted-foreground">API Key</label>
-                                            <input
+                                            <SecretField
+                                                label="API Key"
                                                 value={editConfig.api_key}
-                                                onChange={(e) => setEditConfig({ ...editConfig, api_key: e.target.value })}
+                                                onChange={(value) => setEditConfig({ ...editConfig, api_key: value })}
                                                 placeholder="sk-..."
-                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                             />
                                         </div>
 

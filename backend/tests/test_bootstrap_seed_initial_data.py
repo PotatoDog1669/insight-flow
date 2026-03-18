@@ -4,6 +4,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -126,6 +127,11 @@ def _write_x_preset(path: Path) -> None:
                   usernames:
                     - OpenAI
                     - AnthropicAI
+                    - Google
+                    - karpathy
+                    - cursor_ai
+                    - Alibaba_Qwen
+                    - perplexity_ai
                     - GoogleDeepMind
                   max_items: 30
                   max_pages: 1
@@ -136,6 +142,28 @@ def _write_x_preset(path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_shipped_x_preset_includes_default_watchlist() -> None:
+    presets_path = Path(__file__).resolve().parents[1] / "app" / "collectors" / "source_presets.yaml"
+    payload = yaml.safe_load(presets_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+
+    sources = payload.get("sources", [])
+    assert isinstance(sources, list)
+    x_source = next(source for source in sources if isinstance(source, dict) and source.get("key") == "x_social")
+    config = x_source.get("collect_config")
+    assert isinstance(config, dict)
+    assert config.get("usernames") == [
+        "OpenAI",
+        "AnthropicAI",
+        "Google",
+        "karpathy",
+        "cursor_ai",
+        "Alibaba_Qwen",
+        "perplexity_ai",
+        "GoogleDeepMind",
+    ]
 
 
 @pytest.mark.asyncio
@@ -411,6 +439,9 @@ async def test_seed_initial_data_merges_existing_twitter_usernames_with_preset(
                 "Google",
                 "OpenAI",
                 "AnthropicAI",
+                "cursor_ai",
+                "Alibaba_Qwen",
+                "perplexity_ai",
                 "GoogleDeepMind",
             ]
             assert x_source.config.get("include_retweets") is False

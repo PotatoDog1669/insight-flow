@@ -106,4 +106,21 @@ describe("ProvidersPage", () => {
     expect(await screen.findByText("Connection successful")).toBeInTheDocument();
     expect(screen.getByText(/321 ms/i)).toBeInTheDocument();
   });
+
+  it("toggles provider api key visibility while editing", async () => {
+    render(<ProvidersPage />);
+
+    await screen.findByRole("heading", { name: "模型配置" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "配置" })[0]);
+
+    const apiKeyInput = screen.getByPlaceholderText("sk-...");
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+
+    fireEvent.click(screen.getByRole("button", { name: "显示 API Key" }));
+    expect(apiKeyInput).toHaveAttribute("type", "text");
+
+    fireEvent.click(screen.getByRole("button", { name: "隐藏 API Key" }));
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+  });
 });
