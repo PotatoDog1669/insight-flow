@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.routing.schema import StageRoute
 
@@ -55,6 +56,13 @@ async def run_report_with_retry(
             try:
                 result = await provider.run(payload=payload, config=config)
                 return result, provider_name
+            except ProviderUnavailableError as exc:
+                if provider_name == "llm_openai" and not exc.stage:
+                    exc.stage = "report"
+                if provider_name == "llm_openai" or exc.provider == "llm_openai":
+                    raise
+                last_exc = exc
+                break
             except Exception as exc:
                 last_exc = exc
     if last_exc is not None:

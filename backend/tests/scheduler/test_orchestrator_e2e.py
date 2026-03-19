@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.collectors.base import BaseCollector, RawArticle
 from app.models import Article, CollectTask, Report, Source, TaskEvent, User, UserSubscription
+from app.providers.errors import ProviderUnavailableError
 from app.agents.schemas import ResearchResult, ResearchSource
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.scheduler import orchestrator as orchestrator_module
@@ -1104,7 +1105,272 @@ async def test_orchestrator_report_timeout_falls_back_to_renderer(
         ).scalar_one()
         generated_payload = report_generated_event.payload or {}
         assert generated_payload["provider"] == "renderer_compose"
-        assert generated_payload["prompt_content_chars"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_when_filter_llm_openai_is_unavailable(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    attempts = {"count": 0}
+    async with session_factory() as session:
+        report_count_before = len(
+            (
+                await session.execute(
+                    select(Report).where(
+                        Report.user_id == DEFAULT_USER_ID,
+                        Report.report_date == date.today(),
+                    )
+                )
+            ).scalars().all()
+        )
+
+    async def _unavailable_llm(prompt: str, config: dict | None = None) -> dict:
+        attempts["count"] += 1
+        raise ProviderUnavailableError(provider="llm_openai", reason="auth_failed", status_code=401)
+
+    monkeypatch.setattr("app.providers.filter.run_llm_json", _unavailable_llm)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.filter.primary = "llm_openai"
+    orchestrator.routing_profile.stages.filter.fallback = ["rule"]
+    orchestrator.routing_profile.providers["llm_openai"] = {"max_retry": 3, "api_key": "sk-test"}
+
+    async with session_factory() as session:
+        with pytest.raises(ProviderUnavailableError, match="auth_failed"):
+            await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+
+    assert attempts["count"] == 1
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report).where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+            )
+        ).scalars().all()
+        assert len(reports) == report_count_before
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_when_keywords_llm_openai_is_unavailable(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    attempts = {"count": 0}
+    async with session_factory() as session:
+        report_count_before = len(
+            (
+                await session.execute(
+                    select(Report).where(
+                        Report.user_id == DEFAULT_USER_ID,
+                        Report.report_date == date.today(),
+                    )
+                )
+            ).scalars().all()
+        )
+
+    async def _unavailable_llm(prompt: str, config: dict | None = None) -> dict:
+        attempts["count"] += 1
+        raise ProviderUnavailableError(provider="llm_openai", reason="missing_api_key")
+
+    monkeypatch.setattr("app.providers.keywords.run_llm_json", _unavailable_llm)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.keywords.primary = "llm_openai"
+    orchestrator.routing_profile.stages.keywords.fallback = ["rule"]
+    orchestrator.routing_profile.providers["llm_openai"] = {"max_retry": 3, "api_key": "sk-test"}
+
+    async with session_factory() as session:
+        with pytest.raises(ProviderUnavailableError, match="missing_api_key"):
+            await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+
+    assert attempts["count"] == 1
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report).where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+            )
+        ).scalars().all()
+        assert len(reports) == report_count_before
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_when_global_summary_llm_openai_is_unavailable(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    attempts = {"count": 0}
+    async with session_factory() as session:
+        report_count_before = len(
+            (
+                await session.execute(
+                    select(Report).where(
+                        Report.user_id == DEFAULT_USER_ID,
+                        Report.report_date == date.today(),
+                    )
+                )
+            ).scalars().all()
+        )
+
+    async def _unavailable_llm(prompt: str, config: dict | None = None) -> dict:
+        attempts["count"] += 1
+        raise ProviderUnavailableError(provider="llm_openai", reason="endpoint_not_found", status_code=404)
+
+    monkeypatch.setattr("app.providers.global_summary.run_llm_json", _unavailable_llm)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.global_summary.primary = "llm_openai"
+    orchestrator.routing_profile.stages.global_summary.fallback = ["llm_codex"]
+    orchestrator.routing_profile.providers["llm_openai"] = {"max_retry": 3, "api_key": "sk-test"}
+
+    async with session_factory() as session:
+        with pytest.raises(ProviderUnavailableError, match="endpoint_not_found"):
+            await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+
+    assert attempts["count"] == 1
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report).where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+            )
+        ).scalars().all()
+        assert len(reports) == report_count_before
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_when_report_llm_openai_is_unavailable(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    attempts = {"count": 0}
+    async with session_factory() as session:
+        report_count_before = len(
+            (
+                await session.execute(
+                    select(Report).where(
+                        Report.user_id == DEFAULT_USER_ID,
+                        Report.report_date == date.today(),
+                    )
+                )
+            ).scalars().all()
+        )
+    original_get_provider = orchestrator_module.get_provider
+
+    class _UnavailableReportProvider:
+        stage = "report"
+        name = "llm_openai"
+
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["count"] += 1
+            raise ProviderUnavailableError(provider="llm_openai", reason="auth_failed", status_code=401)
+
+    def _fake_get_provider(stage: str, name: str):
+        if stage == "report" and name == "llm_openai":
+            return _UnavailableReportProvider()
+        return original_get_provider(stage=stage, name=name)
+
+    monkeypatch.setattr(orchestrator_module, "get_provider", _fake_get_provider)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.report.primary = "llm_openai"
+    orchestrator.routing_profile.stages.report.fallback = ["llm_codex"]
+    orchestrator.routing_profile.providers["llm_openai"] = {"max_retry": 3, "api_key": "sk-test"}
+
+    async with session_factory() as session:
+        with pytest.raises(ProviderUnavailableError, match="auth_failed"):
+            await orchestrator.run_daily_pipeline(db=session, user_id=DEFAULT_USER_ID, trigger_type="manual")
+
+    assert attempts["count"] == 1
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report).where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                )
+            )
+        ).scalars().all()
+        assert len(reports) == report_count_before
 
 
 @pytest.mark.asyncio

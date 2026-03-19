@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.providers.errors import ProviderUnavailableError
 from app.processors.global_summary import build_global_summary_fallback, run_global_summary_stage
 
 
@@ -51,3 +52,12 @@ async def test_run_global_summary_stage_falls_back_when_runner_errors() -> None:
     assert summary.provider == "fallback"
     assert summary.fallback_used is True
     assert summary.prompt_metrics["input_event_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_global_summary_stage_reraises_provider_unavailable() -> None:
+    async def _runner(payload: dict) -> tuple[dict, str]:
+        raise ProviderUnavailableError(provider="llm_openai", reason="auth_failed", status_code=401)
+
+    with pytest.raises(ProviderUnavailableError, match="auth_failed"):
+        await run_global_summary_stage(events=_sample_events(), runner=_runner)

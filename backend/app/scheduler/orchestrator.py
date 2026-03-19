@@ -25,6 +25,7 @@ from app.models.source import Source
 from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
+from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
 from app.processors.global_summary import run_global_summary_stage, run_global_summary_with_retry
@@ -93,6 +94,37 @@ class Orchestrator:
         if not message:
             message = type(exc).__name__
         return message[:limit]
+
+    async def _append_provider_unavailable_event(
+        self,
+        db: AsyncSession,
+        *,
+        run_id: uuid.UUID | None,
+        monitor_id: uuid.UUID | None,
+        task_id: uuid.UUID | None,
+        source_id: uuid.UUID | None,
+        stage: str,
+        exc: ProviderUnavailableError,
+    ) -> None:
+        if run_id is None:
+            return
+        await append_task_event(
+            db,
+            run_id=run_id,
+            monitor_id=monitor_id,
+            task_id=task_id,
+            source_id=source_id,
+            stage=stage,
+            level="error",
+            event_type="provider_unavailable",
+            message=f"[{exc.provider}] unavailable during {stage}",
+            payload={
+                "provider": exc.provider,
+                "reason": exc.reason,
+                "status_code": exc.status_code,
+                "stage": stage,
+            },
+        )
 
     async def collect_source(
         self,
@@ -772,6 +804,7 @@ class Orchestrator:
                         process_result = job.result()
                     except Exception as exc:  # pragma: no cover - defensive path
                         error_text = self._error_message(exc, limit=1000)
+                        failure_stage = exc.stage if isinstance(exc, ProviderUnavailableError) and exc.stage else "process"
                         task.status = "failed"
                         task.error_message = error_text
                         task.finished_at = datetime.now(timezone.utc)
@@ -779,8 +812,8 @@ class Orchestrator:
                         task.stage_trace = [
                             *existing_trace,
                             {
-                                "stage": "process",
-                                "provider": "pipeline",
+                                "stage": failure_stage,
+                                "provider": getattr(exc, "provider", "pipeline"),
                                 "status": "failed",
                                 "error": self._error_message(exc, limit=300),
                             },
@@ -792,6 +825,16 @@ class Orchestrator:
                             },
                         ]
                         db.add(task)
+                        if isinstance(exc, ProviderUnavailableError):
+                            await self._append_provider_unavailable_event(
+                                db,
+                                run_id=pipeline_run_id,
+                                monitor_id=monitor_id,
+                                task_id=task.id,
+                                source_id=source.id,
+                                stage=failure_stage,
+                                exc=exc,
+                            )
                         await append_task_event(
                             db,
                             run_id=pipeline_run_id,
@@ -1586,10 +1629,23 @@ class Orchestrator:
                 monitor_task_id=monitor_task_id,
             )
         summary_route = self.runtime_routing_profile.stages.global_summary or self.runtime_routing_profile.stages.report
-        global_summary: GlobalSummary = await run_global_summary_stage(
-            events=report_events,
-            runner=lambda payload: self._run_global_summary_with_retry(summary_route, payload),
-        )
+        try:
+            global_summary: GlobalSummary = await run_global_summary_stage(
+                events=report_events,
+                runner=lambda payload: self._run_global_summary_with_retry(summary_route, payload),
+            )
+        except ProviderUnavailableError as exc:
+            await self._append_provider_unavailable_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage=exc.stage or "global_summary",
+                exc=exc,
+            )
+            await db.commit()
+            raise
         daily_report = render_daily_report(
             events=report_events,
             context=context,
@@ -1648,6 +1704,18 @@ class Orchestrator:
                     daily_metadata["global_tldr"] = generated_tldr
                     daily_metadata["tldr"] = [generated_tldr]
                     daily_report.metadata = daily_metadata
+            except ProviderUnavailableError as exc:
+                await self._append_provider_unavailable_event(
+                    db,
+                    run_id=run_id,
+                    monitor_id=monitor_id,
+                    task_id=monitor_task_id,
+                    source_id=None,
+                    stage=exc.stage or "report",
+                    exc=exc,
+                )
+                await db.commit()
+                raise
             except Exception as exc:  # pragma: no cover - runtime fallback
                 logger.warning(
                     "report_provider_fallback_to_renderer",

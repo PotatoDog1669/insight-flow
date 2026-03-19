@@ -8,13 +8,16 @@ import re
 import httpx
 
 from app.config import settings
+from app.providers.errors import ProviderUnavailableError
 
 
 def build_llm_headers(config: dict | None = None) -> dict[str, str]:
     cfg = dict(config or {})
     api_key = str(cfg.get("api_key") or settings.openai_api_key or "").strip()
     if not api_key:
-        raise ValueError("Missing llm api_key")
+        raise ProviderUnavailableError(provider="llm_openai", reason="missing_api_key")
+    if _looks_like_placeholder_api_key(api_key):
+        raise ProviderUnavailableError(provider="llm_openai", reason="placeholder_api_key")
     return {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -38,7 +41,29 @@ async def run_llm_json(prompt: str, config: dict | None = None) -> dict:
 
     headers = build_llm_headers(cfg)
     async with httpx.AsyncClient(timeout=timeout_sec, headers=headers) as client:
-        response = await _post_chat_with_fallback(client=client, base_url=base_url, payload=payload)
+        try:
+            response = await _post_chat_with_fallback(client=client, base_url=base_url, payload=payload)
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code == 401:
+                raise ProviderUnavailableError(
+                    provider="llm_openai",
+                    reason="auth_failed",
+                    status_code=status_code,
+                ) from exc
+            if status_code == 403:
+                raise ProviderUnavailableError(
+                    provider="llm_openai",
+                    reason="forbidden",
+                    status_code=status_code,
+                ) from exc
+            if status_code == 404:
+                raise ProviderUnavailableError(
+                    provider="llm_openai",
+                    reason="endpoint_not_found",
+                    status_code=status_code,
+                ) from exc
+            raise
         data = response.json() or {}
         text = _extract_chat_text(data)
         parsed = _parse_json_text(text)
@@ -79,6 +104,13 @@ def build_llm_chat_endpoints(base_url: str) -> list[str]:
         if endpoint not in deduped:
             deduped.append(endpoint)
     return deduped
+
+
+def _looks_like_placeholder_api_key(api_key: str) -> bool:
+    normalized = str(api_key or "").strip().lower()
+    if not normalized:
+        return False
+    return "your-openai-api-key" in normalized
 
 
 def _extract_chat_text(data: dict) -> str:

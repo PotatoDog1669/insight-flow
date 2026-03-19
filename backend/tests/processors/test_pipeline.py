@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from app.collectors.base import RawArticle
+from app.providers.errors import ProviderUnavailableError
 from app.processors.event_models import CandidateCluster, PipelineOutput, ProcessedEvent
 from app.processors.pipeline import ProcessingPipeline
 
@@ -235,6 +236,51 @@ async def test_run_stage_with_retry_falls_back_to_secondary_provider(monkeypatch
     assert calls == ["llm_openai", "rule"]
     assert attempts["primary"] == 2
     assert attempts["fallback"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_stage_with_retry_reraises_unavailable_llm_openai_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"primary": 0, "fallback": 0}
+    calls: list[str] = []
+
+    class _UnavailableProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["primary"] += 1
+            raise ProviderUnavailableError(provider="llm_openai", reason="auth_failed", status_code=401)
+
+    class _FallbackFilterProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            attempts["fallback"] += 1
+            return {"articles": payload.get("articles", [])}
+
+    def fake_get_provider(stage: str, name: str):  # noqa: ANN201
+        assert stage == "filter"
+        calls.append(name)
+        if name == "llm_openai":
+            return _UnavailableProvider()
+        if name == "rule":
+            return _FallbackFilterProvider()
+        raise KeyError(name)
+
+    monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
+
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
+    pipeline.routing_profile.providers["llm_openai"] = {"max_retry": 3}
+    pipeline.routing_profile.providers["rule"] = {"max_retry": 0}
+
+    with pytest.raises(ProviderUnavailableError, match="auth_failed"):
+        await pipeline._run_stage_with_retry(
+            stage="filter",
+            provider_name="llm_openai",
+            payload={"articles": []},
+            fallback_providers=["rule"],
+        )
+
+    assert calls == ["llm_openai"]
+    assert attempts["primary"] == 1
+    assert attempts["fallback"] == 0
 
 
 @pytest.mark.asyncio
