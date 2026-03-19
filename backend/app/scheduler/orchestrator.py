@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.registry import get_agent
 from app.agents.schemas import ResearchEvent, ResearchJob
 from app.collectors.base import RawArticle
+from app.collectors.reddit_config import build_reddit_feed_url, normalize_reddit_subreddits
 from app.collectors.registry import get_collector
 from app.config import settings
 from app.models.article import Article
@@ -25,6 +26,9 @@ from app.models.source import Source
 from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
+from app.papers.evidence import build_evidence_coverage
+from app.papers.literature import build_literature_context
+from app.papers.service import sync_article_paper_link
 from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
@@ -1335,6 +1339,11 @@ class Orchestrator:
         default_source_max_items: int | None = None,
     ) -> dict:
         config = dict(source.config or {})
+        if source.collect_method == "rss" and isinstance(config.get("subreddits"), list):
+            subreddits = normalize_reddit_subreddits(config.get("subreddits"))
+            if subreddits:
+                config["subreddits"] = subreddits
+            config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
         resolved_max_items = default_source_max_items if isinstance(default_source_max_items, int) and 1 <= default_source_max_items <= 200 else None
         if not isinstance(source_overrides, dict):
             if resolved_max_items is not None:
@@ -1364,7 +1373,9 @@ class Orchestrator:
             if resolved_max_items is None and isinstance(raw_limit, int) and 1 <= raw_limit <= 200:
                 resolved_max_items = raw_limit
 
-        if source.collect_method == "rss" and bool(config.get("arxiv_api")):
+        if source.collect_method in {"openalex", "europe_pmc", "pubmed"} or (
+            source.collect_method == "rss" and bool(config.get("arxiv_api"))
+        ):
             raw_max_results = override.get("max_results")
             if isinstance(raw_max_results, str):
                 raw_max_results = raw_max_results.strip()
@@ -1414,8 +1425,7 @@ class Orchestrator:
         method = str(source.collect_method or "")
         if method in {"huggingface", "github_trending"}:
             config["limit"] = max_items
-        if method == "rss" and bool(config.get("arxiv_api")):
-            # Keep arXiv API max_results aligned with fetch cap.
+        if method in {"openalex", "europe_pmc", "pubmed"} or (method == "rss" and bool(config.get("arxiv_api"))):
             config["max_results"] = max_items
         return config
 
@@ -1535,6 +1545,7 @@ class Orchestrator:
                 existing.published_at=raw.published_at
                 existing.collected_at=now
                 existing.updated_at=now
+            await sync_article_paper_link(db, existing, source)
             db.add(existing)
             await db.flush()
             article_ids.append(existing.id)
@@ -1822,6 +1833,13 @@ class Orchestrator:
         monitor_task_id: uuid.UUID | None,
     ) -> tuple[list[Report], list[RenderedReport]]:
         target_event = self._select_research_target_event(report_events)
+        event_article_ids = [str(item).strip() for item in target_event.get("article_ids", []) if str(item).strip()]
+        target_article_ids = await self._resolve_research_article_ids(
+            db,
+            event_article_ids=event_article_ids,
+            fallback_article_ids=article_ids,
+        )
+        literature_context = await build_literature_context(db, target_article_ids)
         if run_id is not None:
             await append_task_event(
                 db,
@@ -1842,6 +1860,7 @@ class Orchestrator:
             user_id=user_id,
             monitor_id=monitor_id,
             report_date=report_date,
+            metadata=literature_context,
         )
         if run_id is not None:
             await append_task_event(
@@ -1853,7 +1872,12 @@ class Orchestrator:
                 stage="report",
                 event_type="research_job_built",
                 message="[research] job built",
-                payload={"job_id": job.job_id, "agent": self._research_agent_name()},
+                payload={
+                    "job_id": job.job_id,
+                    "agent": self._research_agent_name(),
+                    "analysis_mode": str(job.metadata.get("analysis_mode") or "event_research"),
+                    "literature_items": int((job.metadata.get("literature_summary") or {}).get("paper_count") or 0),
+                },
             )
             await db.commit()
 
@@ -1922,12 +1946,14 @@ class Orchestrator:
             {"title": item.title, "url": item.url, "source_type": item.source_type}
             for item in result.sources
         ]
-        event_article_ids = [str(item).strip() for item in target_event.get("article_ids", []) if str(item).strip()]
-        article_id_strings = event_article_ids or [str(item) for item in article_ids]
+        article_id_strings = [str(item) for item in target_article_ids]
+        evidence_coverage = await build_evidence_coverage(db, target_article_ids)
+        analysis_mode = str(job.metadata.get("analysis_mode") or "event_research")
         metadata = {
             "template": "research",
             "frequency": selected_time_period,
             "report_type": selected_report_type,
+            "analysis_mode": analysis_mode,
             "events": [target_event],
             "event_ids": [str(target_event["event_id"])],
             "global_tldr": result.summary,
@@ -1979,7 +2005,12 @@ class Orchestrator:
                 stage="report",
                 event_type="research_report_generated",
                 message=f"[research] report generated via {agent_name}",
-                payload={"agent": agent_name, "output_content_chars": len(result.content_markdown)},
+                payload={
+                    "agent": agent_name,
+                    "analysis_mode": analysis_mode,
+                    "output_content_chars": len(result.content_markdown),
+                    "evidence_coverage": evidence_coverage,
+                },
             )
             await db.commit()
         return [report_row], [rendered_report]
@@ -2157,6 +2188,28 @@ class Orchestrator:
 
         return sorted(candidates, key=_sort_key, reverse=True)[0]
 
+    async def _resolve_research_article_ids(
+        self,
+        db: AsyncSession,
+        *,
+        event_article_ids: list[str],
+        fallback_article_ids: list[uuid.UUID],
+    ) -> list[uuid.UUID]:
+        if not event_article_ids:
+            return list(fallback_article_ids)
+
+        resolved_ids = [_coerce_uuid(item) for item in event_article_ids]
+        resolved_ids = [item for item in resolved_ids if item is not None]
+        if resolved_ids:
+            return resolved_ids
+
+        stmt = select(Article.id).where(
+            Article.id.in_(fallback_article_ids),
+            Article.external_id.in_(event_article_ids),
+        )
+        matched_ids = (await db.execute(stmt)).scalars().all()
+        return matched_ids or list(fallback_article_ids)
+
     def _build_research_job(
         self,
         *,
@@ -2165,6 +2218,7 @@ class Orchestrator:
         user_id: uuid.UUID,
         monitor_id: uuid.UUID | None,
         report_date: date,
+        metadata: dict | None = None,
     ) -> ResearchJob:
         return ResearchJob(
             job_id=str(uuid.uuid4()),
@@ -2194,6 +2248,7 @@ class Orchestrator:
             monitor_id=str(monitor_id) if monitor_id is not None else None,
             user_id=str(user_id),
             report_date=report_date.isoformat(),
+            metadata=dict(metadata or {}),
         )
 
     @staticmethod
@@ -2562,6 +2617,15 @@ def _count_markdown_heading_level(content: str, level: int) -> int:
     normalized_level = max(int(level), 1)
     prefix = f'{"#" * normalized_level} '
     return sum(1 for line in str(content or "").splitlines() if line.lstrip().startswith(prefix))
+
+
+def _coerce_uuid(value: uuid.UUID | str) -> uuid.UUID | None:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def _item_source_categories(item: ProcessedArticle | ProcessedEvent) -> list[str]:

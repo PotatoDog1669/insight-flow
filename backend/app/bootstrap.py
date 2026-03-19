@@ -12,6 +12,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collectors.reddit_config import merge_reddit_subreddits
 from app.models.database import async_session
 from app.models.source import Source
 from app.models.subscription import UserSubscription
@@ -37,6 +38,13 @@ def _infer_collect_method(preset: dict) -> tuple[str, dict]:
     urls = preset.get("urls") or []
     primary_url = urls[0] if urls else None
     github_urls = [url for url in urls if isinstance(url, str) and "github.com" in url]
+
+    if strategy in {"openalex_api", "europe_pmc_api", "pubmed_api"}:
+        collector_name = strategy.replace("_api", "")
+        config: dict = dict(collect_config) if isinstance(collect_config, dict) else {}
+        if primary_url and not isinstance(config.get("base_url"), str):
+            config["base_url"] = primary_url
+        return collector_name, config
 
     if rss_url:
         config: dict = {"feed_url": rss_url, "max_items": 30}
@@ -160,6 +168,20 @@ def _merge_twitter_usernames(existing_config: dict | None, synced_config: dict) 
     return merged
 
 
+def _merge_reddit_subreddits(existing_config: dict | None, synced_config: dict) -> dict:
+    if not isinstance(synced_config, dict):
+        return {}
+
+    merged = dict(synced_config)
+    merged_subreddits = merge_reddit_subreddits(
+        (existing_config or {}).get("subreddits") if isinstance(existing_config, dict) else None,
+        synced_config.get("subreddits"),
+    )
+    if merged_subreddits:
+        merged["subreddits"] = merged_subreddits
+    return merged
+
+
 async def seed_initial_data(db: AsyncSession) -> None:
     now = datetime.now(UTC)
 
@@ -220,6 +242,8 @@ async def seed_initial_data(db: AsyncSession) -> None:
             source.collect_method = collect_method
             if collect_method == "twitter_snaplytics":
                 source.config = _merge_twitter_usernames(source.config, config)
+            elif key == "reddit_social" and collect_method == "rss":
+                source.config = _merge_reddit_subreddits(source.config, config)
             else:
                 source.config = config
             source.enabled = enabled
