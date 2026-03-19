@@ -4,6 +4,7 @@ import {
   cancelMonitorRun,
   createMonitor,
   deleteMonitor,
+  getProviders,
   getMonitorAIRoutingDefaults,
   getDestinations,
   getMonitorLogs,
@@ -18,6 +19,7 @@ import {
 vi.mock("@/lib/api", () => ({
   getMonitors: vi.fn(),
   getSources: vi.fn(),
+  getProviders: vi.fn(),
   getDestinations: vi.fn(),
   getMonitorAIRoutingDefaults: vi.fn(),
   getMonitorLogs: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock("@/lib/api", () => ({
 
 const mockedGetMonitors = vi.mocked(getMonitors);
 const mockedGetSources = vi.mocked(getSources);
+const mockedGetProviders = vi.mocked(getProviders);
 const mockedGetDestinations = vi.mocked(getDestinations);
 const mockedGetMonitorAIRoutingDefaults = vi.mocked(getMonitorAIRoutingDefaults);
 const mockedGetMonitorLogs = vi.mocked(getMonitorLogs);
@@ -128,6 +131,38 @@ describe("MonitorsPage", () => {
         created_at: "2026-03-02T10:00:00Z",
         updated_at: "2026-03-02T10:00:00Z",
       },
+      {
+        id: "source-6",
+        name: "OpenAlex",
+        category: "academic",
+        collect_method: "openalex",
+        config: {
+          base_url: "https://api.openalex.org/works",
+          max_results: 30,
+          keywords: ["reasoning"],
+          supports_time_window: true,
+          auth_mode: "optional_api_key",
+        },
+        enabled: true,
+        status: "healthy",
+        last_run: null,
+        last_collected: null,
+        created_at: "2026-03-02T10:00:00Z",
+        updated_at: "2026-03-02T10:00:00Z",
+      },
+      {
+        id: "source-7",
+        name: "Reddit",
+        category: "social",
+        collect_method: "rss",
+        config: { subreddits: ["LocalLLaMA", "OpenAI", "MachineLearning"] },
+        enabled: true,
+        status: "healthy",
+        last_run: null,
+        last_collected: null,
+        created_at: "2026-03-02T10:00:00Z",
+        updated_at: "2026-03-02T10:00:00Z",
+      },
     ]);
     mockedGetDestinations.mockResolvedValue([
       {
@@ -137,6 +172,40 @@ describe("MonitorsPage", () => {
         description: "Notion destination",
         config: {},
         enabled: true,
+      },
+    ]);
+    mockedGetProviders.mockResolvedValue([
+      {
+        id: "llm_codex",
+        name: "LLM Codex",
+        type: "llm",
+        description: "Codex provider",
+        enabled: false,
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5-codex",
+          timeout_sec: 120,
+          max_retry: 2,
+          max_output_tokens: 2048,
+          temperature: 0.3,
+          api_key: "",
+        },
+      },
+      {
+        id: "llm_openai",
+        name: "LLM OpenAI",
+        type: "llm",
+        description: "OpenAI provider",
+        enabled: true,
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          timeout_sec: 120,
+          max_retry: 2,
+          max_output_tokens: 2048,
+          temperature: 0.3,
+          api_key: "",
+        },
       },
     ]);
     mockedGetMonitorAIRoutingDefaults.mockResolvedValue({
@@ -498,27 +567,266 @@ describe("MonitorsPage", () => {
     });
   });
 
-  it("requires report type when time period is custom", async () => {
+  it("sends academic api keywords and max_results override when creating monitor", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
-    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
-      target: { value: "Custom Monitor" },
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "OpenAlex Monitor" },
+    });
+
+    fireEvent.click(screen.getByLabelText("OpenAlex"));
+    fireEvent.change(screen.getByLabelText("Keywords for OpenAlex"), {
+      target: { value: "reasoning, agent" },
+    });
+    fireEvent.change(screen.getByLabelText("Max results for OpenAlex"), {
+      target: { value: "40" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "OpenAlex Monitor",
+          report_type: "daily",
+          source_overrides: {
+            "source-6": { keywords: ["reasoning", "agent"], max_results: 40 },
+          },
+        })
+      );
+    });
+  });
+
+  it("sends selected reddit subreddits override when creating monitor", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Reddit Monitor" },
+    });
+
+    fireEvent.click(screen.getByLabelText("Reddit"));
+    expect(screen.getByText("版块列表")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("OpenAI"));
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Reddit Monitor",
+          source_overrides: {
+            "source-7": { subreddits: ["LocalLLaMA", "MachineLearning"] },
+          },
+        })
+      );
+    });
+  });
+
+  it("shows human-friendly time window presets in the create form", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+
+    const timeWindowSelect = screen.getByLabelText("时间窗口") as HTMLSelectElement;
+    expect(timeWindowSelect).toHaveValue("24");
+    expect(Array.from(timeWindowSelect.options).map((option) => option.text)).toEqual(["1 天", "3 天", "7 天", "自定义"]);
+    expect(screen.queryByLabelText("时间窗口（小时）")).not.toBeInTheDocument();
+  });
+
+  it("submits preset and custom time windows as window_hours", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Preset Window Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    fireEvent.change(screen.getByLabelText("时间窗口"), {
+      target: { value: "72" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Preset Window Monitor",
+          window_hours: 72,
+        })
+      );
+    });
+
+    mockedCreateMonitor.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Custom Window Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    fireEvent.change(screen.getByLabelText("时间窗口"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(screen.getByLabelText("自定义时间窗口数值"), {
+      target: { value: "2" },
+    });
+    fireEvent.change(screen.getByLabelText("自定义时间窗口单位"), {
+      target: { value: "days" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Custom Window Monitor",
+          window_hours: 48,
+        })
+      );
+    });
+  });
+
+  it("allows overriding the recommended report template for a daily monitor", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Flexible Template Monitor" },
     });
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
 
-    fireEvent.change(screen.getByLabelText("Frequency"), {
-      target: { value: "custom" },
-    });
-
-    const createButton = screen.getByRole("button", { name: "Create" });
-    expect(createButton).toBeDisabled();
-
-    fireEvent.change(screen.getByLabelText("Template"), {
+    const reportTypeSelect = screen.getByLabelText("报告模板");
+    expect(reportTypeSelect).not.toBeDisabled();
+    fireEvent.change(reportTypeSelect, {
       target: { value: "research" },
     });
-    expect(createButton).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Flexible Template Monitor",
+          time_period: "daily",
+          report_type: "research",
+        })
+      );
+    });
+  });
+
+  it("keeps the recommended template in sync until the user overrides it", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+
+    const reportTypeSelect = screen.getByLabelText("报告模板") as HTMLSelectElement;
+    expect(reportTypeSelect.value).toBe("daily");
+
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "weekly" },
+    });
+    expect(reportTypeSelect.value).toBe("weekly");
+
+    fireEvent.change(reportTypeSelect, {
+      target: { value: "research" },
+    });
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "daily" },
+    });
+    expect(reportTypeSelect.value).toBe("research");
+  });
+
+  it("shows structured schedule controls instead of raw cron input", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "weekly" },
+    });
+
+    expect(screen.getByLabelText("执行星期")).toBeInTheDocument();
+    expect(screen.getByLabelText("执行时间")).toBeInTheDocument();
+    expect(screen.queryByText("自定义时间表 (Cron)")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "custom" },
+    });
+    expect(screen.getByLabelText("执行时间")).toBeInTheDocument();
+    expect(screen.getByLabelText("更新间隔（天）")).toBeInTheDocument();
+    expect(screen.queryByLabelText("周一")).not.toBeInTheDocument();
+    expect(screen.queryByText("使用高级 Cron")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("高级 Cron 表达式")).not.toBeInTheDocument();
+    expect(screen.queryByText("自定义时间表 (Cron)")).not.toBeInTheDocument();
+  });
+
+  it("submits structured weekly cron and custom interval schedules", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Weekly Schedule Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "weekly" },
+    });
+    fireEvent.change(screen.getByLabelText("执行星期"), {
+      target: { value: "3" },
+    });
+    fireEvent.change(screen.getByLabelText("执行时间"), {
+      target: { value: "08:15" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Weekly Schedule Monitor",
+          time_period: "weekly",
+          custom_schedule: "15 8 * * 3",
+        })
+      );
+    });
+
+    mockedCreateMonitor.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Custom Schedule Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(screen.getByLabelText("更新间隔（天）"), {
+      target: { value: "2" },
+    });
+    fireEvent.change(screen.getByLabelText("执行时间"), {
+      target: { value: "10:30" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Custom Schedule Monitor",
+          time_period: "custom",
+          custom_schedule: "interval:2@10:30",
+        })
+      );
+    });
   });
 
   it("does not show deprecated test action", async () => {

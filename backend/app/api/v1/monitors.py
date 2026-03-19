@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collectors.reddit_config import normalize_reddit_subreddits
 from app.config import settings
 from app.models.database import async_session, get_db
 from app.models.monitor import Monitor
@@ -21,6 +22,8 @@ from app.models.task_event import TaskEvent
 from app.routing.loader import load_routing_profile
 from app.scheduler.monitor_runner import execute_monitor_pipeline
 from app.scheduler.monitor_runner import prepare_monitor_run
+from app.scheduler.scheduler import remove_monitor_schedule
+from app.scheduler.scheduler import upsert_monitor_schedule
 from app.scheduler.task_events import append_task_event
 from app.schemas.monitor import MonitorAIRouting
 from app.schemas.monitor import MonitorAIRoutingDefaultsResponse
@@ -100,6 +103,7 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
     db.add(monitor)
     await db.commit()
     await db.refresh(monitor)
+    await upsert_monitor_schedule(monitor.id)
     return _to_monitor_response(monitor)
 
 
@@ -399,6 +403,10 @@ async def update_monitor(monitor_id: str, payload: MonitorUpdate, db: AsyncSessi
     db.add(monitor)
     await db.commit()
     await db.refresh(monitor)
+    if monitor.enabled:
+        await upsert_monitor_schedule(monitor.id)
+    else:
+        await remove_monitor_schedule(monitor.id)
     return _to_monitor_response(monitor)
 
 
@@ -409,8 +417,10 @@ async def delete_monitor(monitor_id: str, db: AsyncSession = Depends(get_db)):
     monitor = await db.get(Monitor, monitor_uuid)
     if not monitor or monitor.user_id != DEFAULT_USER_ID:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
+    monitor_id_value = monitor.id
     await db.delete(monitor)
     await db.commit()
+    await remove_monitor_schedule(monitor_id_value)
 
 
 def _parse_uuid(raw_id: str) -> uuid.UUID:
@@ -493,6 +503,24 @@ def _normalize_source_overrides(payload: dict | None) -> dict[str, dict]:
             deduped = list(dict.fromkeys(keywords))
             cleaned["keywords"] = deduped[:20]
 
+        usernames: list[str] = []
+        raw_usernames = raw_config.get("usernames")
+        if isinstance(raw_usernames, str):
+            usernames = [item.strip() for item in raw_usernames.split(",") if item.strip()]
+        elif isinstance(raw_usernames, list):
+            for item in raw_usernames:
+                if not isinstance(item, str):
+                    continue
+                value = item.strip()
+                if value:
+                    usernames.append(value)
+        if usernames:
+            cleaned["usernames"] = list(dict.fromkeys(usernames))
+
+        subreddits = normalize_reddit_subreddits(raw_config.get("subreddits"))
+        if subreddits:
+            cleaned["subreddits"] = subreddits
+
         if cleaned:
             normalized[source_id] = cleaned
     return normalized
@@ -533,20 +561,19 @@ def _resolve_report_type(
     requested_report_type: str | None,
     existing_report_type: str | None = None,
 ) -> str:
-    if time_period == "daily":
-        return "daily"
-    if time_period == "weekly":
-        return "weekly"
-
     if requested_report_type:
         return requested_report_type
     if existing_report_type:
         return existing_report_type
+    return _recommended_report_type_for_time_period(time_period)
 
-    raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail="report_type is required when time_period is custom",
-    )
+
+def _recommended_report_type_for_time_period(time_period: str) -> str:
+    if time_period == "daily":
+        return "daily"
+    if time_period == "weekly":
+        return "weekly"
+    return "research"
 
 
 def _resolve_default_stage_provider(*, candidate: str, allowed: set[str], fallback: str) -> str:

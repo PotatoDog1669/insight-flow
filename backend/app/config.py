@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     codex_timeout_sec: int = Field(default=120)
 
     # Scheduler
+    scheduler_timezone: str = Field(default=_yaml.get("scheduler", {}).get("timezone", "Asia/Shanghai"))
     daily_collect_time: str = Field(default=_yaml.get("scheduler", {}).get("daily_collect_time", "06:30"))
     weekly_report_day: str = Field(default=_yaml.get("scheduler", {}).get("weekly_report_day", "sunday"))
     weekly_report_time: str = Field(default=_yaml.get("scheduler", {}).get("weekly_report_time", "20:00"))
