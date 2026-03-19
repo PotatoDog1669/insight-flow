@@ -24,6 +24,20 @@ PLACEHOLDER_PHRASES = (
     "没有上下文",
     "无法判断",
 )
+_PLATFORM_PATTERNS = (
+    (re.compile(r"\bios\b", re.IGNORECASE), "iOS"),
+    (re.compile(r"\bandroid\b", re.IGNORECASE), "Android"),
+    (re.compile(r"\bmacos\b", re.IGNORECASE), "macOS"),
+    (re.compile(r"\bipad\b", re.IGNORECASE), "iPad"),
+    (re.compile(r"\biphone\b", re.IGNORECASE), "iPhone"),
+)
+_LAUNCH_PATTERNS = (
+    re.compile(r"\bavailable\b", re.IGNORECASE),
+    re.compile(r"\bdownload\b", re.IGNORECASE),
+    re.compile(r"上线"),
+    re.compile(r"推出"),
+    re.compile(r"可用"),
+)
 
 
 def is_weak_social_input(article: RawArticle) -> bool:
@@ -74,6 +88,9 @@ def apply_event_content_quality_gate(event: ProcessedEvent) -> ProcessedEvent:
 
 
 def _compact_fact(article: ProcessedArticle) -> str:
+    product_launch_brief = _build_social_product_launch_brief(article)
+    if product_launch_brief:
+        return product_launch_brief
     summary = _normalize_text(article.summary)
     if summary:
         return _ensure_sentence(summary[:80])
@@ -92,3 +109,78 @@ def _ensure_sentence(text: str) -> str:
 
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _build_social_product_launch_brief(article: ProcessedArticle) -> str:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    author_name = _normalize_text(metadata.get("author_name") or metadata.get("author_username") or "")
+    if not author_name:
+        return ""
+
+    combined_text = _normalize_text(
+        "\n".join(
+            [
+                article.event_title,
+                article.summary,
+                article.raw.title or "",
+                article.raw.content or "",
+            ]
+        )
+    )
+    platform = _extract_platform(combined_text)
+    product = _extract_product_name(article)
+    if not product or not platform:
+        return ""
+    if not any(pattern.search(combined_text) for pattern in _LAUNCH_PATTERNS):
+        return ""
+
+    if author_name.lower() == product.lower():
+        first_sentence = f"{product} 已上线 {platform}"
+    else:
+        first_sentence = f"{author_name} 宣布旗下 {product} 已上线 {platform}"
+
+    if _has_app_store_link(article):
+        first_sentence = f"{first_sentence}，用户现可通过 App Store 下载"
+    elif _has_google_play_link(article):
+        first_sentence = f"{first_sentence}，用户现可通过 Google Play 下载"
+
+    return (
+        f"{_ensure_sentence(first_sentence)}"
+        f"原帖确认了 {platform} 版本已可用，但具体功能范围、开放地区与定价细节尚未说明。"
+    )
+
+
+def _extract_platform(text: str) -> str:
+    normalized = _normalize_text(text)
+    for pattern, platform in _PLATFORM_PATTERNS:
+        if pattern.search(normalized):
+            return platform
+    return ""
+
+
+def _extract_product_name(article: ProcessedArticle) -> str:
+    candidates = [article.event_title, article.summary, article.raw.title or ""]
+    patterns = (
+        re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9 .:+_-]{0,40}?)\s*(?:推出|上线|发布)"),
+        re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9 .:+_-]{0,40}?)\s*(?:已)?上线"),
+        re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9 .:+_-]{0,40}?)\s+is now available", re.IGNORECASE),
+    )
+    for candidate in candidates:
+        text = _normalize_text(candidate)
+        if not text:
+            continue
+        for pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                return match.group(1).strip(" .:-_")
+    return ""
+
+
+def _has_app_store_link(article: ProcessedArticle) -> bool:
+    combined = f"{article.raw.content or ''}\n{article.raw.url or ''}".lower()
+    return "apps.apple.com" in combined or "app store" in combined
+
+
+def _has_google_play_link(article: ProcessedArticle) -> bool:
+    combined = f"{article.raw.content or ''}\n{article.raw.url or ''}".lower()
+    return "play.google.com" in combined or "google play" in combined

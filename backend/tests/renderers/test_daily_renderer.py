@@ -360,6 +360,40 @@ def test_render_daily_report_prefers_explicit_global_summary() -> None:
     assert "这是外部生成的全局摘要。" in report.content
 
 
+def test_render_daily_report_deduplicates_tldr_when_detail_matches() -> None:
+    report = render_daily_report(
+        events=[
+            {
+                "event_id": "event-compact-1",
+                "article_ids": ["a1"],
+                "index": 1,
+                "title": "Comet推出iOS版本",
+                "event_title": "Comet推出iOS版本",
+                "category": "产品应用",
+                "one_line_tldr": "Comet 已上线 iOS 平台。",
+                "detail": "Comet 已上线 iOS 平台。",
+                "keywords": ["Comet", "iOS"],
+                "entities": ["Perplexity", "Comet"],
+                "metrics": [],
+                "source_links": ["https://x.com/perplexity_ai/status/1"],
+                "source_count": 1,
+                "source_name": "X",
+                "published_at": "2026-03-19T01:07:00+00:00",
+                "importance": "normal",
+                "who": "Perplexity",
+                "what": "Comet 上线 iOS",
+                "when": "2026-03-19",
+                "availability": "",
+                "unknowns": "",
+                "evidence": "",
+            }
+        ],
+        context=RenderContext(date="2026-03-19"),
+    )
+
+    assert report.content.count("Comet 已上线 iOS 平台。") == 1
+
+
 @pytest.mark.asyncio
 async def test_llm_category_is_used_even_when_importance_is_high() -> None:
     renderer = DailyRenderer()

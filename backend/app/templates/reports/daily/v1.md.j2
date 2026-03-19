@@ -17,10 +17,11 @@
 ---
 ## {% if event.source_links %}[{{ event.title }}]({{ event.source_links[0] }}){% else %}{{ event.title }}{% endif %} #{{ event.index }}
 {% set detail_text = event.detail | default("", true) | trim -%}
+{% set same_as_tldr = event.one_line_tldr and detail_text == event.one_line_tldr | trim -%}
 {% if event.one_line_tldr and not detail_text.lstrip().startswith(">") -%}
 > {{ event.one_line_tldr }}
 {% endif -%}
-{% if detail_text -%}
+{% if detail_text and not same_as_tldr -%}
 {{ detail_text }}
 
 {% endif -%}
