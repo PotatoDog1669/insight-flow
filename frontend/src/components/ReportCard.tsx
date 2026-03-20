@@ -31,10 +31,10 @@ interface ReportCardProps {
 }
 
 const reportTypeConfig = {
-    daily: { label: "Daily", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
-    weekly: { label: "Weekly", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
-    research: { label: "Research", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
-    paper: { label: "Paper", color: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
+    daily: { label: "日报", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
+    weekly: { label: "周报", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
+    research: { label: "研究", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+    paper: { label: "论文", color: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
 };
 
 export function ReportCard({ report, index, onDelete, deleting = false }: ReportCardProps) {
