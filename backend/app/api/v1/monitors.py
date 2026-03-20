@@ -93,6 +93,7 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
         ),
         ai_routing=_normalize_ai_routing(payload.ai_routing),
         destination_ids=payload.destination_ids or [],
+        destination_instance_ids=[str(item) for item in (payload.destination_instance_ids or [])],
         window_hours=payload.window_hours,
         custom_schedule=payload.custom_schedule,
         enabled=payload.enabled,
@@ -387,6 +388,8 @@ async def update_monitor(monitor_id: str, payload: MonitorUpdate, db: AsyncSessi
         monitor.ai_routing = _normalize_ai_routing(payload.ai_routing)
     if payload.destination_ids is not None:
         monitor.destination_ids = payload.destination_ids
+    if payload.destination_instance_ids is not None:
+        monitor.destination_instance_ids = [str(item) for item in payload.destination_instance_ids]
     if payload.window_hours is not None:
         monitor.window_hours = payload.window_hours
     if payload.custom_schedule is not None:
@@ -440,6 +443,7 @@ def _to_monitor_response(monitor: Monitor) -> MonitorResponse:
         source_overrides=_normalize_source_overrides(monitor.source_overrides),
         ai_routing=_safe_ai_routing(monitor.ai_routing),
         destination_ids=[str(item) for item in (monitor.destination_ids or [])],
+        destination_instance_ids=[uuid.UUID(item) for item in (monitor.destination_instance_ids or [])],
         window_hours=monitor.window_hours,
         custom_schedule=monitor.custom_schedule,
         enabled=monitor.enabled,

@@ -1,4 +1,4 @@
-import { deleteMonitor, deleteReport, getMonitors } from "@/lib/api";
+import { deleteMonitor, deleteReport, getMonitors, publishReportToDestination } from "@/lib/api";
 
 describe("api", () => {
   afterEach(() => {
@@ -54,5 +54,46 @@ describe("api", () => {
         method: "DELETE",
       })
     );
+  });
+
+  it("surfaces backend detail messages on failed publish requests", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              message: "Obsidian vault is not writable",
+              report: { id: "report-1" },
+            },
+          }),
+          {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+    );
+
+    await expect(publishReportToDestination("report-1", ["dest-1"])).rejects.toMatchObject({
+      message: "Obsidian vault is not writable",
+    });
+  });
+
+  it("falls back to status-based APIError when failed response body is not json", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<html>bad gateway</html>", {
+          status: 502,
+          headers: { "Content-Type": "text/html" },
+        })
+      )
+    );
+
+    await expect(publishReportToDestination("report-1", ["dest-1"])).rejects.toMatchObject({
+      message: "API Error: 502",
+      status: 502,
+    });
   });
 });

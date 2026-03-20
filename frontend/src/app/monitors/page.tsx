@@ -218,6 +218,45 @@ const buildStructuredScheduleCron = (
   return `interval:${intervalDays}@${padTwoDigits(hour)}:${padTwoDigits(minute)}`;
 };
 
+const resolveMonitorDestinationSelections = (
+  monitor: Pick<Monitor, "destination_ids" | "destination_instance_ids">,
+  destinations: Destination[],
+): string[] => {
+  const destinationInstanceIds = Array.isArray(monitor.destination_instance_ids) ? monitor.destination_instance_ids : [];
+  const destinationIds = Array.isArray(monitor.destination_ids) ? monitor.destination_ids : [];
+  const selectedIds = destinationInstanceIds.length > 0 ? destinationInstanceIds : destinationIds;
+  if (selectedIds.length === 0) {
+    return [];
+  }
+
+  const knownIds = new Set(destinations.map((destination) => destination.id));
+  const instanceIdByType = new Map<Destination["type"], string>();
+
+  for (const destination of destinations) {
+    if (destination.enabled && !instanceIdByType.has(destination.type)) {
+      instanceIdByType.set(destination.type, destination.id);
+    }
+  }
+  for (const destination of destinations) {
+    if (!instanceIdByType.has(destination.type)) {
+      instanceIdByType.set(destination.type, destination.id);
+    }
+  }
+
+  return Array.from(
+    new Set(
+      selectedIds
+        .map((item) => {
+          if (knownIds.has(item)) {
+            return item;
+          }
+          return instanceIdByType.get(item as Destination["type"]) ?? null;
+        })
+        .filter((item): item is string => Boolean(item)),
+    ),
+  );
+};
+
 const weekdayLabel = (value: ScheduleWeekday): string =>
   WEEKDAY_OPTIONS.find((option) => option.value === value)?.label ?? value;
 
@@ -278,7 +317,7 @@ export default function MonitorsPage() {
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
   const [sourceOverrides, setSourceOverrides] = useState<Record<string, SourceOverrideFormState>>({});
   const [expandedSourceCategories, setExpandedSourceCategories] = useState<Record<string, boolean>>({});
-  const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
+  const [selectedDestinationInstances, setSelectedDestinationInstances] = useState<string[]>([]);
   const [aiRouting, setAiRouting] = useState<MonitorAIRouting>({ stages: {}, providers: {} });
   const [aiRoutingDefaults, setAiRoutingDefaults] = useState<MonitorAIRoutingDefaults | null>(null);
   const [isAiRoutingExpanded, setIsAiRoutingExpanded] = useState(false);
@@ -537,7 +576,7 @@ export default function MonitorsPage() {
     setExpandedSourceCategories(
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
-    setSelectedDestinations([]);
+    setSelectedDestinationInstances([]);
     setAiRouting({ stages: {}, providers: {} });
     setIsAiRoutingExpanded(false);
   };
@@ -561,7 +600,7 @@ export default function MonitorsPage() {
     setExpandedSourceCategories(
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
-    setSelectedDestinations(monitor.destination_ids);
+    setSelectedDestinationInstances(resolveMonitorDestinationSelections(monitor, destinations));
     setAiRouting(normalizeAiRoutingForForm(monitor.ai_routing));
     setIsModalOpen(true);
   };
@@ -801,7 +840,7 @@ export default function MonitorsPage() {
       source_ids: selectedSources,
       source_overrides: cleanedSourceOverrides,
       ai_routing: cleanedAiRouting,
-      destination_ids: selectedDestinations,
+      destination_instance_ids: selectedDestinationInstances,
       window_hours: resolvedWindowHours,
       custom_schedule: effectiveCustomSchedule,
     };
@@ -1744,12 +1783,12 @@ export default function MonitorsPage() {
                     <label key={dest.id} className="flex items-center gap-2 text-sm px-2 py-1.5 rounded hover:bg-muted/40 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={selectedDestinations.includes(dest.id)}
+                        checked={selectedDestinationInstances.includes(dest.id)}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            setSelectedDestinations((prev) => [...prev, dest.id]);
+                            setSelectedDestinationInstances((prev) => [...prev, dest.id]);
                           } else {
-                            setSelectedDestinations((prev) => prev.filter((id) => id !== dest.id));
+                            setSelectedDestinationInstances((prev) => prev.filter((id) => id !== dest.id));
                           }
                         }}
                       />

@@ -1,17 +1,18 @@
 """采集流水线编排器"""
 
 import asyncio
+import uuid
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Awaitable, Callable
-import uuid
 
 import httpx
 import structlog
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.destinations.instances import _destination_settings_from_user
 from app.agents.registry import get_agent
 from app.agents.schemas import ResearchEvent, ResearchJob
 from app.collectors.base import RawArticle
@@ -21,11 +22,13 @@ from app.config import settings
 from app.models.article import Article
 from app.models.database import async_session
 from app.models.monitor import Monitor
+from app.models.paper import Paper
 from app.models.report import Report
 from app.models.source import Source
 from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
+from app.papers.acquisition import acquire_paper_fulltext
 from app.papers.evidence import build_evidence_coverage
 from app.papers.literature import build_literature_context
 from app.papers.service import sync_article_paper_link
@@ -393,7 +396,7 @@ class Orchestrator:
         source_by_id: dict[uuid.UUID, Source] = {item.id: item for item in subscribed_sources}
         source_name_by_id: dict[uuid.UUID, str] = {item.id: item.name for item in subscribed_sources}
         user = await db.get(User, user_id)
-        destination_settings = self._extract_destination_settings(user.settings if user else {})
+        destination_settings = await _destination_settings_from_user(db, user) if user else {}
         provider_overrides = self._extract_provider_settings(user.settings if user else {})
         normalized_monitor_ai_routing = self._normalize_monitor_ai_routing(monitor_ai_routing)
         self.runtime_routing_profile = self._build_runtime_routing_profile(normalized_monitor_ai_routing)
@@ -1104,6 +1107,15 @@ class Orchestrator:
                 "window_end": window_end.isoformat(),
             }
 
+        await self._run_fulltext_acquisition_stage(
+            db=db,
+            article_ids=persisted_article_ids,
+            source_by_id=source_by_id,
+            report_type=report_type,
+            run_id=pipeline_run_id,
+            monitor_id=monitor_id,
+            monitor_task_id=monitor_task_id,
+        )
         report_ids, publish_status, publish_reports = await self._render_and_persist_reports(
             db=db,
             user_id=user_id,
@@ -1410,6 +1422,12 @@ class Orchestrator:
                         usernames.append(value)
             if usernames:
                 config["usernames"] = usernames
+
+        if source.collect_method == "rss":
+            subreddits = normalize_reddit_subreddits(override.get("subreddits"))
+            if subreddits:
+                config["subreddits"] = subreddits
+                config["feed_url"] = build_reddit_feed_url(subreddits)
 
         if resolved_max_items is not None:
             config = Orchestrator._apply_source_max_items(config=config, source=source, max_items=resolved_max_items)
@@ -2040,9 +2058,9 @@ class Orchestrator:
             published_to: list[str] = []
             publish_trace: list[dict] = []
             for target in targets:
-                sink_name = normalize_sink_name(target)
+                sink_name = self._resolve_sink_name(target=str(target), destination_settings=destination_settings or {})
                 try:
-                    sink = get_sink(target)
+                    sink = get_sink(sink_name)
                 except KeyError as exc:
                     if run_id is not None:
                         await append_task_event(
@@ -2063,6 +2081,14 @@ class Orchestrator:
                             "stage": "publish",
                             "sink": sink_name,
                             "provider": target,
+                            "destination_instance_id": self._destination_instance_id(
+                                target=str(target),
+                                destination_settings=destination_settings or {},
+                            ),
+                            "destination_instance_name": self._destination_instance_name(
+                                target=str(target),
+                                destination_settings=destination_settings or {},
+                            ),
                             "status": "failed",
                             "url": None,
                             "error": str(exc),
@@ -2115,6 +2141,14 @@ class Orchestrator:
                         "stage": "publish",
                         "sink": sink_name,
                         "provider": target,
+                        "destination_instance_id": self._destination_instance_id(
+                            target=str(target),
+                            destination_settings=destination_settings or {},
+                        ),
+                        "destination_instance_name": self._destination_instance_name(
+                            target=str(target),
+                            destination_settings=destination_settings or {},
+                        ),
                         "status": "success" if publish_result.success else "failed",
                         "url": publish_result.url,
                         "error": publish_result.error,
@@ -2133,12 +2167,14 @@ class Orchestrator:
                 final_status = "partial_success"
 
             report.published_to = published_to
+            report.published_destination_instance_ids = self._published_destination_instance_ids(publish_trace)
             report.publish_trace = publish_trace
             publish_reports.append(
                 {
                     "report_id": str(report.id),
                     "report_type": report.report_type,
                     "published_to": list(published_to),
+                    "published_destination_instance_ids": list(report.published_destination_instance_ids or []),
                     "publish_trace": list(publish_trace),
                 }
             )
@@ -2187,6 +2223,132 @@ class Orchestrator:
             return importance_rank, source_count, published_at
 
         return sorted(candidates, key=_sort_key, reverse=True)[0]
+
+    async def _run_fulltext_acquisition_stage(
+        self,
+        db: AsyncSession,
+        *,
+        article_ids: list[uuid.UUID],
+        source_by_id: dict[uuid.UUID, Source],
+        report_type: str,
+        run_id: uuid.UUID | None,
+        monitor_id: uuid.UUID | None,
+        monitor_task_id: uuid.UUID | None,
+    ) -> None:
+        if _normalize_report_type(report_type) != "research" or not article_ids:
+            return
+
+        stmt = select(Article).where(Article.id.in_(article_ids))
+        articles = (await db.execute(stmt)).scalars().all()
+        paper_ids: list[uuid.UUID] = []
+        for article in articles:
+            if article.paper_id is None:
+                continue
+            source = source_by_id.get(article.source_id)
+            if source is None or source.category != "academic":
+                continue
+            if article.paper_id not in paper_ids:
+                paper_ids.append(article.paper_id)
+
+        if not paper_ids:
+            return
+
+        requested = 0
+        succeeded = 0
+        failed = 0
+        skipped = 0
+
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="fulltext",
+                event_type="fulltext_started",
+                message=f"[research] starting fulltext acquisition for {len(paper_ids)} papers",
+                payload={"papers_requested": len(paper_ids)},
+            )
+            await db.commit()
+
+        for paper_id in paper_ids:
+            if await self._is_monitor_run_cancelling(db, monitor_task_id=monitor_task_id):
+                break
+            paper = await db.get(Paper, paper_id)
+            if paper is None:
+                failed += 1
+                continue
+            if paper.best_content_id is not None or paper.fulltext_status == "converted":
+                skipped += 1
+                continue
+
+            requested += 1
+            result = await acquire_paper_fulltext(db, paper_id)
+            await db.flush()
+            refreshed_paper = await db.get(Paper, paper_id)
+            acquisition_succeeded = bool(
+                result is not None
+                and result.content is not None
+                or refreshed_paper is not None
+                and (refreshed_paper.best_content_id is not None or refreshed_paper.fulltext_status == "converted")
+            )
+            if acquisition_succeeded:
+                succeeded += 1
+                if run_id is not None:
+                    await append_task_event(
+                        db,
+                        run_id=run_id,
+                        monitor_id=monitor_id,
+                        task_id=monitor_task_id,
+                        source_id=None,
+                        stage="fulltext",
+                        event_type="paper_fulltext_acquired",
+                        message=f"[research] acquired fulltext for paper {paper_id}",
+                        payload={
+                            "paper_id": str(paper_id),
+                            "content_tier": (
+                                result.content.content_tier
+                                if result is not None and result.content is not None
+                                else "fulltext"
+                            ),
+                        },
+                    )
+            else:
+                failed += 1
+                if run_id is not None:
+                    await append_task_event(
+                        db,
+                        run_id=run_id,
+                        monitor_id=monitor_id,
+                        task_id=monitor_task_id,
+                        source_id=None,
+                        stage="fulltext",
+                        event_type="paper_fulltext_failed",
+                        message=f"[research] fulltext unavailable for paper {paper_id}",
+                        payload={"paper_id": str(paper_id)},
+                    )
+            await db.commit()
+
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="fulltext",
+                event_type="fulltext_completed",
+                message="[research] fulltext acquisition completed",
+                payload={
+                    "papers_total": len(paper_ids),
+                    "papers_requested": requested,
+                    "papers_succeeded": succeeded,
+                    "papers_failed": failed,
+                    "papers_skipped": skipped,
+                },
+            )
+            await db.commit()
 
     async def _resolve_research_article_ids(
         self,
@@ -2468,23 +2630,27 @@ class Orchestrator:
         for target in requested_targets:
             if not target:
                 continue
-            normalized = normalize_sink_name(str(target))
-            if normalized in seen:
+            normalized = Orchestrator._resolve_sink_name(str(target), destination_settings)
+            if normalized == str(target) and Orchestrator._looks_like_uuid(str(target)):
+                continue
+            dedupe_key = Orchestrator._destination_dedupe_key(str(target), destination_settings)
+            if dedupe_key in seen:
                 continue
             if not destination_ids and normalized != "database":
                 setting = destination_settings.get(normalized)
                 if setting is not None and setting.get("enabled") is False:
                     continue
             resolved.append(str(target))
-            seen.add(normalized)
+            seen.add(dedupe_key)
 
-        if "database" not in seen:
+        if "sink:database" not in seen and "instance:database" not in seen:
             resolved.insert(0, "database")
         return resolved
 
     @staticmethod
     def _build_sink_config(target: str, report_id: str, destination_settings: dict[str, dict]) -> dict:
-        normalized = normalize_sink_name(target)
+        payload = destination_settings.get(str(target), {})
+        normalized = normalize_sink_name(str(payload.get("type") or target))
         config: dict = {}
         if normalized == "database":
             config = {"report_id": report_id}
@@ -2505,11 +2671,57 @@ class Orchestrator:
                 "max_items": 20,
             }
 
-        user_destination = destination_settings.get(normalized, {})
+        user_destination = payload if payload else destination_settings.get(normalized, {})
         user_config = user_destination.get("config")
         if isinstance(user_config, dict):
             config.update(Orchestrator._normalize_user_sink_config(normalized, user_config))
+        if normalized == "rss" and payload.get("id"):
+            config["destination_instance_id"] = str(payload["id"])
         return config
+
+    @staticmethod
+    def _resolve_sink_name(target: str, destination_settings: dict[str, dict]) -> str:
+        payload = destination_settings.get(str(target), {})
+        return normalize_sink_name(str(payload.get("type") or target))
+
+    @staticmethod
+    def _destination_dedupe_key(target: str, destination_settings: dict[str, dict]) -> str:
+        payload = destination_settings.get(str(target), {})
+        if payload.get("id"):
+            return f"instance:{target}"
+        return f"sink:{Orchestrator._resolve_sink_name(target, destination_settings)}"
+
+    @staticmethod
+    def _destination_instance_id(target: str, destination_settings: dict[str, dict]) -> str | None:
+        payload = destination_settings.get(str(target), {})
+        value = str(payload.get("id") or "").strip()
+        return value or None
+
+    @staticmethod
+    def _destination_instance_name(target: str, destination_settings: dict[str, dict]) -> str | None:
+        payload = destination_settings.get(str(target), {})
+        value = str(payload.get("name") or "").strip()
+        return value or None
+
+    @staticmethod
+    def _looks_like_uuid(value: str) -> bool:
+        try:
+            uuid.UUID(str(value))
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _published_destination_instance_ids(publish_trace: list[dict]) -> list[str]:
+        published: list[str] = []
+        for item in publish_trace:
+            if item.get("status") != "success":
+                continue
+            destination_instance_id = str(item.get("destination_instance_id") or "").strip()
+            if not destination_instance_id or destination_instance_id in published:
+                continue
+            published.append(destination_instance_id)
+        return published
 
     @staticmethod
     def _normalize_user_sink_config(normalized_sink: str, user_config: dict) -> dict:
@@ -2533,10 +2745,16 @@ class Orchestrator:
 
         if normalized_sink == "obsidian":
             obsidian_config: dict = {}
+            if user_config.get("mode"):
+                obsidian_config["mode"] = str(user_config["mode"])
+            if user_config.get("api_url"):
+                obsidian_config["api_url"] = str(user_config["api_url"])
+            if user_config.get("api_key"):
+                obsidian_config["api_key"] = str(user_config["api_key"])
+            if user_config.get("target_folder"):
+                obsidian_config["target_folder"] = str(user_config["target_folder"])
             if user_config.get("vault_path"):
                 obsidian_config["vault_path"] = str(user_config["vault_path"])
-            elif user_config.get("target_folder"):
-                obsidian_config["vault_path"] = str(user_config["target_folder"])
             return obsidian_config
 
         if normalized_sink == "rss":

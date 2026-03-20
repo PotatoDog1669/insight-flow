@@ -46,6 +46,14 @@ const mockedUpdateMonitor = vi.mocked(updateMonitor);
 const mockedRunMonitor = vi.mocked(runMonitor);
 const mockedDeleteMonitor = vi.mocked(deleteMonitor);
 
+const expandAiRoutingSection = async () => {
+  const toggle = screen.getByRole("button", { name: "AI 路由配置（高级）" });
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(toggle);
+  }
+  await screen.findByLabelText("Filter stage provider");
+};
+
 describe("MonitorsPage", () => {
   beforeEach(() => {
     mockedGetMonitors.mockResolvedValue([
@@ -56,6 +64,7 @@ describe("MonitorsPage", () => {
         report_type: "daily",
         source_ids: ["source-1"],
         destination_ids: ["notion"],
+        destination_instance_ids: ["dest-notion-1"],
         window_hours: 24,
         custom_schedule: null,
         enabled: true,
@@ -166,8 +175,8 @@ describe("MonitorsPage", () => {
     ]);
     mockedGetDestinations.mockResolvedValue([
       {
-        id: "notion",
-        name: "Notion",
+        id: "dest-notion-1",
+        name: "Notion Workspace",
         type: "notion",
         description: "Notion destination",
         config: {},
@@ -266,6 +275,7 @@ describe("MonitorsPage", () => {
       report_type: "daily",
       source_ids: ["source-1"],
       destination_ids: [],
+      destination_instance_ids: [],
       window_hours: 24,
       custom_schedule: null,
       source_overrides: {},
@@ -282,6 +292,7 @@ describe("MonitorsPage", () => {
       report_type: "daily",
       source_ids: ["source-1"],
       destination_ids: ["notion"],
+      destination_instance_ids: ["dest-notion-1"],
       window_hours: 24,
       custom_schedule: null,
       source_overrides: {},
@@ -316,24 +327,66 @@ describe("MonitorsPage", () => {
 
     fireEvent.click(screen.getByText("Daily AI Brief"));
 
-    expect(await screen.findByRole("heading", { name: "Edit Monitor" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
       target: { value: "Updated monitor" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
-      expect(mockedUpdateMonitor).toHaveBeenCalledWith(
+        expect(mockedUpdateMonitor).toHaveBeenCalledWith(
         "monitor-1",
         expect.objectContaining({
           name: "Updated monitor",
           time_period: "daily",
           report_type: "daily",
           source_ids: ["source-1"],
-          destination_ids: ["notion"],
+          destination_instance_ids: ["dest-notion-1"],
         })
+      );
+    });
+  });
+
+  it("maps legacy destination ids onto destination instances when editing", async () => {
+    mockedGetMonitors.mockResolvedValueOnce([
+      {
+        id: "monitor-1",
+        name: "Daily AI Brief",
+        time_period: "daily",
+        report_type: "daily",
+        source_ids: ["source-1"],
+        destination_ids: ["notion"],
+        destination_instance_ids: [],
+        window_hours: 24,
+        custom_schedule: null,
+        source_overrides: {},
+        enabled: true,
+        status: "active",
+        last_run: null,
+        created_at: "2026-03-02T10:00:00Z",
+        updated_at: "2026-03-02T10:00:00Z",
+      },
+    ]);
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Daily AI Brief"));
+    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
+
+    const notionCheckbox = screen.getByRole("checkbox", { name: /Notion Workspace/i });
+    expect(notionCheckbox).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateMonitor).toHaveBeenCalledWith(
+        "monitor-1",
+        expect.objectContaining({
+          destination_instance_ids: ["dest-notion-1"],
+        }),
       );
     });
   });
@@ -343,10 +396,10 @@ describe("MonitorsPage", () => {
 
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
-    const newsCategoryTrigger = await screen.findByRole("button", { name: "Category: news" });
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    const newsCategoryTrigger = await screen.findByRole("button", { name: "分类: news" });
     expect(newsCategoryTrigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: "Category: research" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "分类: research" })).toBeInTheDocument();
     expect(screen.getByText("DeepMind News")).toBeInTheDocument();
 
     fireEvent.click(newsCategoryTrigger);
@@ -357,12 +410,12 @@ describe("MonitorsPage", () => {
     expect(newsCategoryTrigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("DeepMind News")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
 
     fireEvent.click(screen.getByText("Daily AI Brief"));
-    expect(await screen.findByRole("heading", { name: "Edit Monitor" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Category: news" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Category: research" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "分类: news" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "分类: research" })).toBeInTheDocument();
   });
 
   it("does not preselect any source when creating monitor", async () => {
@@ -370,13 +423,13 @@ describe("MonitorsPage", () => {
 
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
 
-    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
       target: { value: "No Default Source Monitor" },
     });
 
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "创建" });
     expect(createButton).toBeDisabled();
 
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
@@ -384,12 +437,55 @@ describe("MonitorsPage", () => {
     expect(createButton).not.toBeDisabled();
   });
 
+  it("submits multiple destination instances when creating a monitor", async () => {
+    mockedGetDestinations.mockResolvedValueOnce([
+      {
+        id: "dest-notion-1",
+        name: "Notion Workspace",
+        type: "notion",
+        description: "Notion destination",
+        config: {},
+        enabled: true,
+      },
+      {
+        id: "dest-obsidian-1",
+        name: "Research Vault",
+        type: "obsidian",
+        description: "Obsidian destination",
+        config: {},
+        enabled: true,
+      },
+    ]);
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Multi destination monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Notion Workspace/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Research Vault/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Multi destination monitor",
+          destination_instance_ids: ["dest-notion-1", "dest-obsidian-1"],
+        })
+      );
+    });
+  }, 30000);
+
   it("sends source max_items override when creating monitor", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
-    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
       target: { value: "HF Monitor" },
     });
 
@@ -398,7 +494,7 @@ describe("MonitorsPage", () => {
       target: { value: "12" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
     await waitFor(() => {
       expect(mockedCreateMonitor).toHaveBeenCalledWith(
@@ -415,11 +511,12 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
-    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
       target: { value: "Routing Monitor" },
     });
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    await expandAiRoutingSection();
 
     fireEvent.change(screen.getByLabelText("Filter stage provider"), {
       target: { value: "llm_openai" },
@@ -441,7 +538,7 @@ describe("MonitorsPage", () => {
       target: { value: "gpt-5-codex" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
     await waitFor(() => {
       expect(mockedCreateMonitor).toHaveBeenCalledWith(
@@ -468,7 +565,8 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    await expandAiRoutingSection();
 
     const llmInheritOptions = screen.getAllByRole("option", {
       name: "inherit (current: llm_openai)",
@@ -485,6 +583,7 @@ describe("MonitorsPage", () => {
         report_type: "daily",
         source_ids: ["source-1"],
         destination_ids: ["notion"],
+        destination_instance_ids: ["dest-notion-1"],
         window_hours: 24,
         custom_schedule: null,
         source_overrides: {},
@@ -505,12 +604,13 @@ describe("MonitorsPage", () => {
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Daily AI Brief"));
-    expect(await screen.findByRole("heading", { name: "Edit Monitor" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
+    await expandAiRoutingSection();
 
     fireEvent.change(screen.getByLabelText("Filter stage provider"), {
       target: { value: "" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
       expect(mockedUpdateMonitor).toHaveBeenCalledWith(
@@ -526,7 +626,8 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    await expandAiRoutingSection();
 
     const optionTexts = screen.getAllByRole("option").map((option) => option.textContent?.trim() ?? "");
     expect(optionTexts).toContain("llm_codex");
@@ -539,8 +640,8 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Monitor" }));
-    fireEvent.change(screen.getByPlaceholderText("e.g. Daily AI Brief"), {
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
       target: { value: "Arxiv Monitor" },
     });
 
@@ -552,7 +653,7 @@ describe("MonitorsPage", () => {
       target: { value: "40" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
     await waitFor(() => {
       expect(mockedCreateMonitor).toHaveBeenCalledWith(
@@ -839,7 +940,7 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+    fireEvent.click(screen.getByRole("button", { name: "日志" }));
     expect(await screen.findByRole("heading", { name: "Run History: Daily AI Brief" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Terminate Run" }));
@@ -861,7 +962,7 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    const runButton = screen.getByRole("button", { name: "Run" });
+    const runButton = screen.getByRole("button", { name: "运行" });
     fireEvent.click(runButton);
 
     expect(mockedRunMonitor).toHaveBeenCalledWith("monitor-1");
@@ -875,7 +976,7 @@ describe("MonitorsPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "运行" })).toBeEnabled();
     });
   });
 
@@ -883,7 +984,7 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    fireEvent.click(screen.getByRole("button", { name: "运行" }));
 
     expect(await screen.findByText(/Run started\./)).toBeInTheDocument();
     expect(screen.getByText(/run-1/)).toBeInTheDocument();
@@ -900,6 +1001,7 @@ describe("MonitorsPage", () => {
           report_type: "daily",
           source_ids: ["source-1"],
           destination_ids: ["notion"],
+          destination_instance_ids: ["dest-notion-1"],
           window_hours: 24,
           custom_schedule: null,
           enabled: true,
@@ -919,12 +1021,12 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    fireEvent.click(screen.getByRole("button", { name: "运行" }));
 
     expect(await screen.findByText(/Run started\./)).toBeInTheDocument();
     expect(screen.getByText(/Open Logs to follow progress\./)).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "运行" })).toBeEnabled();
     });
     expect(screen.queryByRole("heading", { name: /Run History:/ })).not.toBeInTheDocument();
     expect(mockedGetMonitorLogs).not.toHaveBeenCalled();
@@ -938,6 +1040,7 @@ describe("MonitorsPage", () => {
           report_type: "daily",
           source_ids: ["source-1"],
           destination_ids: ["notion"],
+          destination_instance_ids: ["dest-notion-1"],
           window_hours: 24,
           custom_schedule: null,
           enabled: true,
@@ -954,7 +1057,7 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+    fireEvent.click(screen.getByRole("button", { name: "日志" }));
 
     const modal = await screen.findByTestId("monitor-logs-modal");
     expect(modal).toHaveClass("w-[96vw]");
@@ -968,7 +1071,7 @@ describe("MonitorsPage", () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+    fireEvent.click(screen.getByRole("button", { name: "日志" }));
 
     expect(await screen.findByText("Logs fetch failed")).toBeInTheDocument();
   });

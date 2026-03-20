@@ -1,6 +1,10 @@
 <div align="center">
   <img src="docs/banner.svg" alt="Insight Flow banner" />
+</div>
 
+---
+
+<div align="center">
   <p>
     <a href="https://insight-flow.potatodog.cc/zh/introduction">
       <img src="https://img.shields.io/badge/docs-home-0EA5E9?style=flat-square" alt="Documentation">

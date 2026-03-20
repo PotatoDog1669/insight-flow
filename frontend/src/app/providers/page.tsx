@@ -15,15 +15,17 @@ import {
     type ProviderTestResponse,
 } from "@/lib/api";
 
-function buildProviderPayload(config: LLMProviderConfig): LLMProviderConfig {
+function buildProviderPayload(providerId: Provider["id"], config: LLMProviderConfig): LLMProviderConfig {
+    const authMode = providerId === "llm_codex" && config.auth_mode === "local_codex" ? "local_codex" : "api_key";
     return {
+        auth_mode: authMode,
         base_url: String(config.base_url || "").trim(),
         model: String(config.model || "").trim(),
         timeout_sec: Math.max(Number(config.timeout_sec || 30), 1),
         max_retry: Math.max(Number(config.max_retry || 0), 0),
         max_output_tokens: Math.max(Number(config.max_output_tokens || 1200), 1),
         temperature: Number(config.temperature || 0.3),
-        api_key: String(config.api_key || "").trim(),
+        api_key: authMode === "local_codex" ? "" : String(config.api_key || "").trim(),
     };
 }
 
@@ -75,6 +77,7 @@ export default function ProvidersPage() {
     const startEditing = (provider: Provider) => {
         setEditingId(provider.id);
         setEditConfig({
+            auth_mode: provider.id === "llm_codex" && provider.config.auth_mode === "local_codex" ? "local_codex" : "api_key",
             base_url: provider.config.base_url || "https://api.openai.com/v1",
             model: provider.config.model || "gpt-4o-mini",
             timeout_sec: Number(provider.config.timeout_sec || 30),
@@ -93,7 +96,7 @@ export default function ProvidersPage() {
         setTestError(null);
         setTestResult(null);
         try {
-            const result = await testProvider(provider.id, { config: buildProviderPayload(editConfig) });
+            const result = await testProvider(provider.id, { config: buildProviderPayload(provider.id, editConfig) });
             setTestResult(result);
         } catch (err) {
             setTestError(err instanceof Error ? err.message : "测试模型连接失败");
@@ -110,7 +113,7 @@ export default function ProvidersPage() {
         setError(null);
         try {
             const updated = await updateProvider(providerId, {
-                config: buildProviderPayload(editConfig),
+                config: buildProviderPayload(providerId, editConfig),
                 enabled: true,
             });
             setProviders((prev) => prev.map((item) => (item.id === providerId ? updated : item)));
@@ -195,19 +198,54 @@ export default function ProvidersPage() {
                                             模型连接配置
                                         </div>
 
+                                        {provider.id === "llm_codex" && (
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-auth-mode`}>
+                                                    连接模式
+                                                </label>
+                                                <select
+                                                    id={`${provider.id}-auth-mode`}
+                                                    aria-label="连接模式"
+                                                    value={editConfig.auth_mode}
+                                                    onChange={(e) =>
+                                                        setEditConfig({
+                                                            ...editConfig,
+                                                            auth_mode: e.target.value === "local_codex" ? "local_codex" : "api_key",
+                                                        })
+                                                    }
+                                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                >
+                                                    <option value="api_key">API Key</option>
+                                                    <option value="local_codex">Local 已登录 Codex</option>
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {editConfig.auth_mode !== "local_codex" && (
+                                            <>
                                         <div className="space-y-1.5">
-                                            <label className="text-xs font-medium text-muted-foreground">Base URL</label>
+                                            <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-base-url`}>
+                                                Base URL
+                                            </label>
                                             <input
+                                                id={`${provider.id}-base-url`}
+                                                aria-label="Base URL"
                                                 value={editConfig.base_url}
                                                 onChange={(e) => setEditConfig({ ...editConfig, base_url: e.target.value })}
                                                 placeholder="https://api.openai.com/v1"
                                                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                             />
                                         </div>
+                                            </>
+                                        )}
 
                                         <div className="space-y-1.5">
-                                            <label className="text-xs font-medium text-muted-foreground">模型</label>
+                                            <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-model`}>
+                                                模型
+                                            </label>
                                             <input
+                                                id={`${provider.id}-model`}
+                                                aria-label="模型"
                                                 value={editConfig.model}
                                                 onChange={(e) => setEditConfig({ ...editConfig, model: e.target.value })}
                                                 placeholder="gpt-4o-mini"
@@ -217,8 +255,12 @@ export default function ProvidersPage() {
 
                                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                             <div className="space-y-1.5">
-                                                <label className="text-xs font-medium text-muted-foreground">超时（秒）</label>
+                                                <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-timeout`}>
+                                                    超时（秒）
+                                                </label>
                                                 <input
+                                                    id={`${provider.id}-timeout`}
+                                                    aria-label="超时（秒）"
                                                     type="number"
                                                     min={1}
                                                     value={editConfig.timeout_sec}
@@ -227,8 +269,12 @@ export default function ProvidersPage() {
                                                 />
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-xs font-medium text-muted-foreground">重试次数</label>
+                                                <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-max-retry`}>
+                                                    重试次数
+                                                </label>
                                                 <input
+                                                    id={`${provider.id}-max-retry`}
+                                                    aria-label="重试次数"
                                                     type="number"
                                                     min={0}
                                                     value={editConfig.max_retry}
@@ -240,8 +286,12 @@ export default function ProvidersPage() {
 
                                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                             <div className="space-y-1.5">
-                                                <label className="text-xs font-medium text-muted-foreground">最大输出 Tokens</label>
+                                                <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-max-output-tokens`}>
+                                                    最大输出 Tokens
+                                                </label>
                                                 <input
+                                                    id={`${provider.id}-max-output-tokens`}
+                                                    aria-label="最大输出 Tokens"
                                                     type="number"
                                                     min={1}
                                                     value={editConfig.max_output_tokens}
@@ -250,8 +300,12 @@ export default function ProvidersPage() {
                                                 />
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-xs font-medium text-muted-foreground">Temperature</label>
+                                                <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-temperature`}>
+                                                    Temperature
+                                                </label>
                                                 <input
+                                                    id={`${provider.id}-temperature`}
+                                                    aria-label="Temperature"
                                                     type="number"
                                                     min={0}
                                                     step="0.1"
@@ -262,15 +316,20 @@ export default function ProvidersPage() {
                                             </div>
                                         </div>
 
-                                        <div className="space-y-1.5">
-                                            <label className="text-xs font-medium text-muted-foreground">API Key</label>
-                                            <SecretField
-                                                label="API Key"
-                                                value={editConfig.api_key}
-                                                onChange={(value) => setEditConfig({ ...editConfig, api_key: value })}
-                                                placeholder="sk-..."
-                                            />
-                                        </div>
+                                        {editConfig.auth_mode !== "local_codex" && (
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-medium text-muted-foreground" htmlFor={`${provider.id}-api-key`}>
+                                                    API Key
+                                                </label>
+                                                <SecretField
+                                                    inputId={`${provider.id}-api-key`}
+                                                    label="API Key"
+                                                    value={editConfig.api_key}
+                                                    onChange={(value) => setEditConfig({ ...editConfig, api_key: value })}
+                                                    placeholder="sk-..."
+                                                />
+                                            </div>
+                                        )}
 
                                         {testError && (
                                             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
@@ -295,6 +354,14 @@ export default function ProvidersPage() {
                                     </div>
                                 ) : (
                                     <div className="space-y-3">
+                                        {provider.id === "llm_codex" && (
+                                            <div className="flex justify-between border-b border-border/30 pb-2">
+                                                <span className="text-xs text-muted-foreground">连接模式</span>
+                                                <span className="font-mono text-xs text-foreground">
+                                                    {provider.config.auth_mode === "local_codex" ? "Local 已登录 Codex" : "API Key"}
+                                                </span>
+                                            </div>
+                                        )}
                                         <div className="flex justify-between border-b border-border/30 pb-2">
                                             <span className="text-xs text-muted-foreground">Base URL</span>
                                             <span className="max-w-[65%] truncate text-right font-mono text-xs text-foreground">{provider.config.base_url}</span>

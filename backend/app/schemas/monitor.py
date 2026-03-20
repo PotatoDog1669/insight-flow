@@ -69,6 +69,7 @@ class MonitorBase(BaseModel):
     source_overrides: dict[str, dict] = Field(default_factory=dict)  # dict can contain max_items, limit, max_results, keywords, usernames, subreddits
     ai_routing: MonitorAIRouting = Field(default_factory=MonitorAIRouting)
     destination_ids: list[str] = Field(default_factory=list)
+    destination_instance_ids: list[uuid.UUID] = Field(default_factory=list)
     window_hours: int = Field(default=24, ge=1, le=168)
     custom_schedule: str | None = None
     enabled: bool = True
@@ -86,6 +87,7 @@ class MonitorUpdate(BaseModel):
     source_overrides: dict[str, dict] | None = None
     ai_routing: MonitorAIRouting | None = None
     destination_ids: list[str] | None = None
+    destination_instance_ids: list[uuid.UUID] | None = None
     window_hours: int | None = Field(default=None, ge=1, le=168)
     custom_schedule: str | None = None
     enabled: bool | None = None
