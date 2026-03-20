@@ -8,7 +8,7 @@ Destinations decide where generated results are written. The system currently su
 ## Supported Targets
 
 - `notion`: sync to a Notion database or page
-- `obsidian`: write markdown to an Obsidian vault or bridge
+- `obsidian`: write to Obsidian after explicitly choosing `REST API` or `file` mode
 - `rss`: expose reports as an RSS feed
 
 ## Key Capabilities
@@ -16,25 +16,30 @@ Destinations decide where generated results are written. The system currently su
 - Keep per-target configuration
 - Enable or disable each destination independently
 - Bind one or more destinations to a monitor
+- Let Obsidian choose an explicit mode and run a connectivity test
 
 ## How to Use It
 
 1. Open the Destinations page
 2. Fill in the config for your target
-3. Enable the destination
-4. Select that destination in a monitor
-5. Run the monitor and verify the output
+3. For Obsidian, explicitly choose `REST API` or `file` mode
+4. Run the connectivity test
+5. Enable the destination
+6. Select that destination in a monitor
+7. Run the monitor and verify the output
 
 ## Configuration Notes
 
 - Notion: confirm token plus database ID or parent page ID
-- Obsidian: confirm the bridge or vault is writable
+- Obsidian `REST API`: confirm the local plugin is reachable and the API key is valid
+- Obsidian `file`: confirm `vault_path` points to a writable vault directory
 - RSS: confirm consumers use the right feed URL
 
 ## Related API
 
 - List: `GET /api/v1/destinations`
 - Update: `PATCH /api/v1/destinations/{destination_id}`
+- Test connectivity: `POST /api/v1/destinations/{destination_id}/test`
 - RSS feed: `GET /api/v1/feed.xml`
 
 ## Related Pages

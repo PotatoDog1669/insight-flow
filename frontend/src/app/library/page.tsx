@@ -3,16 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ReportCard, type Report as ReportCardModel } from "@/components/ReportCard";
 import { deleteReport, getReportFilters, getReports, type Report as APIReport, type ReportFilters } from "@/lib/api";
-import { cn } from "@/lib/utils";
-
-const TIME_TABS = [
-  { id: "all", label: "总览" },
-  { id: "daily", label: "日报" },
-  { id: "weekly", label: "周报" },
-  { id: "custom", label: "自定义" },
-] as const;
-
-type TimeFilter = (typeof TIME_TABS)[number]["id"];
 
 function toCardReport(report: APIReport): ReportCardModel {
   return {
@@ -30,7 +20,6 @@ function toCardReport(report: APIReport): ReportCardModel {
 }
 
 export default function LibraryPage() {
-  const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [monitorFilter, setMonitorFilter] = useState("all");
   const [reports, setReports] = useState<ReportCardModel[]>([]);
   const [reportFilters, setReportFilters] = useState<ReportFilters>({
@@ -64,12 +53,8 @@ export default function LibraryPage() {
   }, []);
 
   const filteredReports = useMemo(() => {
-    return reports.filter((report) => {
-      const matchesTime = timeFilter === "all" || report.time_period === timeFilter;
-      const matchesMonitor = monitorFilter === "all" || report.monitor_id === monitorFilter;
-      return matchesTime && matchesMonitor;
-    });
-  }, [monitorFilter, reports, timeFilter]);
+    return reports.filter((report) => monitorFilter === "all" || report.monitor_id === monitorFilter);
+  }, [monitorFilter, reports]);
 
   const handleDelete = async (reportId: string) => {
     if (typeof window !== "undefined" && !window.confirm("确认删除这份报告吗？")) {
@@ -100,26 +85,10 @@ export default function LibraryPage() {
         </p>
       </header>
 
-      <div className="mb-8 flex flex-col gap-4 border-b border-border/60 pb-px md:flex-row md:items-end md:justify-between">
-        <div className="flex items-center space-x-6 overflow-x-auto scrollbar-none">
-          {TIME_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setTimeFilter(tab.id)}
-              className={cn(
-                "pb-3 px-1 text-sm font-medium transition-colors relative whitespace-nowrap outline-none flex items-center rounded-t-md focus-visible:ring-2 focus-visible:ring-ring",
-                timeFilter === tab.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {tab.label}
-              {timeFilter === tab.id && <span className="absolute left-0 right-0 bottom-0 h-0.5 bg-foreground rounded-t-full" />}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-3 pb-3 md:justify-end">
+      <div className="mb-8 flex justify-end border-b border-border/60 pb-3">
+        <div className="flex items-center gap-3">
           <label htmlFor="library-monitor-filter" className="text-sm font-medium whitespace-nowrap">
-            任务主题
+            主题
           </label>
           <select
             id="library-monitor-filter"
@@ -127,7 +96,7 @@ export default function LibraryPage() {
             onChange={(event) => setMonitorFilter(event.target.value)}
             className="h-10 min-w-[220px] rounded-md border border-border bg-background px-3 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <option value="all">全部任务</option>
+            <option value="all">全部</option>
             {reportFilters.monitors.map((monitor) => (
               <option key={monitor.id} value={monitor.id}>
                 {monitor.name}

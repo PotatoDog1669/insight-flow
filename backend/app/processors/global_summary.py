@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from app.providers.registry import get_provider
 from app.routing.schema import StageRoute
+from app.providers.errors import ProviderUnavailableError
 
 from app.processors.event_models import GlobalSummary
 
@@ -85,6 +86,8 @@ async def run_global_summary_stage(
 
     try:
         output, provider = await runner(payload)
+    except ProviderUnavailableError:
+        raise
     except Exception:
         return GlobalSummary(global_tldr=fallback, provider="fallback", fallback_used=True, prompt_metrics=metrics)
 
@@ -168,6 +171,13 @@ async def run_global_summary_with_retry(
             try:
                 result = await provider.run(payload=payload, config=config)
                 return result, provider_name
+            except ProviderUnavailableError as exc:
+                if provider_name == "llm_openai" and not exc.stage:
+                    exc.stage = "global_summary"
+                if provider_name == "llm_openai" or exc.provider == "llm_openai":
+                    raise
+                last_exc = exc
+                break
             except Exception as exc:
                 last_exc = exc
     if last_exc is not None:

@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { within } from "@testing-library/react";
 
 import ReportDetailPage from "@/app/reports/[id]/page";
-import { getArticleById, getReportById } from "@/lib/api";
+import { getArticleById, getDestinations, getReportById, publishReportToDestination } from "@/lib/api";
 
 const pushMock = vi.fn();
 
@@ -13,15 +14,45 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api", () => ({
   getReportById: vi.fn(),
   getArticleById: vi.fn(),
+  getDestinations: vi.fn(),
+  publishReportToDestination: vi.fn(),
 }));
 
 const mockedGetReportById = vi.mocked(getReportById);
 const mockedGetArticleById = vi.mocked(getArticleById);
+const mockedGetDestinations = vi.mocked(getDestinations);
+const mockedPublishReportToDestination = vi.mocked(publishReportToDestination);
 
 describe("ReportDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pushMock.mockReset();
+    mockedGetDestinations.mockResolvedValue([
+      {
+        id: "dest-notion-1",
+        name: "Notion Workspace",
+        type: "notion",
+        description: "Sync to Notion",
+        config: {},
+        enabled: true,
+      },
+      {
+        id: "dest-obsidian-1",
+        name: "Obsidian Vault",
+        type: "obsidian",
+        description: "Sync to Obsidian",
+        config: {},
+        enabled: true,
+      },
+      {
+        id: "dest-rss-1",
+        name: "RSS Feed",
+        type: "rss",
+        description: "Sync to RSS",
+        config: {},
+        enabled: false,
+      },
+    ] as never);
   });
 
   it("renders document from report.content and outline", async () => {
@@ -56,6 +87,8 @@ describe("ReportDetailPage", () => {
       content: "# AI Daily\n\n## 全局总结与锐评\nA",
       article_ids: [],
       published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
       metadata: {},
       monitor_id: "monitor-1",
       monitor_name: "Agent Watch",
@@ -87,6 +120,8 @@ describe("ReportDetailPage", () => {
       content: "plain text body without heading markers",
       article_ids: ["article-1"],
       published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
       metadata: {},
       monitor_id: "monitor-1",
       monitor_name: "Agent Watch",
@@ -133,6 +168,8 @@ describe("ReportDetailPage", () => {
       content: "# AI Daily\n\n## 全局总结与锐评\nA",
       article_ids: [],
       published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
       metadata: {},
       monitor_id: "monitor-1",
       monitor_name: "Agent Watch",
@@ -146,5 +183,164 @@ describe("ReportDetailPage", () => {
     });
     expect(screen.queryByRole("button", { name: "删除报告" })).not.toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("renders manual resync statuses for enabled destinations", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-1",
+      user_id: null,
+      time_period: "daily",
+      report_type: "daily",
+      title: "AI Daily",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# AI Daily\n\n## 全局总结与锐评\nA",
+      article_ids: [],
+      published_to: ["notion"],
+      published_destination_instance_ids: ["dest-notion-1"],
+      publish_trace: [
+        {
+          stage: "publish",
+          sink: "obsidian",
+          provider: "dest-obsidian-1",
+          destination_instance_id: "dest-obsidian-1",
+          destination_instance_name: "Obsidian Vault",
+          status: "failed",
+          url: null,
+          error: "network error",
+          latency_ms: 12,
+          trigger: "manual",
+        },
+      ],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByText("同步")).toBeInTheDocument());
+    expect(screen.getByText("Notion Workspace")).toBeInTheDocument();
+    expect(screen.getByText("已同步")).toBeInTheDocument();
+    expect(screen.getByText("Obsidian Vault")).toBeInTheDocument();
+    expect(screen.getByText("上次失败")).toBeInTheDocument();
+    expect(screen.queryByText("RSS Feed")).not.toBeInTheDocument();
+  });
+
+  it("publishes report to a destination and refreshes the status", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-1",
+      user_id: null,
+      time_period: "daily",
+      report_type: "daily",
+      title: "AI Daily",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# AI Daily\n\n## 全局总结与锐评\nA",
+      article_ids: [],
+      published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+    mockedPublishReportToDestination.mockResolvedValue({
+      id: "report-1",
+      user_id: null,
+      time_period: "daily",
+      report_type: "daily",
+      title: "AI Daily",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# AI Daily\n\n## 全局总结与锐评\nA",
+      article_ids: [],
+      published_to: ["obsidian"],
+      published_destination_instance_ids: ["dest-obsidian-1"],
+      publish_trace: [
+        {
+          stage: "publish",
+          sink: "obsidian",
+          provider: "dest-obsidian-1",
+          destination_instance_id: "dest-obsidian-1",
+          destination_instance_name: "Obsidian Vault",
+          status: "success",
+          url: "/tmp/obsidian-vault/AI Daily.md",
+          error: null,
+          latency_ms: 18,
+          trigger: "manual",
+        },
+      ],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "同步到 Obsidian Vault" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "同步到 Obsidian Vault" }));
+    const dialogTitle = await screen.findByRole("heading", { name: "确认同步" });
+    const dialog = dialogTitle.closest("div.rounded-3xl");
+    expect(dialog).not.toBeNull();
+    expect(within(dialog as HTMLElement).getByText("Obsidian Vault")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认同步" }));
+
+    await waitFor(() => {
+      expect(mockedPublishReportToDestination).toHaveBeenCalledWith("report-1", ["dest-obsidian-1"]);
+    });
+    expect(await screen.findByText("已同步")).toBeInTheDocument();
+  });
+
+  it("does not publish when the sync confirmation is cancelled", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-1",
+      user_id: null,
+      time_period: "daily",
+      report_type: "daily",
+      title: "AI Daily",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# AI Daily\n\n## 全局总结与锐评\nA",
+      article_ids: [],
+      published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "同步到 Obsidian Vault" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "同步到 Obsidian Vault" }));
+    expect(await screen.findByRole("heading", { name: "确认同步" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "确认同步" })).not.toBeInTheDocument();
+    });
+    expect(mockedPublishReportToDestination).not.toHaveBeenCalled();
   });
 });

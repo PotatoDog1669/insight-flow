@@ -4,8 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 
 class ReportTopic(BaseModel):
@@ -41,6 +40,19 @@ class ReportEvent(BaseModel):
     published_at: datetime | None = None
 
 
+class ReportPublishTraceEntry(BaseModel):
+    stage: str = "publish"
+    sink: str = ""
+    provider: str = ""
+    destination_instance_id: str | None = None
+    destination_instance_name: str | None = None
+    status: str = ""
+    url: str | None = None
+    error: str | None = None
+    latency_ms: int = Field(default=0, ge=0)
+    trigger: str = ""
+
+
 class ReportResponse(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID | None = None
@@ -57,7 +69,8 @@ class ReportResponse(BaseModel):
     content: str = ""
     article_ids: list[uuid.UUID] = Field(default_factory=list)
     published_to: list = Field(default_factory=list)
-    publish_trace: list = Field(default_factory=list)
+    published_destination_instance_ids: list[str] = Field(default_factory=list)
+    publish_trace: list[ReportPublishTraceEntry] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     report_date: date
     created_at: datetime
@@ -79,3 +92,8 @@ class ReportCustomRequest(BaseModel):
     report_type: Literal["daily", "weekly", "research"] = "research"
     category: str | None = None
     report_date: date | None = None
+
+
+class ReportPublishRequest(BaseModel):
+    destination_id: Literal["notion", "obsidian", "rss"] | None = None
+    destination_instance_ids: list[uuid.UUID] = Field(default_factory=list)

@@ -114,12 +114,24 @@ describe("LibraryPage", () => {
       expect(screen.getByText("Infra Report")).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByLabelText("任务主题"), {
+    fireEvent.change(screen.getByLabelText("主题"), {
       target: { value: "monitor-1" },
     });
 
     expect(screen.getByText("Agent Report")).toBeInTheDocument();
     expect(screen.queryByText("Infra Report")).not.toBeInTheDocument();
+  });
+
+  it("uses a single theme filter instead of time tabs", async () => {
+    render(<LibraryPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("主题")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: "日报" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "周报" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "自定义" })).not.toBeInTheDocument();
   });
 
   it("deletes a report from the archive list", async () => {

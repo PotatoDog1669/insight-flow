@@ -64,6 +64,10 @@ sources:
     rss_status: provided
     strategy: rss_then_feed_summary
     collect_config:
+      subreddits:
+        - LocalLLaMA
+        - singularity
+        - OpenAI
       max_items: 30
       fetch_detail: false
       user_agent: "LexDeepResearchBot/0.1"
@@ -518,3 +522,62 @@ sources:
     priority: p0
     enabled: true
     notes: "2026-03-02 切换为 arXiv API 查询（Atom），通过关键词+分类聚合单一学术源"
+
+  - key: openalex
+    group: academic
+    company: OpenAlex
+    category: academic
+    urls: ["https://api.openalex.org/works"]
+    rss_url: null
+    rss_status: none
+    strategy: openalex_api
+    collect_config:
+      base_url: "https://api.openalex.org/works"
+      keywords: ["reasoning", "agent", "multimodal", "tool use"]
+      max_results: 40
+      mailto: "research@example.com"
+      api_key: ""
+      supports_time_window: true
+      auth_mode: optional_api_key
+    priority: p0
+    enabled: true
+    notes: "2026-03-19 通用跨学科学术 API 源，优先覆盖 works 检索"
+
+  - key: europe_pmc
+    group: academic
+    company: Europe PMC
+    category: academic
+    urls: ["https://www.ebi.ac.uk/europepmc/webservices/rest/search"]
+    rss_url: null
+    rss_status: none
+    strategy: europe_pmc_api
+    collect_config:
+      base_url: "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+      keywords: ["reasoning", "agent", "multimodal", "tool use"]
+      max_results: 40
+      supports_time_window: true
+      auth_mode: none
+    priority: p0
+    enabled: true
+    notes: "2026-03-19 生物医学主检索扩展源，覆盖 PubMed abstracts 与更多增强信息"
+
+  - key: pubmed
+    group: academic
+    company: PubMed
+    category: academic
+    urls: ["https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"]
+    rss_url: null
+    rss_status: none
+    strategy: pubmed_api
+    collect_config:
+      base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+      keywords: ["reasoning", "agent", "multimodal", "tool use"]
+      max_results: 40
+      api_key: ""
+      tool: "lexdeepresearch"
+      email: "research@example.com"
+      supports_time_window: true
+      auth_mode: optional_api_key
+    priority: p0
+    enabled: true
+    notes: "2026-03-19 NCBI E-utilities 学术源，适合标准化医学检索"

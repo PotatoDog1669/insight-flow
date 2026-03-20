@@ -33,6 +33,17 @@ def _build_job() -> ResearchJob:
             keywords=["openai", "model"],
         ),
         focus_questions=["What changed?"],
+        metadata={
+            "analysis_mode": "literature",
+            "literature_corpus": [
+                {
+                    "paper_id": "paper-1",
+                    "title": "OpenAI releases model",
+                    "evidence_level": "fulltext",
+                    "analysis_text": "Fulltext literature content",
+                }
+            ],
+        },
     )
 
 
@@ -98,6 +109,8 @@ async def test_deerflow_embedded_runtime_normalizes_json_response(monkeypatch: p
     assert "Use the enabled skills" in str(captured["message"])
     assert "Prioritize the provided event details and source links" in str(captured["message"])
     assert "OpenAI releases model" in str(captured["message"])
+    assert '"analysis_mode": "literature"' in str(captured["message"])
+    assert "Fulltext literature content" in str(captured["message"])
     assert result.title == "Research title"
     assert result.summary == "Research summary"
     assert result.content_markdown.startswith("# Executive Summary")

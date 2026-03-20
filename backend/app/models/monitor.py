@@ -24,6 +24,7 @@ class Monitor(Base):
     source_overrides: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     ai_routing: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     destination_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    destination_instance_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     window_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24, comment="rolling window in hours")
     custom_schedule: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

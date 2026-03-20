@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     # 测试环境不启动调度器，避免后台任务影响测试隔离性。
     if not os.getenv("PYTEST_CURRENT_TEST"):
         await bootstrap_runtime_data()
-        init_scheduler()
+        await init_scheduler()
     yield
     if not os.getenv("PYTEST_CURRENT_TEST"):
         shutdown_scheduler()

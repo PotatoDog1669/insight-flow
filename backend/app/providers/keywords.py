@@ -235,17 +235,43 @@ def _event_input_to_prompt_article(event_input: object) -> _PromptArticle:
 def _format_prompt_article_block(label: str, article: object) -> str:
     if article is None:
         return ""
+    metadata = getattr(article, "metadata", {}) or {}
     title = str(getattr(article, "title", "") or "").strip()
     url = str(getattr(article, "url", "") or "").strip()
     content = _prepare_content_for_prompt(getattr(article, "content", ""), max_chars=1600)
+    source_name = str(metadata.get("source_name") or "").strip()
+    author_name = str(metadata.get("author_name") or "").strip()
+    author_username = str(metadata.get("author_username") or "").strip().lstrip("@")
+    distribution = _detect_distribution_hint(article)
     lines = [label]
+    if source_name:
+        lines.append(f"Source: {source_name}")
+    if author_name and author_username:
+        lines.append(f"Author: {author_name} (@{author_username})")
+    elif author_name:
+        lines.append(f"Author: {author_name}")
+    elif author_username:
+        lines.append(f"Author: @{author_username}")
     if title:
         lines.append(f"Title: {title}")
     if url:
         lines.append(f"URL: {url}")
+    if distribution:
+        lines.append(f"Distribution: {distribution}")
     if content:
         lines.append(f"Content: {content}")
     return "\n".join(lines).strip()
+
+
+def _detect_distribution_hint(article: object) -> str:
+    content = str(getattr(article, "content", "") or "")
+    url = str(getattr(article, "url", "") or "")
+    combined = f"{content}\n{url}".lower()
+    if "apps.apple.com" in combined or "app store" in combined:
+        return "App Store"
+    if "play.google.com" in combined or "google play" in combined:
+        return "Google Play"
+    return ""
 
 
 def _prepare_content_for_prompt(raw_content: object, max_chars: int = 4000) -> str:

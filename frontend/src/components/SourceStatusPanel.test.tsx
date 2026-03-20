@@ -20,14 +20,15 @@ function makeSource(overrides: Partial<Source> = {}): Source {
 }
 
 describe("SourceStatusPanel brand logos", () => {
-  it("uses a website logo image for blog cards", () => {
+  it("prefers a bundled local logo image for known blog cards", () => {
     render(<SourceStatusPanel sources={[makeSource()]} />);
 
     const logo = screen.getByAltText("OpenAI logo");
-    expect(logo).toHaveAttribute("src", expect.stringContaining("openai.com"));
+    expect(logo).toHaveAttribute("src", expect.stringContaining("/logos/openai"));
+    expect(logo).not.toHaveAttribute("src", expect.stringContaining("google.com/s2/favicons"));
   });
 
-  it("prefers brand domain mapping for aliases", () => {
+  it("prefers a bundled local logo image for aliases", () => {
     render(
       <SourceStatusPanel
         sources={[
@@ -41,7 +42,64 @@ describe("SourceStatusPanel brand logos", () => {
     );
 
     const logo = screen.getByAltText("阿里 Qwen logo");
-    expect(logo).toHaveAttribute("src", expect.stringContaining("qwen.ai"));
+    expect(logo).toHaveAttribute("src", expect.stringContaining("/logos/alibaba-qwen"));
+  });
+
+  it("prefers a bundled local logo image for academic sources", () => {
+    render(
+      <SourceStatusPanel
+        sources={[
+          makeSource({
+            id: "source-openalex",
+            name: "OpenAlex",
+            category: "academic",
+            collect_method: "openalex_api",
+            config: { base_url: "https://api.openalex.org/works" },
+          }),
+        ]}
+      />
+    );
+
+    const logo = screen.getByAltText("OpenAlex logo");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("/logos/openalex"));
+  });
+
+  it("uses the official bundled PubMed logo asset", () => {
+    render(
+      <SourceStatusPanel
+        sources={[
+          makeSource({
+            id: "source-pubmed",
+            name: "PubMed",
+            category: "academic",
+            collect_method: "pubmed_api",
+            config: { base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/" },
+          }),
+        ]}
+      />
+    );
+
+    const logo = screen.getByAltText("PubMed logo");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("/logos/pubmed-logo"));
+  });
+
+  it("uses the official bundled Europe PMC logo asset", () => {
+    render(
+      <SourceStatusPanel
+        sources={[
+          makeSource({
+            id: "source-europe-pmc",
+            name: "Europe PMC",
+            category: "academic",
+            collect_method: "europe_pmc_api",
+            config: { base_url: "https://www.ebi.ac.uk/europepmc/webservices/rest/search" },
+          }),
+        ]}
+      />
+    );
+
+    const logo = screen.getByAltText("Europe PMC logo");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("/logos/europe-pmc-logo"));
   });
 
   it("uses explicit ByteDance icon instead of favicon", () => {

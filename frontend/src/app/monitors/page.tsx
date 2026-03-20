@@ -6,6 +6,7 @@ import {
   cancelMonitorRun,
   createMonitor,
   deleteMonitor,
+  getProviders,
   getMonitorAIRoutingDefaults,
   getMonitors,
   getSources,
@@ -24,6 +25,7 @@ import {
   type MonitorAIRoutingDefaults,
   type MonitorAIProviderName,
   type MonitorAIStageName,
+  type Provider,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,10 +44,257 @@ const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["
 const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
 const isActiveRunStatus = (status: string) =>
   ACTIVE_RUN_STATUSES.includes(status as (typeof ACTIVE_RUN_STATUSES)[number]);
+const WINDOW_PRESET_OPTIONS = [
+  { value: "24", label: "1 天", hours: 24 },
+  { value: "72", label: "3 天", hours: 72 },
+  { value: "168", label: "7 天", hours: 168 },
+  { value: "custom", label: "自定义", hours: null },
+] as const;
+
+type WindowPresetValue = (typeof WINDOW_PRESET_OPTIONS)[number]["value"];
+type CustomWindowUnit = "hours" | "days";
+type ReportType = "daily" | "weekly" | "research";
+type ScheduleWeekday = "0" | "1" | "2" | "3" | "4" | "5" | "6";
+
+const DEFAULT_DAILY_SCHEDULE_TIME = "06:30";
+const DEFAULT_WEEKLY_SCHEDULE_TIME = "20:00";
+const DEFAULT_WEEKLY_DAY: ScheduleWeekday = "0";
+const DEFAULT_CUSTOM_INTERVAL_DAYS = "2";
+const LEGACY_SCHEDULE_NOTICE = "当前任务仍在使用旧版执行计划；如果修改这里的频率或时间，保存后会切换为新的设置。";
+const WEEKDAY_OPTIONS: Array<{ value: ScheduleWeekday; label: string }> = [
+  { value: "1", label: "周一" },
+  { value: "2", label: "周二" },
+  { value: "3", label: "周三" },
+  { value: "4", label: "周四" },
+  { value: "5", label: "周五" },
+  { value: "6", label: "周六" },
+  { value: "0", label: "周日" },
+];
+
+type ParsedScheduleFormState = {
+  scheduleTime: string;
+  weeklyDay: ScheduleWeekday;
+  customIntervalDays: string;
+  rawScheduleFallback: string | null;
+  scheduleNotice: string | null;
+};
+
+const padTwoDigits = (value: number) => String(value).padStart(2, "0");
+
+const defaultScheduleStateForTimePeriod = (timePeriod: "daily" | "weekly" | "custom"): ParsedScheduleFormState => ({
+  scheduleTime: timePeriod === "weekly" ? DEFAULT_WEEKLY_SCHEDULE_TIME : DEFAULT_DAILY_SCHEDULE_TIME,
+  weeklyDay: DEFAULT_WEEKLY_DAY,
+  customIntervalDays: DEFAULT_CUSTOM_INTERVAL_DAYS,
+  rawScheduleFallback: null,
+  scheduleNotice: null,
+});
+
+const normalizeWeekdayToken = (token: string): ScheduleWeekday | null => {
+  const normalized = token.trim().toLowerCase();
+  const aliasMap: Record<string, ScheduleWeekday> = {
+    "0": "0",
+    "7": "0",
+    sun: "0",
+    sunday: "0",
+    "1": "1",
+    mon: "1",
+    monday: "1",
+    "2": "2",
+    tue: "2",
+    tues: "2",
+    tuesday: "2",
+    "3": "3",
+    wed: "3",
+    wednesday: "3",
+    "4": "4",
+    thu: "4",
+    thur: "4",
+    thurs: "4",
+    thursday: "4",
+    "5": "5",
+    fri: "5",
+    friday: "5",
+    "6": "6",
+    sat: "6",
+    saturday: "6",
+  };
+  return aliasMap[normalized] ?? null;
+};
+
+const parseIntervalSchedule = (customSchedule: string | null): { intervalDays: string; scheduleTime: string } | null => {
+  const raw = customSchedule?.trim() ?? "";
+  const match = raw.match(/^interval:(\d{1,3})@(\d{1,2}):(\d{2})$/i);
+  if (!match) return null;
+
+  const intervalDays = Math.max(1, Math.min(365, Number(match[1]) || 1));
+  const hour = Math.max(0, Math.min(23, Number(match[2]) || 0));
+  const minute = Math.max(0, Math.min(59, Number(match[3]) || 0));
+  return {
+    intervalDays: String(intervalDays),
+    scheduleTime: `${padTwoDigits(hour)}:${padTwoDigits(minute)}`,
+  };
+};
+
+const parseScheduleFormState = (
+  timePeriod: "daily" | "weekly" | "custom",
+  customSchedule: string | null
+): ParsedScheduleFormState => {
+  const defaults = defaultScheduleStateForTimePeriod(timePeriod);
+  const rawSchedule = customSchedule?.trim() ?? "";
+  if (!rawSchedule) return defaults;
+
+  if (timePeriod === "custom") {
+    const intervalSchedule = parseIntervalSchedule(rawSchedule);
+    if (intervalSchedule) {
+      return {
+        ...defaults,
+        scheduleTime: intervalSchedule.scheduleTime,
+        customIntervalDays: intervalSchedule.intervalDays,
+      };
+    }
+  }
+
+  const match = rawSchedule.match(/^(\d{1,2}) (\d{1,2}) \* \* ([^ ]+)$/);
+  if (!match) {
+    return {
+      ...defaults,
+      rawScheduleFallback: rawSchedule,
+      scheduleNotice: LEGACY_SCHEDULE_NOTICE,
+    };
+  }
+
+  const minute = Number(match[1]);
+  const hour = Number(match[2]);
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59 || !Number.isInteger(hour) || hour < 0 || hour > 23) {
+    return {
+      ...defaults,
+      rawScheduleFallback: rawSchedule,
+      scheduleNotice: LEGACY_SCHEDULE_NOTICE,
+    };
+  }
+
+  const scheduleTime = `${padTwoDigits(hour)}:${padTwoDigits(minute)}`;
+  const dayField = match[3];
+  if (timePeriod === "daily" && dayField === "*") {
+    return { ...defaults, scheduleTime };
+  }
+
+  const weekday = normalizeWeekdayToken(dayField);
+  if (timePeriod === "weekly" && weekday) {
+    return { ...defaults, scheduleTime, weeklyDay: weekday };
+  }
+  if (timePeriod === "custom") {
+    return {
+      ...defaults,
+      scheduleTime,
+      rawScheduleFallback: rawSchedule,
+      scheduleNotice: LEGACY_SCHEDULE_NOTICE,
+    };
+  }
+
+  return {
+    ...defaults,
+    rawScheduleFallback: rawSchedule,
+    scheduleNotice: LEGACY_SCHEDULE_NOTICE,
+  };
+};
+
+const buildStructuredScheduleCron = (
+  timePeriod: "daily" | "weekly" | "custom",
+  scheduleTime: string,
+  weeklyDay: ScheduleWeekday,
+  customIntervalDays: string
+): string => {
+  const [hourText = "0", minuteText = "0"] = scheduleTime.split(":");
+  const hour = Math.max(0, Math.min(23, Number(hourText) || 0));
+  const minute = Math.max(0, Math.min(59, Number(minuteText) || 0));
+  if (timePeriod === "daily") {
+    return `${minute} ${hour} * * *`;
+  }
+  if (timePeriod === "weekly") {
+    return `${minute} ${hour} * * ${weeklyDay}`;
+  }
+  const intervalDays = Math.max(1, Math.min(365, Number(customIntervalDays) || 1));
+  return `interval:${intervalDays}@${padTwoDigits(hour)}:${padTwoDigits(minute)}`;
+};
+
+const resolveMonitorDestinationSelections = (
+  monitor: Pick<Monitor, "destination_ids" | "destination_instance_ids">,
+  destinations: Destination[],
+): string[] => {
+  const destinationInstanceIds = Array.isArray(monitor.destination_instance_ids) ? monitor.destination_instance_ids : [];
+  const destinationIds = Array.isArray(monitor.destination_ids) ? monitor.destination_ids : [];
+  const selectedIds = destinationInstanceIds.length > 0 ? destinationInstanceIds : destinationIds;
+  if (selectedIds.length === 0) {
+    return [];
+  }
+
+  const knownIds = new Set(destinations.map((destination) => destination.id));
+  const instanceIdByType = new Map<Destination["type"], string>();
+
+  for (const destination of destinations) {
+    if (destination.enabled && !instanceIdByType.has(destination.type)) {
+      instanceIdByType.set(destination.type, destination.id);
+    }
+  }
+  for (const destination of destinations) {
+    if (!instanceIdByType.has(destination.type)) {
+      instanceIdByType.set(destination.type, destination.id);
+    }
+  }
+
+  return Array.from(
+    new Set(
+      selectedIds
+        .map((item) => {
+          if (knownIds.has(item)) {
+            return item;
+          }
+          return instanceIdByType.get(item as Destination["type"]) ?? null;
+        })
+        .filter((item): item is string => Boolean(item)),
+    ),
+  );
+};
+
+const weekdayLabel = (value: ScheduleWeekday): string =>
+  WEEKDAY_OPTIONS.find((option) => option.value === value)?.label ?? value;
+
+const formatMonitorScheduleSummary = (monitor: Pick<Monitor, "time_period" | "custom_schedule">): string => {
+  if (monitor.time_period === "custom") {
+    const intervalSchedule = parseIntervalSchedule(monitor.custom_schedule);
+    if (intervalSchedule) {
+      return `每 ${intervalSchedule.intervalDays} 天 ${intervalSchedule.scheduleTime}`;
+    }
+  }
+  const parsed = parseScheduleFormState(monitor.time_period, monitor.custom_schedule);
+  if (monitor.time_period === "daily") {
+    return `每天 ${parsed.scheduleTime}`;
+  }
+  if (monitor.time_period === "weekly") {
+    return `每${weekdayLabel(parsed.weeklyDay)} ${parsed.scheduleTime}`;
+  }
+  return parsed.rawScheduleFallback ? "旧版自定义计划" : "自定义更新";
+};
+type SourceOverrideFormState = {
+  max_items?: number;
+  limit?: number;
+  max_results?: number;
+  keywords?: string[];
+  usernames?: string[];
+  subreddits?: string[];
+};
+
+const recommendedReportTypeForTimePeriod = (timePeriod: "daily" | "weekly" | "custom"): ReportType => {
+  if (timePeriod === "daily") return "daily";
+  if (timePeriod === "weekly") return "weekly";
+  return "research";
+};
 
 export default function MonitorsPage() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [destinations, setDestinations] = useState<Destination[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,17 +303,24 @@ export default function MonitorsPage() {
   const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [timePeriod, setTimePeriod] = useState<"daily" | "weekly" | "custom">("daily");
-  const [reportType, setReportType] = useState<"daily" | "weekly" | "research" | "">("");
-  const [customSchedule, setCustomSchedule] = useState("");
-  const [windowHours, setWindowHours] = useState("24");
+  const [reportType, setReportType] = useState<ReportType>(recommendedReportTypeForTimePeriod("daily"));
+  const [reportTypeTouched, setReportTypeTouched] = useState(false);
+  const [scheduleTime, setScheduleTime] = useState(DEFAULT_DAILY_SCHEDULE_TIME);
+  const [weeklyDay, setWeeklyDay] = useState<ScheduleWeekday>(DEFAULT_WEEKLY_DAY);
+  const [customIntervalDays, setCustomIntervalDays] = useState(DEFAULT_CUSTOM_INTERVAL_DAYS);
+  const [scheduleRawFallback, setScheduleRawFallback] = useState<string | null>(null);
+  const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
+  const [isScheduleDirty, setIsScheduleDirty] = useState(false);
+  const [windowPreset, setWindowPreset] = useState<WindowPresetValue>("24");
+  const [customWindowValue, setCustomWindowValue] = useState("24");
+  const [customWindowUnit, setCustomWindowUnit] = useState<CustomWindowUnit>("hours");
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
-  const [sourceOverrides, setSourceOverrides] = useState<
-    Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>
-  >({});
+  const [sourceOverrides, setSourceOverrides] = useState<Record<string, SourceOverrideFormState>>({});
   const [expandedSourceCategories, setExpandedSourceCategories] = useState<Record<string, boolean>>({});
-  const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
+  const [selectedDestinationInstances, setSelectedDestinationInstances] = useState<string[]>([]);
   const [aiRouting, setAiRouting] = useState<MonitorAIRouting>({ stages: {}, providers: {} });
   const [aiRoutingDefaults, setAiRoutingDefaults] = useState<MonitorAIRoutingDefaults | null>(null);
+  const [isAiRoutingExpanded, setIsAiRoutingExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // Logs modal state
@@ -88,6 +344,14 @@ export default function MonitorsPage() {
     return map;
   }, [sources]);
 
+  const providerMap = useMemo(() => {
+    const map = new Map<Exclude<MonitorAIProviderName, "rule">, Provider>();
+    providers.forEach((provider) => {
+      map.set(provider.id, provider);
+    });
+    return map;
+  }, [providers]);
+
   const sourceGroups = useMemo(() => {
     const groups = new Map<string, Source[]>();
     sources.forEach((source) => {
@@ -103,6 +367,62 @@ export default function MonitorsPage() {
     return runEvents.filter((event) => Boolean(event));
   }, [runEvents]);
 
+  const applyWindowHoursToForm = useCallback((hours: number | null | undefined) => {
+    const normalized = typeof hours === "number" && Number.isFinite(hours)
+      ? Math.max(1, Math.min(168, Math.floor(hours)))
+      : 24;
+    const matchedPreset = WINDOW_PRESET_OPTIONS.find((option) => option.hours === normalized);
+    if (matchedPreset) {
+      setWindowPreset(matchedPreset.value);
+      setCustomWindowValue(String(normalized));
+      setCustomWindowUnit("hours");
+      return;
+    }
+
+    setWindowPreset("custom");
+    if (normalized % 24 === 0) {
+      setCustomWindowValue(String(normalized / 24));
+      setCustomWindowUnit("days");
+      return;
+    }
+    setCustomWindowValue(String(normalized));
+    setCustomWindowUnit("hours");
+  }, []);
+
+  const resolvedWindowHours = useMemo(() => {
+    const presetHours = WINDOW_PRESET_OPTIONS.find((option) => option.value === windowPreset)?.hours;
+    if (presetHours !== null && presetHours !== undefined) {
+      return presetHours;
+    }
+    const parsed = Number(customWindowValue);
+    if (!Number.isFinite(parsed)) return 24;
+    const normalized = customWindowUnit === "days" ? parsed * 24 : parsed;
+    return Math.max(1, Math.min(168, Math.floor(normalized)));
+  }, [customWindowUnit, customWindowValue, windowPreset]);
+
+  const applyScheduleToForm = useCallback((nextTimePeriod: "daily" | "weekly" | "custom", nextCustomSchedule: string | null) => {
+    const parsed = parseScheduleFormState(nextTimePeriod, nextCustomSchedule);
+    setScheduleTime(parsed.scheduleTime);
+    setWeeklyDay(parsed.weeklyDay);
+    setCustomIntervalDays(parsed.customIntervalDays);
+    setScheduleRawFallback(parsed.rawScheduleFallback);
+    setScheduleNotice(parsed.scheduleNotice);
+    setIsScheduleDirty(false);
+  }, []);
+
+  const effectiveCustomSchedule = useMemo(() => {
+    if (scheduleRawFallback && !isScheduleDirty) {
+      return scheduleRawFallback;
+    }
+    return buildStructuredScheduleCron(timePeriod, scheduleTime, weeklyDay, customIntervalDays);
+  }, [customIntervalDays, isScheduleDirty, scheduleRawFallback, scheduleTime, timePeriod, weeklyDay]);
+
+  const markScheduleChanged = useCallback(() => {
+    setIsScheduleDirty(true);
+    setScheduleRawFallback(null);
+    setScheduleNotice(null);
+  }, []);
+
   const loadData = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
     if (!silent) {
@@ -110,14 +430,16 @@ export default function MonitorsPage() {
       setError(null);
     }
     try {
-      const [monitorData, sourceData, destData, defaultRoutingData] = await Promise.all([
+      const [monitorData, sourceData, providerData, destData, defaultRoutingData] = await Promise.all([
         getMonitors(),
         getSources(),
+        getProviders().catch(() => []),
         getDestinations(),
         getMonitorAIRoutingDefaults().catch(() => null),
       ]);
       setMonitors(monitorData);
       setSources(sourceData);
+      setProviders(providerData || []);
 
       // We expect the mock API to return the new Notion & Obsidian objects
       setDestinations(destData || []);
@@ -146,6 +468,12 @@ export default function MonitorsPage() {
       window.clearTimeout(timer);
     };
   }, [actionNotice]);
+
+  useEffect(() => {
+    if (!reportTypeTouched) {
+      setReportType(recommendedReportTypeForTimePeriod(timePeriod));
+    }
+  }, [reportTypeTouched, timePeriod]);
 
   const normalizeAiRoutingForForm = useCallback((raw: MonitorAIRouting | undefined): MonitorAIRouting => {
     const stages: Partial<Record<MonitorAIStageName, { primary: MonitorAIProviderName }>> = {};
@@ -214,6 +542,19 @@ export default function MonitorsPage() {
     return Array.from(providers);
   }, [aiRouting]);
 
+  const unconfiguredAiProviders = useMemo(() => {
+    return selectedAiProviders.filter((providerId) => {
+      const provider = providerMap.get(providerId);
+      return provider ? !provider.enabled : false;
+    });
+  }, [providerMap, selectedAiProviders]);
+
+  useEffect(() => {
+    if (!isModalOpen) return;
+    if (unconfiguredAiProviders.length === 0) return;
+    setIsAiRoutingExpanded(true);
+  }, [isModalOpen, unconfiguredAiProviders]);
+
   const aiRoutingInheritLabel = useCallback((stage: MonitorAIStageName) => {
     const current = aiRoutingDefaults?.stages?.[stage];
     const normalized = typeof current === "string" ? current.trim() : "";
@@ -226,16 +567,18 @@ export default function MonitorsPage() {
   const resetForm = () => {
     setName("");
     setTimePeriod("daily");
-    setReportType("");
-    setCustomSchedule("");
-    setWindowHours("24");
+    setReportType(recommendedReportTypeForTimePeriod("daily"));
+    setReportTypeTouched(false);
+    applyScheduleToForm("daily", null);
+    applyWindowHoursToForm(24);
     setSelectedSources([]);
     setSourceOverrides({});
     setExpandedSourceCategories(
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
-    setSelectedDestinations([]);
+    setSelectedDestinationInstances([]);
     setAiRouting({ stages: {}, providers: {} });
+    setIsAiRoutingExpanded(false);
   };
 
   const openCreateModal = () => {
@@ -248,15 +591,16 @@ export default function MonitorsPage() {
     setEditingMonitorId(monitor.id);
     setName(monitor.name);
     setTimePeriod(monitor.time_period);
-    setReportType(monitor.time_period === "custom" ? monitor.report_type : "");
-    setCustomSchedule(monitor.custom_schedule ?? "");
-    setWindowHours(String(monitor.window_hours || 24));
+    setReportType(monitor.report_type);
+    setReportTypeTouched(monitor.report_type !== recommendedReportTypeForTimePeriod(monitor.time_period));
+    applyScheduleToForm(monitor.time_period, monitor.custom_schedule);
+    applyWindowHoursToForm(monitor.window_hours || 24);
     setSelectedSources(monitor.source_ids);
     setSourceOverrides(monitor.source_overrides ?? {});
     setExpandedSourceCategories(
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
-    setSelectedDestinations(monitor.destination_ids);
+    setSelectedDestinationInstances(resolveMonitorDestinationSelections(monitor, destinations));
     setAiRouting(normalizeAiRoutingForForm(monitor.ai_routing));
     setIsModalOpen(true);
   };
@@ -360,6 +704,21 @@ export default function MonitorsPage() {
     }));
   };
 
+  const handleTimePeriodChange = (nextTimePeriod: "daily" | "weekly" | "custom") => {
+    markScheduleChanged();
+    setTimePeriod(nextTimePeriod);
+    if (nextTimePeriod === "daily" && !scheduleTime) {
+      setScheduleTime(DEFAULT_DAILY_SCHEDULE_TIME);
+    }
+    if (nextTimePeriod === "weekly") {
+      setScheduleTime((current) => current || DEFAULT_WEEKLY_SCHEDULE_TIME);
+    }
+    if (nextTimePeriod === "custom") {
+      setScheduleTime((current) => current || DEFAULT_DAILY_SCHEDULE_TIME);
+      setCustomIntervalDays((current) => current || DEFAULT_CUSTOM_INTERVAL_DAYS);
+    }
+  };
+
   const handleAiStageProviderChange = (stage: MonitorAIStageName, nextValue: string) => {
     setAiRouting((prev) => {
       const nextStages = { ...(prev.stages ?? {}) };
@@ -413,8 +772,7 @@ export default function MonitorsPage() {
   };
 
   const handleSubmit = async () => {
-    const effectiveReportType =
-      timePeriod === "daily" ? "daily" : timePeriod === "weekly" ? "weekly" : reportType;
+    const effectiveReportType = reportType;
     if (!name || selectedSources.length === 0 || !effectiveReportType) return;
     setSubmitting(true);
     setError(null);
@@ -422,7 +780,7 @@ export default function MonitorsPage() {
       Object.entries(sourceOverrides)
         .filter(([sourceId]) => selectedSources.includes(sourceId))
         .map(([sourceId, override]) => {
-          const cleaned: { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] } = {};
+          const cleaned: SourceOverrideFormState = {};
 
           const maxItems = override?.max_items;
           if (typeof maxItems === "number" && Number.isFinite(maxItems) && maxItems > 0) {
@@ -459,10 +817,21 @@ export default function MonitorsPage() {
             cleaned.usernames = Array.from(new Set(usernames));
           }
 
+          const subreddits = Array.isArray(override?.subreddits)
+            ? normalizeRedditSubreddits(
+              override.subreddits
+                .map((item) => String(item).trim())
+                .filter((item) => item.length > 0)
+            )
+            : null;
+          if (subreddits !== null) {
+            cleaned.subreddits = subreddits;
+          }
+
           return [sourceId, cleaned];
         })
         .filter(([, override]) => Object.keys(override).length > 0)
-    ) as Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    ) as Record<string, SourceOverrideFormState>;
     const cleanedAiRouting = cleanAiRoutingForSubmit(aiRouting);
     const payload = {
       name,
@@ -471,13 +840,9 @@ export default function MonitorsPage() {
       source_ids: selectedSources,
       source_overrides: cleanedSourceOverrides,
       ai_routing: cleanedAiRouting,
-      destination_ids: selectedDestinations,
-      window_hours: (() => {
-        const parsed = Number(windowHours);
-        if (!Number.isFinite(parsed)) return 24;
-        return Math.max(1, Math.min(168, Math.floor(parsed)));
-      })(),
-      custom_schedule: timePeriod === "custom" ? customSchedule.trim() || null : null,
+      destination_instance_ids: selectedDestinationInstances,
+      window_hours: resolvedWindowHours,
+      custom_schedule: effectiveCustomSchedule,
     };
     try {
       if (editingMonitorId) {
@@ -674,13 +1039,7 @@ export default function MonitorsPage() {
                 </div>
                 <div className="flex items-center space-x-2">
                   <Calendar className="w-4 h-4" />
-                  <span>
-                    {monitor.time_period === "custom" && monitor.custom_schedule
-                      ? monitor.custom_schedule
-                      : monitor.time_period === "daily"
-                        ? "每日更新"
-                        : "每周更新"}
-                  </span>
+                  <span>{formatMonitorScheduleSummary(monitor)}</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Clock className="w-4 h-4" />
@@ -800,13 +1159,13 @@ export default function MonitorsPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <label htmlFor="monitor-time-period" className="text-sm font-medium">更新频率</label>
                   <select
                     id="monitor-time-period"
                     value={timePeriod}
-                    onChange={(e) => setTimePeriod(e.target.value as "daily" | "weekly" | "custom")}
+                    onChange={(e) => handleTimePeriodChange(e.target.value as "daily" | "weekly" | "custom")}
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                   >
                     <option value="daily">每日</option>
@@ -815,45 +1174,180 @@ export default function MonitorsPage() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">时间窗口（小时）</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={168}
-                    value={windowHours}
-                    onChange={(e) => setWindowHours(e.target.value)}
-                    placeholder="24"
+                  <label htmlFor="monitor-window-preset" className="text-sm font-medium">时间窗口</label>
+                  <select
+                    id="monitor-window-preset"
+                    aria-label="时间窗口"
+                    value={windowPreset}
+                    onChange={(e) => setWindowPreset(e.target.value as WindowPresetValue)}
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                  />
+                  >
+                    {WINDOW_PRESET_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">控制每次抓取时回看的内容范围。</p>
                 </div>
                 <div className="space-y-2">
                   <label htmlFor="monitor-report-type" className="text-sm font-medium">报告模板</label>
                   <select
                     id="monitor-report-type"
-                    value={timePeriod === "daily" ? "daily" : timePeriod === "weekly" ? "weekly" : reportType}
-                    onChange={(e) => setReportType(e.target.value as "daily" | "weekly" | "research" | "")}
-                    disabled={timePeriod !== "custom"}
+                    aria-label="报告模板"
+                    value={reportType}
+                    onChange={(e) => {
+                      const nextReportType = e.target.value as ReportType;
+                      setReportType(nextReportType);
+                      setReportTypeTouched(nextReportType !== recommendedReportTypeForTimePeriod(timePeriod));
+                    }}
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                   >
-                    <option value="">选择模板</option>
                     <option value="daily">日报</option>
                     <option value="weekly">周报</option>
                     <option value="research">研究</option>
                   </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    {`推荐模板：${recommendedReportTypeForTimePeriod(timePeriod) === "daily" ? "日报" : recommendedReportTypeForTimePeriod(timePeriod) === "weekly" ? "周报" : "研究"}，也可以按需自行调整。`}
+                  </p>
                 </div>
               </div>
 
-              {timePeriod === "custom" && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">自定义时间表 (Cron)</label>
-                  <input
-                    value={customSchedule}
-                    onChange={(e) => setCustomSchedule(e.target.value)}
-                    placeholder="例如：0 9 * * 1-5"
-                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-                  />
+              {windowPreset === "custom" && (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_160px]">
+                  <div className="space-y-2">
+                    <label htmlFor="monitor-custom-window-value" className="text-sm font-medium">自定义时间窗口数值</label>
+                    <input
+                      id="monitor-custom-window-value"
+                      aria-label="自定义时间窗口数值"
+                      type="number"
+                      min={1}
+                      max={customWindowUnit === "days" ? 7 : 168}
+                      value={customWindowValue}
+                      onChange={(e) => setCustomWindowValue(e.target.value)}
+                      placeholder={customWindowUnit === "days" ? "2" : "12"}
+                      className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="monitor-custom-window-unit" className="text-sm font-medium">自定义时间窗口单位</label>
+                    <select
+                      id="monitor-custom-window-unit"
+                      aria-label="自定义时间窗口单位"
+                      value={customWindowUnit}
+                      onChange={(e) => setCustomWindowUnit(e.target.value as CustomWindowUnit)}
+                      className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                    >
+                      <option value="hours">小时</option>
+                      <option value="days">天</option>
+                    </select>
+                  </div>
                 </div>
               )}
+
+              <div className="space-y-3 rounded-md border border-border/40 p-4">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">执行计划</div>
+                  <p className="text-[11px] text-muted-foreground">设置这个任务在什么时间自动运行。</p>
+                </div>
+
+                {timePeriod === "daily" && (
+                  <div className="space-y-2">
+                    <label htmlFor="monitor-schedule-time" className="text-sm font-medium">执行时间</label>
+                    <input
+                      id="monitor-schedule-time"
+                      aria-label="执行时间"
+                      type="time"
+                      value={scheduleTime}
+                      onChange={(e) => {
+                        markScheduleChanged();
+                        setScheduleTime(e.target.value || DEFAULT_DAILY_SCHEDULE_TIME);
+                      }}
+                      className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm md:w-56"
+                    />
+                  </div>
+                )}
+
+                {timePeriod === "weekly" && (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label htmlFor="monitor-weekly-day" className="text-sm font-medium">执行星期</label>
+                      <select
+                        id="monitor-weekly-day"
+                        aria-label="执行星期"
+                        value={weeklyDay}
+                        onChange={(e) => {
+                          markScheduleChanged();
+                          setWeeklyDay(e.target.value as ScheduleWeekday);
+                        }}
+                        className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                      >
+                        {WEEKDAY_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="monitor-schedule-time" className="text-sm font-medium">执行时间</label>
+                      <input
+                        id="monitor-schedule-time"
+                        aria-label="执行时间"
+                        type="time"
+                        value={scheduleTime}
+                        onChange={(e) => {
+                          markScheduleChanged();
+                          setScheduleTime(e.target.value || DEFAULT_WEEKLY_SCHEDULE_TIME);
+                        }}
+                        className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {timePeriod === "custom" && (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[180px_220px]">
+                    <div className="space-y-2">
+                      <label htmlFor="monitor-custom-interval-days" className="text-sm font-medium">更新间隔（天）</label>
+                      <input
+                        id="monitor-custom-interval-days"
+                        aria-label="更新间隔（天）"
+                        type="number"
+                        min={1}
+                        max={365}
+                        value={customIntervalDays}
+                        onChange={(e) => {
+                          markScheduleChanged();
+                          setCustomIntervalDays(e.target.value);
+                        }}
+                        className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                      />
+                      <p className="text-[11px] text-muted-foreground">表示任务每隔几天自动运行一次。</p>
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="monitor-schedule-time" className="text-sm font-medium">执行时间</label>
+                      <input
+                        id="monitor-schedule-time"
+                        aria-label="执行时间"
+                        type="time"
+                        value={scheduleTime}
+                        onChange={(e) => {
+                          markScheduleChanged();
+                          setScheduleTime(e.target.value || DEFAULT_DAILY_SCHEDULE_TIME);
+                        }}
+                        className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {scheduleNotice && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-900">
+                    {scheduleNotice}
+                  </div>
+                )}
+              </div>
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">信息源</label>
@@ -882,13 +1376,25 @@ export default function MonitorsPage() {
                           const isSelected = selectedSources.includes(source.id);
                           const sourceConfig = (source.config as Record<string, unknown>) ?? {};
                           const isArxivApi = source.collect_method === "rss" && Boolean(sourceConfig.arxiv_api);
+                          const isAcademicApi =
+                            source.category === "academic" &&
+                            (isArxivApi || ["openalex", "europe_pmc", "pubmed"].includes(source.collect_method));
                           const isTwitterSnaplytics = source.collect_method === "twitter_snaplytics";
+                          const isConfigurableReddit = isConfigurableRedditSource(source);
                           const availableUsernames = Array.isArray(sourceConfig.usernames)
                             ? sourceConfig.usernames.filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+                            : [];
+                          const availableSubreddits = Array.isArray(sourceConfig.subreddits)
+                            ? normalizeRedditSubreddits(
+                              sourceConfig.subreddits.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                            )
                             : [];
                           const selectedUsernames = Array.isArray(sourceOverrides[source.id]?.usernames)
                             ? sourceOverrides[source.id]!.usernames!
                             : availableUsernames;
+                          const selectedSubreddits = Array.isArray(sourceOverrides[source.id]?.subreddits)
+                            ? normalizeRedditSubreddits(sourceOverrides[source.id]!.subreddits!)
+                            : availableSubreddits;
                           const maxItemsValue =
                             typeof sourceOverrides[source.id]?.max_items === "number"
                               ? sourceOverrides[source.id]?.max_items
@@ -962,7 +1468,7 @@ export default function MonitorsPage() {
                                   <span className="text-[11px] text-muted-foreground">默认：每日 5 篇 / 其他 20 篇</span>
                                 </div>
                               )}
-                              {isSelected && isArxivApi && (
+                              {isSelected && isAcademicApi && (
                                 <div className="ml-6 mt-2 space-y-2">
                                   <div className="flex items-center gap-2">
                                     <span className="text-xs text-muted-foreground">Keywords</span>
@@ -1079,6 +1585,45 @@ export default function MonitorsPage() {
                                   </div>
                                 </div>
                               )}
+                              {isSelected && isConfigurableReddit && availableSubreddits.length > 0 && (
+                                <div className="ml-6 mt-2 space-y-2">
+                                  <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">版块列表</div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {availableSubreddits.map((subreddit) => {
+                                      const isSubSelected = selectedSubreddits.includes(subreddit);
+                                      return (
+                                        <label key={subreddit} className="flex items-center gap-2 text-xs truncate cursor-pointer hover:text-foreground">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSubSelected}
+                                            onChange={(e) => {
+                                              const checked = e.target.checked;
+                                              setSourceOverrides((prev) => {
+                                                const current = { ...(prev[source.id] || {}) };
+                                                let nextSubreddits = Array.isArray(current.subreddits) ? current.subreddits : availableSubreddits;
+                                                if (checked) {
+                                                  nextSubreddits = [...nextSubreddits, subreddit];
+                                                } else {
+                                                  nextSubreddits = nextSubreddits.filter((item) => item !== subreddit);
+                                                }
+                                                return {
+                                                  ...prev,
+                                                  [source.id]: {
+                                                    ...current,
+                                                    subreddits: normalizeRedditSubreddits(nextSubreddits),
+                                                  },
+                                                };
+                                              });
+                                            }}
+                                            className="rounded border-input text-foreground focus:ring-foreground accent-foreground w-3 h-3"
+                                          />
+                                          <span className="truncate" title={subreddit}>{subreddit}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1088,14 +1633,34 @@ export default function MonitorsPage() {
               </div>
 
               <div className="space-y-3 border border-border/40 rounded-md p-3">
-                <div>
-                  <label className="text-sm font-medium">AI 路由配置（高级）</label>
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    在此覆盖该任务中不同阶段的模型配置。如果留空，则继承全局默认设置。
-                    {aiRoutingDefaults?.profile_name ? `（当前为 ${aiRoutingDefaults.profile_name}）` : ""}
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  aria-label="AI 路由配置（高级）"
+                  aria-expanded={isAiRoutingExpanded}
+                  onClick={() => setIsAiRoutingExpanded((prev) => !prev)}
+                  className="flex w-full items-start justify-between gap-3 rounded-md text-left hover:bg-muted/30 px-1 py-1 transition-colors"
+                >
+                  <div>
+                    <div className="text-sm font-medium">AI 路由配置（高级）</div>
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      在此覆盖该任务中不同阶段的模型配置。如果留空，则继承全局默认设置。
+                      {aiRoutingDefaults?.profile_name ? `（当前为 ${aiRoutingDefaults.profile_name}）` : ""}
+                    </p>
+                  </div>
+                  {isAiRoutingExpanded ? (
+                    <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  )}
+                </button>
+                {isAiRoutingExpanded && (
+                  <>
+                    {unconfiguredAiProviders.length > 0 && (
+                      <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+                        以下 provider 尚未在模型配置中启用：{unconfiguredAiProviders.join(", ")}。你仍然可以保存任务，但运行时可能失败。
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="space-y-1.5">
                     <label htmlFor="monitor-ai-filter-provider" className="text-xs font-medium text-muted-foreground">过滤阶段提供商</label>
                     <select
@@ -1157,10 +1722,10 @@ export default function MonitorsPage() {
                     </select>
                   </div>
                 </div>
-                {selectedAiProviders.length > 0 && (
-                  <div className="space-y-3 pt-1">
-                    {MODEL_PROVIDER_OPTIONS.filter((provider) => selectedAiProviders.includes(provider)).map((provider) => (
-                      <div key={provider} className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    {selectedAiProviders.length > 0 && (
+                      <div className="space-y-3 pt-1">
+                        {MODEL_PROVIDER_OPTIONS.filter((provider) => selectedAiProviders.includes(provider)).map((provider) => (
+                          <div key={provider} className="grid grid-cols-1 md:grid-cols-3 gap-2">
                         <div className="space-y-1.5">
                           <label htmlFor={`monitor-ai-model-${provider}`} className="text-xs font-medium text-muted-foreground">{`模型 (${provider})`}</label>
                           <input
@@ -1198,9 +1763,11 @@ export default function MonitorsPage() {
                             className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
                           />
                         </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -1216,12 +1783,12 @@ export default function MonitorsPage() {
                     <label key={dest.id} className="flex items-center gap-2 text-sm px-2 py-1.5 rounded hover:bg-muted/40 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={selectedDestinations.includes(dest.id)}
+                        checked={selectedDestinationInstances.includes(dest.id)}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            setSelectedDestinations((prev) => [...prev, dest.id]);
+                            setSelectedDestinationInstances((prev) => [...prev, dest.id]);
                           } else {
-                            setSelectedDestinations((prev) => prev.filter((id) => id !== dest.id));
+                            setSelectedDestinationInstances((prev) => prev.filter((id) => id !== dest.id));
                           }
                         }}
                       />
@@ -1242,7 +1809,7 @@ export default function MonitorsPage() {
               </button>
               <button
                 onClick={() => void handleSubmit()}
-                disabled={!name || selectedSources.length === 0 || (timePeriod === "custom" && !reportType) || submitting}
+                disabled={!name || selectedSources.length === 0 || submitting}
                 className="px-4 py-2 text-sm font-medium bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
               >
                 {editingMonitorId ? submitting ? "保存中..." : "保存" : submitting ? "创建中..." : "创建"}
@@ -1424,4 +1991,36 @@ export default function MonitorsPage() {
       </div>
     </div>
   );
+}
+
+function normalizeRedditSubreddits(values: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const cleaned = normalizeRedditSubreddit(value);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(cleaned);
+  }
+  return normalized;
+}
+
+function normalizeRedditSubreddit(value: string): string {
+  const raw = value.trim();
+  if (!raw) return "";
+  let normalized = raw.toLowerCase().startsWith("r/") ? raw.slice(2) : raw;
+  normalized = normalized.trim().replace(/^\/+|\/+$/g, "");
+  if (!normalized || /[\s/]/.test(normalized)) return "";
+  return normalized;
+}
+
+function isConfigurableRedditSource(source: Source): boolean {
+  if (source.collect_method !== "rss") return false;
+  const config = source.config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return source.name.trim().toLowerCase() === "reddit";
+  }
+  return Array.isArray((config as Record<string, unknown>).subreddits) || source.name.trim().toLowerCase() === "reddit";
 }

@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
 
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import HTTPException
-from fastapi import status
 import httpx
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -18,7 +15,13 @@ from app.models.database import get_db
 from app.models.user import User
 from app.providers.codex_transport import run_codex_json
 from app.providers.llm_chat import run_llm_json
-from app.schemas.provider import ProviderId, ProviderResponse, ProviderTestRequest, ProviderTestResponse, ProviderUpdate
+from app.schemas.provider import (
+    ProviderId,
+    ProviderResponse,
+    ProviderTestRequest,
+    ProviderTestResponse,
+    ProviderUpdate,
+)
 
 router = APIRouter()
 
@@ -30,6 +33,7 @@ PROVIDER_PRESETS: dict[ProviderId, dict] = {
         "type": "llm",
         "description": "用于 workflow 加工阶段的 Codex LLM 配置，与 OpenAI 共享同一套 prompts 和 workflow。",
         "default_config": {
+            "auth_mode": "api_key",
             "base_url": settings.codex_base_url or "https://api.openai.com/v1",
             "model": settings.codex_model or "gpt-5-codex",
             "timeout_sec": settings.codex_timeout_sec or 120,
@@ -44,6 +48,7 @@ PROVIDER_PRESETS: dict[ProviderId, dict] = {
         "type": "llm",
         "description": "用于 workflow 加工阶段的 OpenAI LLM 配置，与 Codex 共享同一套 prompts 和 workflow。",
         "default_config": {
+            "auth_mode": "api_key",
             "base_url": "https://api.openai.com/v1",
             "model": settings.llm_primary_model or "gpt-4o-mini",
             "timeout_sec": 120,
@@ -82,7 +87,7 @@ async def update_provider(
     providers_data[provider_id] = {"enabled": bool(enabled), "config": config}
     settings_data["providers"] = providers_data
     user.settings = settings_data
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(UTC)
     db.add(user)
     await db.commit()
 
@@ -130,6 +135,11 @@ def _resolve_provider_config(
 
 def _normalize_provider_config(provider_id: ProviderId, config: dict) -> dict:
     normalized = dict(config)
+    auth_mode = str(normalized.get("auth_mode") or "api_key").strip() or "api_key"
+    if provider_id != "llm_codex" or auth_mode not in {"api_key", "local_codex"}:
+        auth_mode = "api_key"
+    normalized["auth_mode"] = auth_mode
+
     base_url = str(normalized.get("base_url", "")).strip()
     if base_url:
         normalized["base_url"] = base_url.rstrip("/")
@@ -167,6 +177,8 @@ def _normalize_provider_config(provider_id: ProviderId, config: dict) -> dict:
     normalized["temperature"] = temperature
 
     normalized["api_key"] = str(normalized.get("api_key", "")).strip()
+    if auth_mode == "local_codex":
+        normalized["api_key"] = ""
     return normalized
 
 
@@ -197,7 +209,7 @@ async def _get_or_create_default_user(db: AsyncSession) -> User:
     if user:
         return user
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     user = User(
         id=DEFAULT_USER_ID,
         email="admin@lexmount.com",
@@ -218,7 +230,12 @@ async def _run_provider_connectivity_test(provider_id: ProviderId, config: dict)
         result = await _execute_provider_test_with_retry(provider_id, config)
         latency_ms = max(int((perf_counter() - started_at) * 1000), 0)
         message = str(result.get("message") or "Connection successful")
-        return ProviderTestResponse(success=True, message=message, latency_ms=latency_ms, model=str(config.get("model") or ""))
+        return ProviderTestResponse(
+            success=True,
+            message=message,
+            latency_ms=latency_ms,
+            model=str(config.get("model") or ""),
+        )
     except (ValueError, RuntimeError, httpx.HTTPError) as exc:
         latency_ms = max(int((perf_counter() - started_at) * 1000), 0)
         return ProviderTestResponse(

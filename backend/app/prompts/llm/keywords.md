@@ -14,6 +14,9 @@ Rules:
   3) technical/product changes
   4) key numbers/dates/constraints when available
   If the source only contains a short sentence plus a link and no additional facts, output a single grounded sentence instead of padding a long detail.
+  If the input is a short social post but includes source metadata such as `Author`, platform hints, or distribution hints like `App Store`, prefer a 2-sentence brief instead of a bare one-liner:
+  - sentence 1: `[发布方] 宣布 [产品] 已上线 [平台]` and mention download channel when grounded
+  - sentence 2: clearly state which details remain unspecified in the source
   Format the detail using this structured Chinese editorial style:
   - You MUST write the detail in Chinese.
   - Start with a single impactful sentence summarizing the core takeaway, prefixed with "> " (blockquote format).

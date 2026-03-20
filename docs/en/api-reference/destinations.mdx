@@ -13,9 +13,12 @@ Manage configuration and enabled state for output targets such as Notion, Obsidi
 
 - `GET /api/v1/destinations`
 - `PATCH /api/v1/destinations/{destination_id}`
+- `POST /api/v1/destinations/{destination_id}/test`
 
 ## Common Scenarios
 
 - Update Notion database settings
+- Update Obsidian `mode`, REST credentials, or local vault path
+- Test destination connectivity before saving or enabling it
 - Enable or disable an output target
 - Bind monitors to a configured destination

@@ -6,6 +6,7 @@ from typing import TypeVar
 
 from app.collectors.base import RawArticle
 from app.config import settings
+from app.providers.errors import ProviderUnavailableError
 from app.processors.candidate_cluster import build_candidate_clusters
 from app.processors.content_quality_gate import apply_content_quality_gate
 from app.processors.event_extract import build_event_extraction_inputs, build_processed_event
@@ -400,6 +401,13 @@ class ProcessingPipeline:
                 try:
                     result = await provider.run(payload=payload, config=provider_config)
                     return result, candidate
+                except ProviderUnavailableError as exc:
+                    if candidate == "llm_openai" and not exc.stage:
+                        exc.stage = stage
+                    if candidate == "llm_openai" or exc.provider == "llm_openai":
+                        raise
+                    last_exc = exc
+                    break
                 except Exception as exc:  # pragma: no cover - retry guard
                     last_exc = exc
                     continue

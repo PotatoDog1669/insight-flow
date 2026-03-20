@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collectors.reddit_config import normalize_reddit_subreddits
 from app.config import settings
 from app.models.monitor import Monitor
 from app.models.task import CollectTask
@@ -81,7 +82,10 @@ async def execute_monitor_pipeline(
         except ValueError:
             continue
 
-    destination_ids = _normalize_destination_ids(monitor.destination_ids)
+    destination_ids = _normalize_destination_ids(
+        monitor.destination_instance_ids,
+        monitor.destination_ids,
+    )
     window_hours = _resolve_window_hours(monitor_window_hours=monitor.window_hours, override=window_hours_override)
     default_source_max_items = _resolve_default_source_max_items(monitor.time_period)
     source_overrides = _filter_source_overrides_by_source_ids(
@@ -182,9 +186,10 @@ async def run_monitor_once(
     )
 
 
-def _normalize_destination_ids(destination_ids: list | None) -> list[str]:
+def _normalize_destination_ids(destination_instance_ids: list | None, destination_ids: list | None) -> list[str]:
     normalized: list[str] = []
-    for target in destination_ids or []:
+    raw_targets = destination_instance_ids or destination_ids or []
+    for target in raw_targets:
         if isinstance(target, str) and target.strip():
             normalized.append(target.strip())
     if "database" not in normalized:
@@ -303,6 +308,24 @@ def _normalize_source_overrides(payload: dict | None) -> dict[str, dict]:
         if keywords:
             deduped = list(dict.fromkeys(keywords))
             cleaned["keywords"] = deduped[:20]
+
+        usernames: list[str] = []
+        raw_usernames = raw_config.get("usernames")
+        if isinstance(raw_usernames, str):
+            usernames = [item.strip() for item in raw_usernames.split(",") if item.strip()]
+        elif isinstance(raw_usernames, list):
+            for item in raw_usernames:
+                if not isinstance(item, str):
+                    continue
+                value = item.strip()
+                if value:
+                    usernames.append(value)
+        if usernames:
+            cleaned["usernames"] = list(dict.fromkeys(usernames))
+
+        subreddits = normalize_reddit_subreddits(raw_config.get("subreddits"))
+        if subreddits:
+            cleaned["subreddits"] = subreddits
 
         if cleaned:
             normalized[source_id] = cleaned

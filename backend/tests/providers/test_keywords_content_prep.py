@@ -132,3 +132,30 @@ def test_event_input_to_prompt_article_combines_primary_and_supporting_sources()
     assert "Primary Source" in prompt_article.content
     assert "Supporting Source 1" in prompt_article.content
     assert "媒体补充了发布时间与可用范围" in prompt_article.content
+
+
+def test_event_input_to_prompt_article_includes_author_and_distribution_hints() -> None:
+    event_input = EventExtractionInput(
+        cluster=CandidateCluster(
+            cluster_id="cluster-social",
+            articles=[],
+        ),
+        primary_article=RawArticle(
+            external_id="perplexity-comet-ios",
+            title="Comet is now available for iOS.",
+            url="https://x.com/perplexity_ai/status/2034315813105103082",
+            content="Comet is now available for iOS.\nDownload on the App Store: https://apps.apple.com/us/app/comet-a/id123",
+            metadata={
+                "source_name": "X",
+                "author_name": "Perplexity",
+                "author_username": "perplexity_ai",
+            },
+        ),
+        supporting_articles=[],
+    )
+
+    prompt_article = _event_input_to_prompt_article(event_input)
+
+    assert "Source: X" in prompt_article.content
+    assert "Author: Perplexity (@perplexity_ai)" in prompt_article.content
+    assert "Distribution: App Store" in prompt_article.content

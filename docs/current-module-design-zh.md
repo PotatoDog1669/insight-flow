@@ -64,7 +64,7 @@
 
 ### 模块定位
 
-“任务”页是系统的核心编排入口。一个任务会把信息源、时间窗口、报告模板、AI 路由和输出配置组合成一条可重复执行的研究流水线。
+“任务”页是系统的核心编排入口。一个任务会把信息源、更新频率、时间窗口、报告模板、AI 路由和输出配置组合成一条可重复执行的研究流水线。
 
 ### 当前已实现功能
 
@@ -72,10 +72,10 @@
 - 创建任务与编辑任务。
 - 配置任务基础字段：
   - 名称
-  - 更新频率：`daily / weekly / custom`
-  - 时间窗口 `window_hours`
-  - 报告模板：`daily / weekly / research`
-  - 自定义 cron 表达式
+  - 更新频率：控制任务调度频率，`daily / weekly / custom`
+  - 时间窗口：控制单次运行回看的抓取范围，默认提供 `1 天 / 3 天 / 7 天 / 自定义`
+  - 报告模板：`daily / weekly / research`，会基于更新频率给出推荐值，但允许用户自由覆盖
+- 执行计划：主界面使用可视化调度控件（每日时间、每周星期+时间、自定义每隔 N 天+时间）；旧版历史计划会保留，但主界面不再暴露 Cron 编辑
 - 为任务选择多个信息源。
 - 任务级信息源覆盖：
   - 通用抓取上限 `max_items`
@@ -125,8 +125,9 @@
 
 ### 调度与执行设计
 
-- 调度器已实现“每日定时扫描所有启用任务并执行”。
-- 周报定时任务函数仍是预留状态，未真正接入调度。
+- 调度器会为每个启用任务单独注册 APScheduler job。
+- `daily / weekly / custom` 都会转成任务级 cron 规则并独立执行。
+- 创建、编辑、启停、删除任务后，会即时同步对应的 scheduler job。
 - 单次任务运行会：
   - 解析任务绑定的信息源
   - 计算实际时间窗口
@@ -142,7 +143,7 @@
 
 ### 当前边界
 
-- `weekly` 调度仍是预留，并未真正自动运行。
+- 前端的可视化调度当前仍以 `daily / weekly / custom` 三类为主，其中 `custom` 表示“每隔 N 天”；暂未覆盖月度或更复杂的自然语言周期。
 - 前端已支持社交源用户名子集选择，但当前后端 `source_overrides` 归一化只稳定保留 `max_items / limit / max_results / keywords`，`usernames` 目前没有形成完整持久化与执行闭环。
 - 后端注释里仍把部分更新/删除接口标成 “P1 预留”，但接口本身其实已经可用，属于“标注滞后于实现”。
 
@@ -303,7 +304,7 @@
 - 支持启用/停用输出目标。
 - 支持为各目标维护独立配置：
   - Notion：`token`、`database_id`、`parent_page_id`、`title_property`、`summary_property`
-  - Obsidian：`api_url`、`api_key`、`target_folder`
+  - Obsidian：`mode`、`api_url`、`api_key`、`vault_path`、`target_folder`
   - RSS：展示并复制 feed URL
 - 在任务模块中选择已启用的输出配置进行绑定。
 
@@ -315,6 +316,7 @@
 - API 已实现：
   - `GET /api/v1/destinations`
   - `PATCH /api/v1/destinations/{destination_id}`
+  - `POST /api/v1/destinations/{destination_id}/test`
   - `GET /api/v1/feed.xml`
 
 ### 发布链路设计
@@ -335,16 +337,18 @@
   - 支持标题字段和摘要字段映射。
 - Obsidian：
   - 已有 sink 实现。
-  - 当前后端真正消费的是 `vault_path`。
-  - 前端填写的是 `target_folder`，后端会映射到 `vault_path` 使用。
+  - 当前要求显式选择 `mode`：`rest` 或 `file`。
+  - `rest` 模式下使用 `api_url` + `api_key`，并通过本地 REST API 写入 Obsidian。
+  - `file` 模式下使用 `vault_path` + `target_folder`，直接写本地 Markdown 文件。
+  - 输出配置页已支持“测试连接”，会按当前模式分别校验 REST API 或本地目录可写性。
 - RSS：
   - 已有独立 feed endpoint。
   - 订阅内容来自数据库中最近的报告记录。
 
 ### 当前边界
 
-- 输出配置页本身没有“测试连接”按钮，目前更偏保存配置而非完整联调页。
-- Obsidian 前端字段命名是 REST API 风格，但后端 sink 当前主要按文件路径/`vault_path` 语义消费，存在命名抽象不完全一致的问题。
+- Obsidian 现在通过 `mode` 避免了自动推断，但老配置若未显式保存 `mode`，会在 API 层补默认值。
+- 当前的 Obsidian REST 方案依赖本地社区插件，仍更适合同机部署或本地 agent，而不是纯云端 SaaS 直连。
 - 目标配置依赖默认用户 `settings`，还不是独立的可共享资源模型。
 
 ## 模块关系总结

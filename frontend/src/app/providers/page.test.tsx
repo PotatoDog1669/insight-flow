@@ -28,6 +28,7 @@ describe("ProvidersPage", () => {
         description: "用于 workflow 加工阶段的 Codex LLM 配置，与 OpenAI 共享同一套 prompts 和 workflow。",
         enabled: false,
         config: {
+          auth_mode: "api_key",
           base_url: "https://api.openai.com/v1",
           model: "gpt-5-codex",
           timeout_sec: 45,
@@ -44,6 +45,7 @@ describe("ProvidersPage", () => {
         description: "用于 workflow 加工阶段的 OpenAI LLM 配置，与 Codex 共享同一套 prompts 和 workflow。",
         enabled: true,
         config: {
+          auth_mode: "api_key",
           base_url: "https://api.openai.com/v1",
           model: "gpt-4o-mini",
           timeout_sec: 45,
@@ -61,6 +63,7 @@ describe("ProvidersPage", () => {
       description: "用于 workflow 加工阶段的 OpenAI LLM 配置，与 Codex 共享同一套 prompts 和 workflow。",
       enabled: true,
       config: {
+        auth_mode: "api_key",
         base_url: "https://api.openai.com/v1",
         model: "gpt-4o-mini",
         timeout_sec: 45,
@@ -122,5 +125,50 @@ describe("ProvidersPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "隐藏 API Key" }));
     expect(apiKeyInput).toHaveAttribute("type", "password");
+  });
+
+  it("shows a codex auth mode selector and hides http-only fields in local mode", async () => {
+    render(<ProvidersPage />);
+
+    await screen.findByRole("heading", { name: "模型配置" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "配置" })[0]);
+
+    expect(screen.getByLabelText("连接模式")).toBeInTheDocument();
+    expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("API Key")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("连接模式"), {
+      target: { value: "local_codex" },
+    });
+
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("模型")).toBeInTheDocument();
+  });
+
+  it("sends local_codex auth mode when testing codex local mode", async () => {
+    render(<ProvidersPage />);
+
+    await screen.findByRole("heading", { name: "模型配置" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "配置" })[0]);
+    fireEvent.change(screen.getByLabelText("连接模式"), {
+      target: { value: "local_codex" },
+    });
+    fireEvent.change(screen.getByLabelText("模型"), {
+      target: { value: "gpt-5.4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() => {
+      expect(mockedTestProvider).toHaveBeenCalledWith("llm_codex", {
+        config: expect.objectContaining({
+          auth_mode: "local_codex",
+          model: "gpt-5.4",
+          api_key: "",
+        }),
+      });
+    });
   });
 });

@@ -1,30 +1,38 @@
 """采集流水线编排器"""
 
 import asyncio
+import uuid
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Awaitable, Callable
-import uuid
 
 import httpx
 import structlog
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.destinations.instances import _destination_settings_from_user
 from app.agents.registry import get_agent
 from app.agents.schemas import ResearchEvent, ResearchJob
 from app.collectors.base import RawArticle
+from app.collectors.reddit_config import build_reddit_feed_url, normalize_reddit_subreddits
 from app.collectors.registry import get_collector
 from app.config import settings
 from app.models.article import Article
 from app.models.database import async_session
 from app.models.monitor import Monitor
+from app.models.paper import Paper
 from app.models.report import Report
 from app.models.source import Source
 from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
+from app.papers.acquisition import acquire_paper_fulltext
+from app.papers.evidence import build_evidence_coverage
+from app.papers.literature import build_literature_context
+from app.papers.service import sync_article_paper_link
+from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
 from app.processors.global_summary import run_global_summary_stage, run_global_summary_with_retry
@@ -93,6 +101,37 @@ class Orchestrator:
         if not message:
             message = type(exc).__name__
         return message[:limit]
+
+    async def _append_provider_unavailable_event(
+        self,
+        db: AsyncSession,
+        *,
+        run_id: uuid.UUID | None,
+        monitor_id: uuid.UUID | None,
+        task_id: uuid.UUID | None,
+        source_id: uuid.UUID | None,
+        stage: str,
+        exc: ProviderUnavailableError,
+    ) -> None:
+        if run_id is None:
+            return
+        await append_task_event(
+            db,
+            run_id=run_id,
+            monitor_id=monitor_id,
+            task_id=task_id,
+            source_id=source_id,
+            stage=stage,
+            level="error",
+            event_type="provider_unavailable",
+            message=f"[{exc.provider}] unavailable during {stage}",
+            payload={
+                "provider": exc.provider,
+                "reason": exc.reason,
+                "status_code": exc.status_code,
+                "stage": stage,
+            },
+        )
 
     async def collect_source(
         self,
@@ -357,7 +396,7 @@ class Orchestrator:
         source_by_id: dict[uuid.UUID, Source] = {item.id: item for item in subscribed_sources}
         source_name_by_id: dict[uuid.UUID, str] = {item.id: item.name for item in subscribed_sources}
         user = await db.get(User, user_id)
-        destination_settings = self._extract_destination_settings(user.settings if user else {})
+        destination_settings = await _destination_settings_from_user(db, user) if user else {}
         provider_overrides = self._extract_provider_settings(user.settings if user else {})
         normalized_monitor_ai_routing = self._normalize_monitor_ai_routing(monitor_ai_routing)
         self.runtime_routing_profile = self._build_runtime_routing_profile(normalized_monitor_ai_routing)
@@ -772,6 +811,7 @@ class Orchestrator:
                         process_result = job.result()
                     except Exception as exc:  # pragma: no cover - defensive path
                         error_text = self._error_message(exc, limit=1000)
+                        failure_stage = exc.stage if isinstance(exc, ProviderUnavailableError) and exc.stage else "process"
                         task.status = "failed"
                         task.error_message = error_text
                         task.finished_at = datetime.now(timezone.utc)
@@ -779,8 +819,8 @@ class Orchestrator:
                         task.stage_trace = [
                             *existing_trace,
                             {
-                                "stage": "process",
-                                "provider": "pipeline",
+                                "stage": failure_stage,
+                                "provider": getattr(exc, "provider", "pipeline"),
                                 "status": "failed",
                                 "error": self._error_message(exc, limit=300),
                             },
@@ -792,6 +832,16 @@ class Orchestrator:
                             },
                         ]
                         db.add(task)
+                        if isinstance(exc, ProviderUnavailableError):
+                            await self._append_provider_unavailable_event(
+                                db,
+                                run_id=pipeline_run_id,
+                                monitor_id=monitor_id,
+                                task_id=task.id,
+                                source_id=source.id,
+                                stage=failure_stage,
+                                exc=exc,
+                            )
                         await append_task_event(
                             db,
                             run_id=pipeline_run_id,
@@ -1057,6 +1107,15 @@ class Orchestrator:
                 "window_end": window_end.isoformat(),
             }
 
+        await self._run_fulltext_acquisition_stage(
+            db=db,
+            article_ids=persisted_article_ids,
+            source_by_id=source_by_id,
+            report_type=report_type,
+            run_id=pipeline_run_id,
+            monitor_id=monitor_id,
+            monitor_task_id=monitor_task_id,
+        )
         report_ids, publish_status, publish_reports = await self._render_and_persist_reports(
             db=db,
             user_id=user_id,
@@ -1292,6 +1351,11 @@ class Orchestrator:
         default_source_max_items: int | None = None,
     ) -> dict:
         config = dict(source.config or {})
+        if source.collect_method == "rss" and isinstance(config.get("subreddits"), list):
+            subreddits = normalize_reddit_subreddits(config.get("subreddits"))
+            if subreddits:
+                config["subreddits"] = subreddits
+            config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
         resolved_max_items = default_source_max_items if isinstance(default_source_max_items, int) and 1 <= default_source_max_items <= 200 else None
         if not isinstance(source_overrides, dict):
             if resolved_max_items is not None:
@@ -1321,7 +1385,9 @@ class Orchestrator:
             if resolved_max_items is None and isinstance(raw_limit, int) and 1 <= raw_limit <= 200:
                 resolved_max_items = raw_limit
 
-        if source.collect_method == "rss" and bool(config.get("arxiv_api")):
+        if source.collect_method in {"openalex", "europe_pmc", "pubmed"} or (
+            source.collect_method == "rss" and bool(config.get("arxiv_api"))
+        ):
             raw_max_results = override.get("max_results")
             if isinstance(raw_max_results, str):
                 raw_max_results = raw_max_results.strip()
@@ -1357,6 +1423,12 @@ class Orchestrator:
             if usernames:
                 config["usernames"] = usernames
 
+        if source.collect_method == "rss":
+            subreddits = normalize_reddit_subreddits(override.get("subreddits"))
+            if subreddits:
+                config["subreddits"] = subreddits
+                config["feed_url"] = build_reddit_feed_url(subreddits)
+
         if resolved_max_items is not None:
             config = Orchestrator._apply_source_max_items(config=config, source=source, max_items=resolved_max_items)
         return config
@@ -1371,8 +1443,7 @@ class Orchestrator:
         method = str(source.collect_method or "")
         if method in {"huggingface", "github_trending"}:
             config["limit"] = max_items
-        if method == "rss" and bool(config.get("arxiv_api")):
-            # Keep arXiv API max_results aligned with fetch cap.
+        if method in {"openalex", "europe_pmc", "pubmed"} or (method == "rss" and bool(config.get("arxiv_api"))):
             config["max_results"] = max_items
         return config
 
@@ -1492,6 +1563,7 @@ class Orchestrator:
                 existing.published_at=raw.published_at
                 existing.collected_at=now
                 existing.updated_at=now
+            await sync_article_paper_link(db, existing, source)
             db.add(existing)
             await db.flush()
             article_ids.append(existing.id)
@@ -1586,10 +1658,23 @@ class Orchestrator:
                 monitor_task_id=monitor_task_id,
             )
         summary_route = self.runtime_routing_profile.stages.global_summary or self.runtime_routing_profile.stages.report
-        global_summary: GlobalSummary = await run_global_summary_stage(
-            events=report_events,
-            runner=lambda payload: self._run_global_summary_with_retry(summary_route, payload),
-        )
+        try:
+            global_summary: GlobalSummary = await run_global_summary_stage(
+                events=report_events,
+                runner=lambda payload: self._run_global_summary_with_retry(summary_route, payload),
+            )
+        except ProviderUnavailableError as exc:
+            await self._append_provider_unavailable_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage=exc.stage or "global_summary",
+                exc=exc,
+            )
+            await db.commit()
+            raise
         daily_report = render_daily_report(
             events=report_events,
             context=context,
@@ -1648,6 +1733,18 @@ class Orchestrator:
                     daily_metadata["global_tldr"] = generated_tldr
                     daily_metadata["tldr"] = [generated_tldr]
                     daily_report.metadata = daily_metadata
+            except ProviderUnavailableError as exc:
+                await self._append_provider_unavailable_event(
+                    db,
+                    run_id=run_id,
+                    monitor_id=monitor_id,
+                    task_id=monitor_task_id,
+                    source_id=None,
+                    stage=exc.stage or "report",
+                    exc=exc,
+                )
+                await db.commit()
+                raise
             except Exception as exc:  # pragma: no cover - runtime fallback
                 logger.warning(
                     "report_provider_fallback_to_renderer",
@@ -1754,6 +1851,13 @@ class Orchestrator:
         monitor_task_id: uuid.UUID | None,
     ) -> tuple[list[Report], list[RenderedReport]]:
         target_event = self._select_research_target_event(report_events)
+        event_article_ids = [str(item).strip() for item in target_event.get("article_ids", []) if str(item).strip()]
+        target_article_ids = await self._resolve_research_article_ids(
+            db,
+            event_article_ids=event_article_ids,
+            fallback_article_ids=article_ids,
+        )
+        literature_context = await build_literature_context(db, target_article_ids)
         if run_id is not None:
             await append_task_event(
                 db,
@@ -1774,6 +1878,7 @@ class Orchestrator:
             user_id=user_id,
             monitor_id=monitor_id,
             report_date=report_date,
+            metadata=literature_context,
         )
         if run_id is not None:
             await append_task_event(
@@ -1785,7 +1890,12 @@ class Orchestrator:
                 stage="report",
                 event_type="research_job_built",
                 message="[research] job built",
-                payload={"job_id": job.job_id, "agent": self._research_agent_name()},
+                payload={
+                    "job_id": job.job_id,
+                    "agent": self._research_agent_name(),
+                    "analysis_mode": str(job.metadata.get("analysis_mode") or "event_research"),
+                    "literature_items": int((job.metadata.get("literature_summary") or {}).get("paper_count") or 0),
+                },
             )
             await db.commit()
 
@@ -1854,12 +1964,14 @@ class Orchestrator:
             {"title": item.title, "url": item.url, "source_type": item.source_type}
             for item in result.sources
         ]
-        event_article_ids = [str(item).strip() for item in target_event.get("article_ids", []) if str(item).strip()]
-        article_id_strings = event_article_ids or [str(item) for item in article_ids]
+        article_id_strings = [str(item) for item in target_article_ids]
+        evidence_coverage = await build_evidence_coverage(db, target_article_ids)
+        analysis_mode = str(job.metadata.get("analysis_mode") or "event_research")
         metadata = {
             "template": "research",
             "frequency": selected_time_period,
             "report_type": selected_report_type,
+            "analysis_mode": analysis_mode,
             "events": [target_event],
             "event_ids": [str(target_event["event_id"])],
             "global_tldr": result.summary,
@@ -1911,7 +2023,12 @@ class Orchestrator:
                 stage="report",
                 event_type="research_report_generated",
                 message=f"[research] report generated via {agent_name}",
-                payload={"agent": agent_name, "output_content_chars": len(result.content_markdown)},
+                payload={
+                    "agent": agent_name,
+                    "analysis_mode": analysis_mode,
+                    "output_content_chars": len(result.content_markdown),
+                    "evidence_coverage": evidence_coverage,
+                },
             )
             await db.commit()
         return [report_row], [rendered_report]
@@ -1941,9 +2058,9 @@ class Orchestrator:
             published_to: list[str] = []
             publish_trace: list[dict] = []
             for target in targets:
-                sink_name = normalize_sink_name(target)
+                sink_name = self._resolve_sink_name(target=str(target), destination_settings=destination_settings or {})
                 try:
-                    sink = get_sink(target)
+                    sink = get_sink(sink_name)
                 except KeyError as exc:
                     if run_id is not None:
                         await append_task_event(
@@ -1964,6 +2081,14 @@ class Orchestrator:
                             "stage": "publish",
                             "sink": sink_name,
                             "provider": target,
+                            "destination_instance_id": self._destination_instance_id(
+                                target=str(target),
+                                destination_settings=destination_settings or {},
+                            ),
+                            "destination_instance_name": self._destination_instance_name(
+                                target=str(target),
+                                destination_settings=destination_settings or {},
+                            ),
                             "status": "failed",
                             "url": None,
                             "error": str(exc),
@@ -2016,6 +2141,14 @@ class Orchestrator:
                         "stage": "publish",
                         "sink": sink_name,
                         "provider": target,
+                        "destination_instance_id": self._destination_instance_id(
+                            target=str(target),
+                            destination_settings=destination_settings or {},
+                        ),
+                        "destination_instance_name": self._destination_instance_name(
+                            target=str(target),
+                            destination_settings=destination_settings or {},
+                        ),
                         "status": "success" if publish_result.success else "failed",
                         "url": publish_result.url,
                         "error": publish_result.error,
@@ -2034,12 +2167,14 @@ class Orchestrator:
                 final_status = "partial_success"
 
             report.published_to = published_to
+            report.published_destination_instance_ids = self._published_destination_instance_ids(publish_trace)
             report.publish_trace = publish_trace
             publish_reports.append(
                 {
                     "report_id": str(report.id),
                     "report_type": report.report_type,
                     "published_to": list(published_to),
+                    "published_destination_instance_ids": list(report.published_destination_instance_ids or []),
                     "publish_trace": list(publish_trace),
                 }
             )
@@ -2089,6 +2224,154 @@ class Orchestrator:
 
         return sorted(candidates, key=_sort_key, reverse=True)[0]
 
+    async def _run_fulltext_acquisition_stage(
+        self,
+        db: AsyncSession,
+        *,
+        article_ids: list[uuid.UUID],
+        source_by_id: dict[uuid.UUID, Source],
+        report_type: str,
+        run_id: uuid.UUID | None,
+        monitor_id: uuid.UUID | None,
+        monitor_task_id: uuid.UUID | None,
+    ) -> None:
+        if _normalize_report_type(report_type) != "research" or not article_ids:
+            return
+
+        stmt = select(Article).where(Article.id.in_(article_ids))
+        articles = (await db.execute(stmt)).scalars().all()
+        paper_ids: list[uuid.UUID] = []
+        for article in articles:
+            if article.paper_id is None:
+                continue
+            source = source_by_id.get(article.source_id)
+            if source is None or source.category != "academic":
+                continue
+            if article.paper_id not in paper_ids:
+                paper_ids.append(article.paper_id)
+
+        if not paper_ids:
+            return
+
+        requested = 0
+        succeeded = 0
+        failed = 0
+        skipped = 0
+
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="fulltext",
+                event_type="fulltext_started",
+                message=f"[research] starting fulltext acquisition for {len(paper_ids)} papers",
+                payload={"papers_requested": len(paper_ids)},
+            )
+            await db.commit()
+
+        for paper_id in paper_ids:
+            if await self._is_monitor_run_cancelling(db, monitor_task_id=monitor_task_id):
+                break
+            paper = await db.get(Paper, paper_id)
+            if paper is None:
+                failed += 1
+                continue
+            if paper.best_content_id is not None or paper.fulltext_status == "converted":
+                skipped += 1
+                continue
+
+            requested += 1
+            result = await acquire_paper_fulltext(db, paper_id)
+            await db.flush()
+            refreshed_paper = await db.get(Paper, paper_id)
+            acquisition_succeeded = bool(
+                result is not None
+                and result.content is not None
+                or refreshed_paper is not None
+                and (refreshed_paper.best_content_id is not None or refreshed_paper.fulltext_status == "converted")
+            )
+            if acquisition_succeeded:
+                succeeded += 1
+                if run_id is not None:
+                    await append_task_event(
+                        db,
+                        run_id=run_id,
+                        monitor_id=monitor_id,
+                        task_id=monitor_task_id,
+                        source_id=None,
+                        stage="fulltext",
+                        event_type="paper_fulltext_acquired",
+                        message=f"[research] acquired fulltext for paper {paper_id}",
+                        payload={
+                            "paper_id": str(paper_id),
+                            "content_tier": (
+                                result.content.content_tier
+                                if result is not None and result.content is not None
+                                else "fulltext"
+                            ),
+                        },
+                    )
+            else:
+                failed += 1
+                if run_id is not None:
+                    await append_task_event(
+                        db,
+                        run_id=run_id,
+                        monitor_id=monitor_id,
+                        task_id=monitor_task_id,
+                        source_id=None,
+                        stage="fulltext",
+                        event_type="paper_fulltext_failed",
+                        message=f"[research] fulltext unavailable for paper {paper_id}",
+                        payload={"paper_id": str(paper_id)},
+                    )
+            await db.commit()
+
+        if run_id is not None:
+            await append_task_event(
+                db,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                task_id=monitor_task_id,
+                source_id=None,
+                stage="fulltext",
+                event_type="fulltext_completed",
+                message="[research] fulltext acquisition completed",
+                payload={
+                    "papers_total": len(paper_ids),
+                    "papers_requested": requested,
+                    "papers_succeeded": succeeded,
+                    "papers_failed": failed,
+                    "papers_skipped": skipped,
+                },
+            )
+            await db.commit()
+
+    async def _resolve_research_article_ids(
+        self,
+        db: AsyncSession,
+        *,
+        event_article_ids: list[str],
+        fallback_article_ids: list[uuid.UUID],
+    ) -> list[uuid.UUID]:
+        if not event_article_ids:
+            return list(fallback_article_ids)
+
+        resolved_ids = [_coerce_uuid(item) for item in event_article_ids]
+        resolved_ids = [item for item in resolved_ids if item is not None]
+        if resolved_ids:
+            return resolved_ids
+
+        stmt = select(Article.id).where(
+            Article.id.in_(fallback_article_ids),
+            Article.external_id.in_(event_article_ids),
+        )
+        matched_ids = (await db.execute(stmt)).scalars().all()
+        return matched_ids or list(fallback_article_ids)
+
     def _build_research_job(
         self,
         *,
@@ -2097,6 +2380,7 @@ class Orchestrator:
         user_id: uuid.UUID,
         monitor_id: uuid.UUID | None,
         report_date: date,
+        metadata: dict | None = None,
     ) -> ResearchJob:
         return ResearchJob(
             job_id=str(uuid.uuid4()),
@@ -2126,6 +2410,7 @@ class Orchestrator:
             monitor_id=str(monitor_id) if monitor_id is not None else None,
             user_id=str(user_id),
             report_date=report_date.isoformat(),
+            metadata=dict(metadata or {}),
         )
 
     @staticmethod
@@ -2345,23 +2630,27 @@ class Orchestrator:
         for target in requested_targets:
             if not target:
                 continue
-            normalized = normalize_sink_name(str(target))
-            if normalized in seen:
+            normalized = Orchestrator._resolve_sink_name(str(target), destination_settings)
+            if normalized == str(target) and Orchestrator._looks_like_uuid(str(target)):
+                continue
+            dedupe_key = Orchestrator._destination_dedupe_key(str(target), destination_settings)
+            if dedupe_key in seen:
                 continue
             if not destination_ids and normalized != "database":
                 setting = destination_settings.get(normalized)
                 if setting is not None and setting.get("enabled") is False:
                     continue
             resolved.append(str(target))
-            seen.add(normalized)
+            seen.add(dedupe_key)
 
-        if "database" not in seen:
+        if "sink:database" not in seen and "instance:database" not in seen:
             resolved.insert(0, "database")
         return resolved
 
     @staticmethod
     def _build_sink_config(target: str, report_id: str, destination_settings: dict[str, dict]) -> dict:
-        normalized = normalize_sink_name(target)
+        payload = destination_settings.get(str(target), {})
+        normalized = normalize_sink_name(str(payload.get("type") or target))
         config: dict = {}
         if normalized == "database":
             config = {"report_id": report_id}
@@ -2382,11 +2671,57 @@ class Orchestrator:
                 "max_items": 20,
             }
 
-        user_destination = destination_settings.get(normalized, {})
+        user_destination = payload if payload else destination_settings.get(normalized, {})
         user_config = user_destination.get("config")
         if isinstance(user_config, dict):
             config.update(Orchestrator._normalize_user_sink_config(normalized, user_config))
+        if normalized == "rss" and payload.get("id"):
+            config["destination_instance_id"] = str(payload["id"])
         return config
+
+    @staticmethod
+    def _resolve_sink_name(target: str, destination_settings: dict[str, dict]) -> str:
+        payload = destination_settings.get(str(target), {})
+        return normalize_sink_name(str(payload.get("type") or target))
+
+    @staticmethod
+    def _destination_dedupe_key(target: str, destination_settings: dict[str, dict]) -> str:
+        payload = destination_settings.get(str(target), {})
+        if payload.get("id"):
+            return f"instance:{target}"
+        return f"sink:{Orchestrator._resolve_sink_name(target, destination_settings)}"
+
+    @staticmethod
+    def _destination_instance_id(target: str, destination_settings: dict[str, dict]) -> str | None:
+        payload = destination_settings.get(str(target), {})
+        value = str(payload.get("id") or "").strip()
+        return value or None
+
+    @staticmethod
+    def _destination_instance_name(target: str, destination_settings: dict[str, dict]) -> str | None:
+        payload = destination_settings.get(str(target), {})
+        value = str(payload.get("name") or "").strip()
+        return value or None
+
+    @staticmethod
+    def _looks_like_uuid(value: str) -> bool:
+        try:
+            uuid.UUID(str(value))
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _published_destination_instance_ids(publish_trace: list[dict]) -> list[str]:
+        published: list[str] = []
+        for item in publish_trace:
+            if item.get("status") != "success":
+                continue
+            destination_instance_id = str(item.get("destination_instance_id") or "").strip()
+            if not destination_instance_id or destination_instance_id in published:
+                continue
+            published.append(destination_instance_id)
+        return published
 
     @staticmethod
     def _normalize_user_sink_config(normalized_sink: str, user_config: dict) -> dict:
@@ -2410,10 +2745,16 @@ class Orchestrator:
 
         if normalized_sink == "obsidian":
             obsidian_config: dict = {}
+            if user_config.get("mode"):
+                obsidian_config["mode"] = str(user_config["mode"])
+            if user_config.get("api_url"):
+                obsidian_config["api_url"] = str(user_config["api_url"])
+            if user_config.get("api_key"):
+                obsidian_config["api_key"] = str(user_config["api_key"])
+            if user_config.get("target_folder"):
+                obsidian_config["target_folder"] = str(user_config["target_folder"])
             if user_config.get("vault_path"):
                 obsidian_config["vault_path"] = str(user_config["vault_path"])
-            elif user_config.get("target_folder"):
-                obsidian_config["vault_path"] = str(user_config["target_folder"])
             return obsidian_config
 
         if normalized_sink == "rss":
@@ -2494,6 +2835,15 @@ def _count_markdown_heading_level(content: str, level: int) -> int:
     normalized_level = max(int(level), 1)
     prefix = f'{"#" * normalized_level} '
     return sum(1 for line in str(content or "").splitlines() if line.lstrip().startswith(prefix))
+
+
+def _coerce_uuid(value: uuid.UUID | str) -> uuid.UUID | None:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def _item_source_categories(item: ProcessedArticle | ProcessedEvent) -> list[str]:

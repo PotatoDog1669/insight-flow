@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Calendar, Layers } from "lucide-react";
+import { ArrowLeft, Calendar, Layers, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { ArticleCard, type Article as ArticleCardModel } from "@/components/ArticleCard";
@@ -10,7 +10,16 @@ import { ReportDocument } from "@/components/report/ReportDocument";
 import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
 import { canonicalizeReportContent, extractOutline, parseReportContent } from "@/lib/report-content-parser";
-import { getArticleById, getReportById, type Article as APIArticle, type Report as APIReport } from "@/lib/api";
+import {
+  getArticleById,
+  getDestinations,
+  getReportById,
+  publishReportToDestination,
+  type Article as APIArticle,
+  type Destination,
+  type Report as APIReport,
+  type ReportPublishTraceEntry,
+} from "@/lib/api";
 const REPORT_TYPE_LABELS: Record<APIReport["report_type"], string> = {
   daily: "日报",
   weekly: "周报",
@@ -30,14 +39,44 @@ function toArticleCard(article: APIArticle): ArticleCardModel {
   };
 }
 
+type DestinationSyncState = "success" | "failed" | "pending";
+
+function getDestinationStatus(report: APIReport, destinationId: Destination["id"]): {
+  state: DestinationSyncState;
+  label: string;
+  detail: string;
+} {
+  if (report.published_destination_instance_ids.includes(destinationId)) {
+    return { state: "success", label: "已同步", detail: "该目标已经拥有当前报告内容。" };
+  }
+
+  const latestTrace = [...(report.publish_trace ?? [])]
+    .reverse()
+    .find(
+      (entry: ReportPublishTraceEntry) =>
+        entry.destination_instance_id === destinationId || entry.provider === destinationId
+    );
+  if (latestTrace?.status === "success") {
+    return { state: "success", label: "已同步", detail: "该目标已经拥有当前报告内容。" };
+  }
+  if (latestTrace?.status === "failed") {
+    return { state: "failed", label: "上次失败", detail: latestTrace.error || "最近一次同步失败。" };
+  }
+  return { state: "pending", label: "未同步", detail: "该目标还没有同步当前报告。" };
+}
+
 export default function ReportDetailPage() {
   const params = useParams();
   const id = params.id as string;
 
   const [report, setReport] = useState<APIReport | null>(null);
+  const [destinations, setDestinations] = useState<Destination[]>([]);
   const [articles, setArticles] = useState<APIArticle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [pendingSyncDestinationId, setPendingSyncDestinationId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,9 +86,10 @@ export default function ReportDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const reportData = await getReportById(id);
+        const [reportData, destinationData] = await Promise.all([getReportById(id), getDestinations()]);
         if (cancelled) return;
         setReport(reportData);
+        setDestinations((destinationData || []).filter((item) => item.enabled));
         const effectiveContent = canonicalizeReportContent(
           reportData.content ?? "",
           reportData.events ?? [],
@@ -125,6 +165,11 @@ export default function ReportDetailPage() {
     return report.article_count;
   }, [articles, report]);
 
+  const syncDestinations = useMemo(
+    () => destinations.filter((item) => item.enabled),
+    [destinations],
+  );
+
   const handleNavigate = (sectionId: string) => {
     const target = document.getElementById(sectionId);
     if (target) {
@@ -134,6 +179,32 @@ export default function ReportDetailPage() {
       window.history.replaceState(null, "", `#${sectionId}`);
     }
   };
+
+  const confirmPublish = async (destinationId: Destination["id"]) => {
+    if (!report) return;
+    setSyncingId(destinationId);
+    setSyncError(null);
+    setPendingSyncDestinationId(null);
+    try {
+      const updated = await publishReportToDestination(report.id, [destinationId]);
+      setReport(updated);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "同步失败");
+      try {
+        const refreshed = await getReportById(report.id);
+        setReport(refreshed);
+      } catch {
+        // Keep current report state when refresh also fails.
+      }
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const pendingSyncDestination = useMemo(
+    () => syncDestinations.find((item) => item.id === pendingSyncDestinationId) ?? null,
+    [pendingSyncDestinationId, syncDestinations]
+  );
 
   if (loading) {
     return <div className="py-10 text-sm text-muted-foreground">正在加载报告...</div>;
@@ -220,6 +291,53 @@ export default function ReportDetailPage() {
               )}
             </div>
           )}
+
+          {syncDestinations.length > 0 && (
+            <section className="mt-10 rounded-2xl border border-border/50 bg-muted/20 p-5 sm:p-6">
+              <div className="mb-4 flex items-center gap-2">
+                <RefreshCcw className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-lg font-semibold tracking-tight">同步</h2>
+              </div>
+              <p className="mb-4 text-sm text-muted-foreground">
+                对未同步或上次失败的目标，可以立即同步这篇报告。
+              </p>
+              {syncError ? <p className="mb-4 text-sm text-red-500">{syncError}</p> : null}
+              <div className="space-y-3">
+                {syncDestinations.map((destination) => {
+                  const status = report ? getDestinationStatus(report, destination.id) : null;
+                  const actionable = status?.state !== "success";
+                  return (
+                    <div
+                      key={destination.id}
+                      className="flex flex-col gap-3 rounded-xl border border-border/50 bg-background/80 p-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-foreground">{destination.name}</span>
+                          {status ? (
+                            <Badge variant="outline" className="text-xs">
+                              {status.label}
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-sm text-muted-foreground">{status?.detail}</p>
+                      </div>
+                      {actionable ? (
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => setPendingSyncDestinationId(destination.id)}
+                          disabled={syncingId === destination.id}
+                        >
+                          {syncingId === destination.id ? "同步中..." : `同步到 ${destination.name}`}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </div>
 
         {hasTemplateContent && (
@@ -230,6 +348,64 @@ export default function ReportDetailPage() {
           </aside>
         )}
       </div>
+
+      {pendingSyncDestination && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+            onClick={() => setPendingSyncDestinationId(null)}
+          />
+          <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl border border-border/50 bg-background shadow-2xl">
+            <div className="border-b border-border/40 bg-card/90 px-6 py-5">
+              <h2 className="text-xl font-semibold tracking-tight">确认同步</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                这会立即把当前报告同步到目标落盘点。
+              </p>
+            </div>
+            <div className="space-y-4 px-6 py-6">
+              <div className="rounded-2xl border border-border/50 bg-muted/30 p-4">
+                <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  目标实例
+                </div>
+                <div className="mt-2 text-base font-semibold text-foreground">
+                  {pendingSyncDestination.name}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground capitalize">
+                  {pendingSyncDestination.type}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border/50 bg-background p-4">
+                <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  报告
+                </div>
+                <div className="mt-2 text-base font-semibold text-foreground">
+                  {displayTitle}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {report.monitor_name ? `来自任务 ${report.monitor_name}` : "手动生成报告"}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 border-t border-border/40 bg-card/60 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setPendingSyncDestinationId(null)}
+                className="rounded-xl border border-border/60 bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmPublish(pendingSyncDestination.id)}
+                disabled={syncingId === pendingSyncDestination.id}
+                className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {syncingId === pendingSyncDestination.id ? "同步中..." : "确认同步"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
