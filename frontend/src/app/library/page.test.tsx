@@ -26,9 +26,6 @@ vi.mock("@/components/ReportCard", () => ({
     report: { id: string; title: string; monitor_name?: string; report_type: string };
     onDelete?: (id: string) => void;
   }) => {
-    if (report.report_type === "paper") {
-      throw new Error("paper report cards are not wired yet");
-    }
     return (
       <div>
         <span>{report.title}</span>
