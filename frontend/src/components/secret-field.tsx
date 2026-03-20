@@ -10,6 +10,7 @@ type SecretFieldProps = {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  inputId?: string;
   onBlur?: () => void;
   className?: string;
   inputClassName?: string;
@@ -20,6 +21,7 @@ export function SecretField({
   value,
   onChange,
   placeholder,
+  inputId,
   onBlur,
   className,
   inputClassName,
@@ -29,6 +31,8 @@ export function SecretField({
   return (
     <div className={cn("relative", className)}>
       <input
+        id={inputId}
+        aria-label={label}
         type={visible ? "text" : "password"}
         value={value}
         onChange={(event) => onChange(event.target.value)}

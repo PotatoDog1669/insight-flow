@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import select
 
 from app.collectors.base import BaseCollector, RawArticle
-from app.models import Article, CollectTask, Report, Source, TaskEvent, User, UserSubscription
+from app.collectors.reddit_config import build_reddit_feed_url
+from app.models import Article, CollectTask, Paper, PaperContent, Report, Source, TaskEvent, User, UserSubscription
 from app.providers.errors import ProviderUnavailableError
 from app.agents.schemas import ResearchResult, ResearchSource
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
@@ -212,6 +213,7 @@ async def test_orchestrator_uses_research_agent_for_research_reports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_factory, _ = db_session_factory
+    captured: dict[str, object] = {}
 
     async def _prepare_subscription() -> None:
         async with session_factory() as session:
@@ -228,10 +230,21 @@ async def test_orchestrator_uses_research_agent_for_research_reports(
     await _prepare_subscription()
     monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
 
+    async def _mark_source_academic() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.category = "academic"
+            source.collect_method = "openalex"
+            await session.commit()
+
+    await _mark_source_academic()
+
     class _ResearchAgent:
         name = "deerflow_embedded"
 
         async def run(self, job) -> ResearchResult:
+            captured["job"] = job
             return ResearchResult(
                 title="Research title",
                 summary="Research summary",
@@ -257,6 +270,11 @@ async def test_orchestrator_uses_research_agent_for_research_reports(
         )
         assert result["reports_created"] == 1
 
+    job = captured["job"]
+    assert job.metadata["analysis_mode"] == "literature"
+    assert job.metadata["literature_summary"]["paper_count"] == 1
+    assert job.metadata["literature_corpus"][0]["evidence_level"] == "abstract_only"
+
     async with session_factory() as session:
         reports = (
             await session.execute(
@@ -275,10 +293,198 @@ async def test_orchestrator_uses_research_agent_for_research_reports(
         assert report.content == "# Executive Summary\nResearch content"
         metadata = report.metadata_ or {}
         assert metadata["template"] == "research"
+        assert metadata["analysis_mode"] == "literature"
         assert metadata["research_agent"] == "deerflow_embedded"
         assert metadata["research_assistant_id"] == "lead_agent"
         assert metadata["research_confidence"]["level"] == "high"
         assert metadata["research_sources"][0]["url"] == "https://example.com/official"
+
+        event = (
+            await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.stage == "report",
+                    TaskEvent.event_type == "research_report_generated",
+                )
+            )
+        ).scalar_one()
+        payload = event.payload or {}
+        assert payload["analysis_mode"] == "literature"
+        coverage = payload.get("evidence_coverage") or {}
+        assert coverage["papers_total"] == 1
+        assert coverage["papers_abstract_only"] == 1
+        assert coverage["papers_fulltext"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_acquires_fulltext_before_literature_research(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+    captured: dict[str, object] = {}
+    acquired_paper_ids: list[uuid.UUID] = []
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    async def _mark_source_academic() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.category = "academic"
+            source.collect_method = "openalex"
+            await session.commit()
+
+    await _mark_source_academic()
+
+    class _ResearchAgent:
+        name = "deerflow_embedded"
+
+        async def run(self, job) -> ResearchResult:
+            captured["job"] = job
+            return ResearchResult(
+                title="Research title",
+                summary="Research summary",
+                content_markdown="# Executive Summary\nResearch content",
+                sources=[ResearchSource(title="Official", url="https://example.com/official", source_type="official")],
+                confidence_level="high",
+                confidence_reason="official source",
+                artifacts=["/tmp/research.md"],
+                metadata={"agent_name": "lead_agent"},
+            )
+
+    async def _fake_acquire_fulltext(session, paper_id, **kwargs):
+        acquired_paper_ids.append(paper_id)
+        paper = await session.get(Paper, paper_id)
+        assert paper is not None
+        now = datetime.now(timezone.utc)
+        session.add(
+            PaperContent(
+                paper_id=paper_id,
+                content_tier="fulltext",
+                extraction_status="success",
+                markdown_content="# AI breakthrough today\n\nFulltext body for research.",
+                plain_text="AI breakthrough today Fulltext body for research.",
+                quality_score=0.9,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        paper.fulltext_status = "converted"
+        await session.flush()
+        return None
+
+    monkeypatch.setattr(orchestrator_module, "get_agent", lambda name, config=None: _ResearchAgent())
+    monkeypatch.setattr(orchestrator_module, "acquire_paper_fulltext", _fake_acquire_fulltext)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.research_default_agent = "deerflow_embedded"
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            report_type="research",
+        )
+        assert result["reports_created"] == 1
+
+    assert len(acquired_paper_ids) == 1
+    job = captured["job"]
+    assert job.metadata["analysis_mode"] == "literature"
+    assert job.metadata["literature_corpus"][0]["evidence_level"] == "fulltext"
+    assert "Fulltext body for research." in job.metadata["literature_corpus"][0]["analysis_text"]
+
+    async with session_factory() as session:
+        event = (
+            await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.stage == "fulltext",
+                    TaskEvent.event_type == "fulltext_completed",
+                )
+            )
+        ).scalar_one()
+        payload = event.payload or {}
+        assert payload["papers_requested"] == 1
+        assert payload["papers_succeeded"] == 1
+
+        research_event = (
+            await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.stage == "report",
+                    TaskEvent.event_type == "research_report_generated",
+                )
+            )
+        ).scalar_one()
+        coverage = (research_event.payload or {}).get("evidence_coverage") or {}
+        assert coverage["papers_fulltext"] == 1
+        assert coverage["papers_abstract_only"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_skips_fulltext_acquisition_for_daily_reports(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+    called = False
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: FakeCollector())
+
+    async def _mark_source_academic() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.category = "academic"
+            source.collect_method = "openalex"
+            await session.commit()
+
+    await _mark_source_academic()
+
+    async def _fake_acquire_fulltext(session, paper_id, **kwargs):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr(orchestrator_module, "acquire_paper_fulltext", _fake_acquire_fulltext)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            report_type="daily",
+        )
+        assert result["reports_created"] == 1
+
+    assert called is False
 
 
 @pytest.mark.asyncio
@@ -576,6 +782,141 @@ async def test_orchestrator_applies_arxiv_overrides_to_collect_config(
     assert captured_config["keywords"] == ["reasoning", "agent"]
     assert captured_config["max_results"] == 7
     assert captured_config["max_items"] == 7
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_applies_reddit_subreddit_overrides_to_collect_config(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.category = "social"
+            source.collect_method = "rss"
+            source.config = {
+                "subreddits": ["LocalLLaMA", "OpenAI", "MachineLearning"],
+                "feed_url": build_reddit_feed_url(["LocalLLaMA", "OpenAI", "MachineLearning"]),
+                "max_items": 30,
+            }
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+
+    captured_config: dict = {}
+
+    class _CaptureCollector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "capture"
+
+        @property
+        def category(self) -> str:
+            return "social"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            captured_config.update(config)
+            return []
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _CaptureCollector())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    async with session_factory() as session:
+        await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            source_ids=[SOURCE_ID],
+            source_overrides={
+                str(SOURCE_ID): {
+                    "subreddits": ["r/OpenAI", "MachineLearning", "openai"],
+                }
+            },
+        )
+
+    assert captured_config["subreddits"] == ["OpenAI", "MachineLearning"]
+    assert captured_config["feed_url"] == build_reddit_feed_url(["OpenAI", "MachineLearning"])
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_applies_academic_api_overrides_to_collect_config(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.category = "academic"
+            source.collect_method = "openalex"
+            source.config = {
+                "base_url": "https://api.openalex.org/works",
+                "keywords": ["baseline"],
+                "max_results": 25,
+                "api_key": "",
+                "mailto": "research@example.com",
+                "supports_time_window": True,
+            }
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+
+    captured_config: dict = {}
+
+    class _CaptureCollector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "capture"
+
+        @property
+        def category(self) -> str:
+            return "academic"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            captured_config.update(config)
+            return []
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _CaptureCollector())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    async with session_factory() as session:
+        await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            source_ids=[SOURCE_ID],
+            source_overrides={
+                str(SOURCE_ID): {
+                    "keywords": ["reasoning", "agent"],
+                    "max_results": 9,
+                }
+            },
+        )
+
+    assert captured_config["keywords"] == ["reasoning", "agent"]
+    assert captured_config["max_results"] == 9
+    assert captured_config["mailto"] == "research@example.com"
 
 
 @pytest.mark.asyncio

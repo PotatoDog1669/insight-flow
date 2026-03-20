@@ -58,6 +58,61 @@ def _write_arxiv_preset(path: Path) -> None:
     )
 
 
+def _write_academic_api_presets(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """
+            sources:
+              - key: openalex
+                company: OpenAlex
+                urls: ["https://api.openalex.org/works"]
+                strategy: openalex_api
+                priority: p0
+                enabled: true
+                category: academic
+                collect_config:
+                  base_url: "https://api.openalex.org/works"
+                  keywords: ["reasoning", "agent"]
+                  max_results: 20
+                  mailto: "research@example.com"
+                  supports_time_window: true
+                  auth_mode: optional_api_key
+              - key: europe_pmc
+                company: Europe PMC
+                urls: ["https://www.ebi.ac.uk/europepmc/webservices/rest/search"]
+                strategy: europe_pmc_api
+                priority: p0
+                enabled: true
+                category: academic
+                collect_config:
+                  base_url: "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+                  keywords: ["reasoning", "agent"]
+                  max_results: 20
+                  supports_time_window: true
+                  auth_mode: none
+              - key: pubmed
+                company: PubMed
+                urls: ["https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"]
+                strategy: pubmed_api
+                priority: p0
+                enabled: true
+                category: academic
+                collect_config:
+                  base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+                  keywords: ["reasoning", "agent"]
+                  max_results: 20
+                  api_key: ""
+                  tool: "lexdeepresearch"
+                  email: "research@example.com"
+                  supports_time_window: true
+                  auth_mode: optional_api_key
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_mixed_priority_presets(path: Path) -> None:
     path.write_text(
         textwrap.dedent(
@@ -144,6 +199,34 @@ def _write_x_preset(path: Path) -> None:
     )
 
 
+def _write_reddit_preset(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """
+            sources:
+              - key: reddit_social
+                company: Reddit
+                urls: ["https://www.reddit.com"]
+                rss_url: "https://www.reddit.com/search.rss?q=subreddit%3ALocalLLaMA+OR+subreddit%3Asingularity+OR+subreddit%3AOpenAI&sort=new"
+                strategy: rss_then_feed_summary
+                priority: p1
+                enabled: true
+                category: social
+                collect_config:
+                  subreddits:
+                    - LocalLLaMA
+                    - singularity
+                    - OpenAI
+                  max_items: 30
+                  fetch_detail: false
+                  user_agent: LexDeepResearchBot/0.1
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_shipped_x_preset_includes_default_watchlist() -> None:
     presets_path = Path(__file__).resolve().parents[1] / "app" / "collectors" / "source_presets.yaml"
     payload = yaml.safe_load(presets_path.read_text(encoding="utf-8"))
@@ -164,6 +247,19 @@ def test_shipped_x_preset_includes_default_watchlist() -> None:
         "perplexity_ai",
         "GoogleDeepMind",
     ]
+
+
+def test_shipped_reddit_preset_includes_default_subreddits() -> None:
+    presets_path = Path(__file__).resolve().parents[1] / "app" / "collectors" / "source_presets.yaml"
+    payload = yaml.safe_load(presets_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+
+    sources = payload.get("sources", [])
+    assert isinstance(sources, list)
+    reddit_source = next(source for source in sources if isinstance(source, dict) and source.get("key") == "reddit_social")
+    config = reddit_source.get("collect_config")
+    assert isinstance(config, dict)
+    assert config.get("subreddits") == ["LocalLLaMA", "singularity", "OpenAI"]
 
 
 @pytest.mark.asyncio
@@ -390,6 +486,67 @@ async def test_seed_initial_data_merges_rss_collect_config_from_preset(
 
 
 @pytest.mark.asyncio
+async def test_seed_initial_data_imports_academic_api_presets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "seed-academic-api.db"
+    presets_path = tmp_path / "source_presets.yaml"
+    profiles_dir = tmp_path / "site_profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    _write_academic_api_presets(presets_path)
+
+    monkeypatch.setattr("app.bootstrap.PRESETS_PATH", presets_path)
+    monkeypatch.setattr("app.bootstrap.SITE_PROFILE_DIR", profiles_dir)
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as session:
+            await seed_initial_data(session)
+
+        async with session_factory() as session:
+            openalex = await session.get(Source, _source_uuid("openalex"))
+            europe_pmc = await session.get(Source, _source_uuid("europe_pmc"))
+            pubmed = await session.get(Source, _source_uuid("pubmed"))
+
+            assert openalex is not None
+            assert openalex.category == "academic"
+            assert openalex.collect_method == "openalex"
+            assert openalex.config.get("base_url") == "https://api.openalex.org/works"
+            assert openalex.config.get("keywords") == ["reasoning", "agent"]
+            assert openalex.config.get("max_results") == 20
+            assert openalex.config.get("mailto") == "research@example.com"
+            assert openalex.config.get("supports_time_window") is True
+            assert openalex.config.get("auth_mode") == "optional_api_key"
+
+            assert europe_pmc is not None
+            assert europe_pmc.category == "academic"
+            assert europe_pmc.collect_method == "europe_pmc"
+            assert europe_pmc.config.get("base_url") == "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+            assert europe_pmc.config.get("keywords") == ["reasoning", "agent"]
+            assert europe_pmc.config.get("max_results") == 20
+            assert europe_pmc.config.get("supports_time_window") is True
+            assert europe_pmc.config.get("auth_mode") == "none"
+
+            assert pubmed is not None
+            assert pubmed.category == "academic"
+            assert pubmed.collect_method == "pubmed"
+            assert pubmed.config.get("base_url") == "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+            assert pubmed.config.get("keywords") == ["reasoning", "agent"]
+            assert pubmed.config.get("max_results") == 20
+            assert pubmed.config.get("api_key") == ""
+            assert pubmed.config.get("tool") == "lexdeepresearch"
+            assert pubmed.config.get("email") == "research@example.com"
+            assert pubmed.config.get("supports_time_window") is True
+            assert pubmed.config.get("auth_mode") == "optional_api_key"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_seed_initial_data_merges_existing_twitter_usernames_with_preset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -446,5 +603,60 @@ async def test_seed_initial_data_merges_existing_twitter_usernames_with_preset(
             ]
             assert x_source.config.get("include_retweets") is False
             assert x_source.config.get("include_pinned") is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_seed_initial_data_merges_existing_reddit_subreddits_with_preset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "seed-reddit.db"
+    presets_path = tmp_path / "source_presets.yaml"
+    profiles_dir = tmp_path / "site_profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    _write_reddit_preset(presets_path)
+
+    monkeypatch.setattr("app.bootstrap.PRESETS_PATH", presets_path)
+    monkeypatch.setattr("app.bootstrap.SITE_PROFILE_DIR", profiles_dir)
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as session:
+            session.add(
+                Source(
+                    id=_source_uuid("reddit_social"),
+                    name="Reddit",
+                    category="social",
+                    collect_method="rss",
+                    config={
+                        "subreddits": ["r/LocalLLaMA", "MachineLearning", "openai"],
+                        "max_items": 40,
+                        "fetch_detail": False,
+                    },
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            await seed_initial_data(session)
+
+        async with session_factory() as session:
+            reddit_source = await session.get(Source, _source_uuid("reddit_social"))
+            assert reddit_source is not None
+            assert reddit_source.collect_method == "rss"
+            assert reddit_source.config.get("subreddits") == [
+                "LocalLLaMA",
+                "MachineLearning",
+                "OpenAI",
+                "singularity",
+            ]
+            assert reddit_source.config.get("max_items") == 30
+            assert reddit_source.config.get("fetch_detail") is False
     finally:
         await engine.dispose()

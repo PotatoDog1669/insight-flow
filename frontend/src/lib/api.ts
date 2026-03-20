@@ -44,9 +44,10 @@ export interface Monitor {
     time_period: "daily" | "weekly" | "custom";
     report_type: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
     ai_routing?: MonitorAIRouting;
     destination_ids: string[];
+    destination_instance_ids: string[];
     window_hours: number;
     custom_schedule: string | null;
     enabled: boolean;
@@ -80,16 +81,38 @@ export interface MonitorAIRoutingDefaults {
 }
 
 export interface Destination {
-    id: "notion" | "obsidian" | "rss";
+    id: string;
     name: string;
     type: "notion" | "obsidian" | "rss";
     description: string;
-    config: Record<string, string>;
+    config: Record<string, unknown>;
     enabled: boolean;
     created_at?: string;
 }
 
+export interface DestinationTestResponse {
+    success: boolean;
+    message: string;
+    latency_ms: number | null;
+    mode: "rest" | "file" | "config" | null;
+    checked_target: string | null;
+}
+
+export interface ObsidianVaultCandidate {
+    path: string;
+    name: string;
+    open: boolean;
+}
+
+export interface ObsidianVaultDiscoveryResponse {
+    success: boolean;
+    message: string;
+    detected_path: string | null;
+    vaults: ObsidianVaultCandidate[];
+}
+
 export interface LLMProviderConfig {
+    auth_mode: "api_key" | "local_codex";
     base_url: string;
     model: string;
     timeout_sec: number;
@@ -124,9 +147,10 @@ export interface MonitorCreate {
     time_period: "daily" | "weekly" | "custom";
     report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
     ai_routing?: MonitorAIRouting;
     destination_ids?: string[];
+    destination_instance_ids?: string[];
     window_hours?: number;
     custom_schedule?: string | null;
     enabled: boolean;
@@ -137,9 +161,10 @@ export interface MonitorUpdate {
     time_period?: "daily" | "weekly" | "custom";
     report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids?: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
+    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
     ai_routing?: MonitorAIRouting | null;
     destination_ids?: string[];
+    destination_instance_ids?: string[];
     window_hours?: number;
     custom_schedule?: string | null;
     enabled?: boolean;
@@ -214,6 +239,19 @@ export interface ReportEvent {
     published_at: string | null;
 }
 
+export interface ReportPublishTraceEntry {
+    stage: string;
+    sink: string;
+    provider: string;
+    destination_instance_id?: string | null;
+    destination_instance_name?: string | null;
+    status: string;
+    url: string | null;
+    error: string | null;
+    latency_ms: number;
+    trigger?: string;
+}
+
 export interface Report {
     id: string;
     user_id: string | null;
@@ -231,6 +269,8 @@ export interface Report {
     content: string;
     article_ids: string[];
     published_to: string[];
+    published_destination_instance_ids: string[];
+    publish_trace: ReportPublishTraceEntry[];
     metadata: Record<string, unknown>;
     created_at: string;
 }
@@ -292,17 +332,64 @@ function toQueryString(params?: object): string {
     return query ? `?${query}` : "";
 }
 
+export class APIError extends Error {
+    status: number;
+    detail: unknown;
+
+    constructor(message: string, status: number, detail: unknown) {
+        super(message);
+        this.name = "APIError";
+        this.status = status;
+        this.detail = detail;
+    }
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, {
         headers: { "Content-Type": "application/json" },
         ...options,
     });
-    if (!res.ok) throw new Error(`API Error: ${res.status}`);
     const text = await res.text();
+    let payload: unknown = undefined;
+    const contentType = res.headers.get("Content-Type") || "";
+    if (text.trim()) {
+        if (contentType.includes("application/json")) {
+            try {
+                payload = JSON.parse(text) as unknown;
+            } catch {
+                payload = undefined;
+            }
+        } else {
+            payload = undefined;
+        }
+    }
+    if (!res.ok) {
+        const detail = typeof payload === "object" && payload !== null && "detail" in payload
+            ? (payload as { detail: unknown }).detail
+            : payload;
+        const message = _extractAPIErrorMessage(detail, res.status);
+        throw new APIError(message, res.status, detail);
+    }
     if (!text.trim()) {
         return undefined as T;
     }
-    return JSON.parse(text) as T;
+    if (payload === undefined) {
+        return JSON.parse(text) as T;
+    }
+    return payload as T;
+}
+
+function _extractAPIErrorMessage(detail: unknown, status: number): string {
+    if (typeof detail === "string" && detail.trim()) {
+        return detail;
+    }
+    if (typeof detail === "object" && detail !== null) {
+        const message = "message" in detail ? (detail as { message?: unknown }).message : undefined;
+        if (typeof message === "string" && message.trim()) {
+            return message;
+        }
+    }
+    return `API Error: ${status}`;
 }
 
 // ---- 信息源 ----
@@ -431,6 +518,19 @@ export const getReportFilters = () => fetchAPI<ReportFilters>("/api/v1/reports/f
 export const deleteReport = (reportId: string) =>
     fetchAPI<void>(`/api/v1/reports/${reportId}`, { method: "DELETE" });
 
+export const publishReportToDestination = (
+    reportId: string,
+    destinationInstanceIds: string | string[],
+) =>
+    fetchAPI<Report>(`/api/v1/reports/${reportId}/publish`, {
+        method: "POST",
+        body: JSON.stringify({
+            destination_instance_ids: Array.isArray(destinationInstanceIds)
+                ? destinationInstanceIds
+                : [destinationInstanceIds],
+        }),
+    });
+
 export const createCustomReport = (body: {
     title: string;
     prompt: string;
@@ -460,14 +560,42 @@ export const updateMySettings = (body: {
 // ---- Destinations ----
 export const getDestinations = () => fetchAPI<Destination[]>("/api/v1/destinations");
 
+export const createDestination = (body: {
+    type: Destination["type"];
+    name: string;
+    config?: Record<string, unknown>;
+    enabled?: boolean;
+}) =>
+    fetchAPI<Destination>("/api/v1/destinations", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+
 export const updateDestination = (
-    id: "notion" | "obsidian" | "rss",
-    body: { config?: Record<string, string>; enabled?: boolean }
+    id: string,
+    body: { name?: string; config?: Record<string, unknown>; enabled?: boolean }
 ) =>
     fetchAPI<Destination>(`/api/v1/destinations/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
     });
+
+export const testDestination = (
+    id: string,
+    body?: { config?: Record<string, unknown> }
+) =>
+    fetchAPI<DestinationTestResponse>(`/api/v1/destinations/${id}/test`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+    });
+
+export const deleteDestination = (id: string) =>
+    fetchAPI<void>(`/api/v1/destinations/${id}`, {
+        method: "DELETE",
+    });
+
+export const discoverObsidianVaults = () =>
+    fetchAPI<ObsidianVaultDiscoveryResponse>("/api/v1/destinations/obsidian/discover");
 
 // ---- Providers ----
 export const getProviders = () => fetchAPI<Provider[]>("/api/v1/providers");

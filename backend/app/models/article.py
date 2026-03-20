@@ -3,8 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON
-from sqlalchemy import DateTime, Float, Index, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -17,6 +16,7 @@ class Article(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     source_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    paper_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("papers.id"), nullable=True, index=True)
     external_id: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="外部唯一标识")
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(Text, nullable=True, comment="原文链接")
@@ -30,9 +30,14 @@ class Article(Base):
     source_type: Mapped[str] = mapped_column(
         String(16), default="unknown", comment="P1 预留: primary / secondary / unknown"
     )
+    content_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="metadata", comment="metadata|abstract|snippet|fulltext"
+    )
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict, comment="扩展字段")
     processing_trace: Mapped[list] = mapped_column(JSON, default=list, comment="加工阶段轨迹")
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="原文发布时间")
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="原文发布时间"
+    )
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

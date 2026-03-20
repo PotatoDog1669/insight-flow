@@ -83,6 +83,7 @@ class DeerFlowEmbeddedRuntime(ResearchAgentRuntime):
             "frequency": job.frequency,
             "event": asdict(job.event),
             "focus_questions": list(job.focus_questions),
+            "metadata": dict(job.metadata),
             "constraints": {
                 "must_verify": job.must_verify,
                 "max_sources": job.max_sources,

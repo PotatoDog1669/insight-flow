@@ -24,6 +24,7 @@ class Report(Base):
     article_ids: Mapped[list] = mapped_column(JSON, default=list, comment="关联文章 ID")
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     published_to: Mapped[list] = mapped_column(JSON, default=list, comment="已落盘到哪些目标")
+    published_destination_instance_ids: Mapped[list] = mapped_column(JSON, default=list, comment="已落盘到哪些目标实例")
     publish_trace: Mapped[list] = mapped_column(JSON, default=list, comment="落盘执行轨迹")
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
+import tempfile
+from pathlib import Path
 
 import httpx
 
@@ -23,6 +27,10 @@ def build_codex_headers(config: dict | None = None) -> dict[str, str]:
 
 async def run_codex_json(prompt: str, config: dict | None = None) -> dict:
     cfg = dict(config or {})
+    auth_mode = str(cfg.get("auth_mode") or "api_key").strip() or "api_key"
+    if auth_mode == "local_codex":
+        return await _run_local_codex_json(prompt=prompt, config=cfg)
+
     base_url = str(cfg.get("base_url") or settings.codex_base_url or "https://api.openai.com/v1").rstrip("/")
     model = str(cfg.get("model") or settings.codex_model or "gpt-5-codex").strip() or "gpt-5-codex"
     timeout_sec = float(cfg.get("timeout_sec") or settings.codex_timeout_sec or 120)
@@ -50,6 +58,42 @@ async def run_codex_json(prompt: str, config: dict | None = None) -> dict:
         if not isinstance(parsed, dict):
             raise ValueError("Codex JSON response must be an object")
         return parsed
+
+
+async def _run_local_codex_json(prompt: str, config: dict) -> dict:
+    model = str(config.get("model") or settings.codex_model or "gpt-5-codex").strip() or "gpt-5-codex"
+    timeout_sec = float(config.get("timeout_sec") or settings.codex_timeout_sec or 120)
+    cwd = str(config.get("cwd") or os.getcwd()).strip() or os.getcwd()
+
+    await _ensure_local_codex_login(timeout_sec=timeout_sec, cwd=cwd)
+
+    temp_fd, temp_name = tempfile.mkstemp(prefix="codex-local-", suffix=".txt")
+    os.close(temp_fd)
+    temp_path = Path(temp_name)
+    try:
+        returncode, stdout_text, stderr_text = await _run_local_codex_command(
+            "exec",
+            "--skip-git-repo-check",
+            "--json",
+            "--output-last-message",
+            str(temp_path),
+            "-m",
+            model,
+            input_text=prompt,
+            timeout_sec=timeout_sec,
+            cwd=cwd,
+        )
+        if returncode != 0:
+            raise RuntimeError(_format_local_codex_exec_error(stdout_text, stderr_text))
+        response_text = temp_path.read_text(encoding="utf-8").strip() if temp_path.exists() else ""
+        if not response_text:
+            raise ValueError("Local Codex did not return a final message")
+        parsed = _parse_json_text(response_text)
+        if not isinstance(parsed, dict):
+            raise ValueError("Codex JSON response must be an object")
+        return parsed
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 async def _post_responses_with_fallback(client: httpx.AsyncClient, base_url: str, payload: dict) -> httpx.Response:
@@ -83,6 +127,60 @@ def build_codex_response_endpoints(base_url: str) -> list[str]:
         if endpoint not in deduped:
             deduped.append(endpoint)
     return deduped
+
+
+async def _ensure_local_codex_login(*, timeout_sec: float, cwd: str) -> None:
+    returncode, stdout_text, stderr_text = await _run_local_codex_command(
+        "login",
+        "status",
+        timeout_sec=min(timeout_sec, 10.0),
+        cwd=cwd,
+    )
+    status_text = f"{stdout_text}\n{stderr_text}".strip().lower()
+    if returncode != 0 or "logged in" not in status_text:
+        raise ValueError("Detected codex CLI, but the current machine is not logged in")
+
+
+async def _run_local_codex_command(
+    *args: str,
+    input_text: str | None = None,
+    timeout_sec: float,
+    cwd: str,
+) -> tuple[int, str, str]:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "codex",
+            *args,
+            stdin=asyncio.subprocess.PIPE if input_text is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError("Local Codex CLI is not installed") from exc
+
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(input_text.encode("utf-8") if input_text is not None else None),
+            timeout=timeout_sec,
+        )
+    except TimeoutError as exc:
+        process.kill()
+        await process.communicate()
+        raise RuntimeError(f"Local Codex call timed out ({int(timeout_sec)}s)") from exc
+
+    return (
+        process.returncode,
+        stdout_bytes.decode("utf-8", errors="replace"),
+        stderr_bytes.decode("utf-8", errors="replace"),
+    )
+
+
+def _format_local_codex_exec_error(stdout_text: str, stderr_text: str) -> str:
+    detail = "\n".join(part.strip() for part in [stderr_text, stdout_text] if part.strip()).strip()
+    if detail:
+        return f"Local Codex execution failed: {detail}"
+    return "Local Codex execution failed"
 
 
 def _extract_response_text(data: dict) -> str:

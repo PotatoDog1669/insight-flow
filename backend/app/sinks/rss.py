@@ -61,7 +61,11 @@ class RssSink(BaseSink):
 
         try:
             async with async_session() as db:
-                reports = await fetch_recent_reports(db=db, max_items=settings.max_items)
+                reports = await fetch_recent_reports(
+                    db=db,
+                    max_items=settings.max_items,
+                    destination_instance_id=str(config.get("destination_instance_id") or "").strip() or None,
+                )
             xml_body = build_feed_xml(reports=reports, settings=settings)
             _write_feed_xml(path=settings.feed_path, xml_body=xml_body)
         except (SQLAlchemyError, OSError, ValueError) as exc:
@@ -88,14 +92,24 @@ def resolve_feed_settings(config: dict | None) -> FeedSettings:
     )
 
 
-async def fetch_recent_reports(db: AsyncSession, max_items: int) -> list[ReportModel]:
+async def fetch_recent_reports(
+    db: AsyncSession,
+    max_items: int,
+    destination_instance_id: str | None = None,
+) -> list[ReportModel]:
     stmt = (
         select(ReportModel)
         .order_by(ReportModel.report_date.desc(), ReportModel.created_at.desc())
-        .limit(max_items)
     )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    reports = list(result.scalars().all())
+    if destination_instance_id:
+        reports = [
+            report
+            for report in reports
+            if destination_instance_id in {str(item).strip() for item in (report.published_destination_instance_ids or [])}
+        ]
+    return reports[:max_items]
 
 
 def build_feed_xml(reports: list[ReportModel], settings: FeedSettings) -> str:

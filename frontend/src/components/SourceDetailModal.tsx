@@ -27,6 +27,9 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
     const [url, setUrl] = useState("");
     const [twitterUsernames, setTwitterUsernames] = useState<string[]>([]);
     const [usernameDraft, setUsernameDraft] = useState("");
+    const [redditSubreddits, setRedditSubreddits] = useState<string[]>([]);
+    const [subredditDraft, setSubredditDraft] = useState("");
+    const [apiKey, setApiKey] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<SourceTestResponse | null>(null);
@@ -37,9 +40,16 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
     const [testEndDate, setTestEndDate] = useState("");
     const [testValidationError, setTestValidationError] = useState<string | null>(null);
 
-    const canEditUrl = source.collect_method === "blog_scraper" || source.collect_method === "deepbrowse" || source.collect_method === "rss";
+    const isRedditSource = isConfigurableRedditSource(source);
+    const canEditUrl =
+        source.collect_method === "blog_scraper" ||
+        source.collect_method === "deepbrowse" ||
+        (source.collect_method === "rss" && !isRedditSource);
     const canEditTwitterUsers = source.collect_method === "twitter_snaplytics";
+    const canEditRedditSubreddits = isRedditSource;
+    const isAcademicTestSource = isAcademicApiSource(source);
     const isArxivTestSource = isArxivSource(source);
+    const canEditApiKey = supportsApiKeyInput(source);
 
     useEffect(() => {
         // Extract url from config
@@ -65,13 +75,22 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
             }
             setUsernameDraft("");
         }
-        if (isArxivSource(source)) {
+        if (isConfigurableRedditSource(source)) {
+            const subreddits = asStringArray(sourceConfig.subreddits);
+            setRedditSubreddits(normalizeRedditSubreddits(subreddits));
+            setSubredditDraft("");
+        } else {
+            setRedditSubreddits([]);
+            setSubredditDraft("");
+        }
+        if (isAcademicApiSource(source)) {
             setTestKeywords(asStringArray(sourceConfig.keywords).join(", "));
-            setTestMaxResults(resolveInitialArxivMaxResults(sourceConfig));
+            setTestMaxResults(resolveInitialAcademicMaxResults(sourceConfig));
         } else {
             setTestKeywords("");
             setTestMaxResults("30");
         }
+        setApiKey(typeof sourceConfig.api_key === "string" ? sourceConfig.api_key : "");
         setTestStartDate("");
         setTestEndDate("");
         setTestValidationError(null);
@@ -103,6 +122,9 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
             } else if (source.collect_method === "twitter_snaplytics") {
                 currentConfig.usernames = twitterUsernames;
                 delete currentConfig.username;
+            }
+            if (canEditApiKey) {
+                currentConfig.api_key = apiKey;
             }
 
             await updateSource(source.id, { config: currentConfig });
@@ -152,14 +174,51 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
         await persistTwitterUsernames(nextUsernames);
     };
 
+    const persistRedditSubreddits = async (nextSubreddits: string[]): Promise<boolean> => {
+        setSubmitting(true);
+        setError(null);
+        try {
+            const currentConfig: ConfigObject = { ...(asObject(source.config) ?? {}) };
+            currentConfig.subreddits = nextSubreddits;
+            await updateSource(source.id, { config: currentConfig });
+            setRedditSubreddits(nextSubreddits);
+            onUpdated();
+            return true;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to update source");
+            return false;
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleAddRedditSubreddit = async () => {
+        const normalized = normalizeRedditSubreddit(subredditDraft);
+        if (!normalized) return;
+        const deduped = dedupeCaseInsensitive([...redditSubreddits, normalized]);
+        if (deduped.length === redditSubreddits.length) {
+            setSubredditDraft("");
+            return;
+        }
+        const saved = await persistRedditSubreddits(deduped);
+        if (saved) {
+            setSubredditDraft("");
+        }
+    };
+
+    const handleRemoveRedditSubreddit = async (subreddit: string) => {
+        const nextSubreddits = redditSubreddits.filter((item) => item !== subreddit);
+        await persistRedditSubreddits(nextSubreddits);
+    };
+
     const handleTest = async () => {
-        const testPayload = isArxivTestSource ? buildArxivTestPayload({
+        const testPayload = isAcademicTestSource ? buildAcademicApiTestPayload({
             keywordsValue: testKeywords,
             maxResultsValue: testMaxResults,
             startDate: testStartDate,
             endDate: testEndDate,
         }) : null;
-        if (isArxivTestSource && !testPayload.success) {
+        if (isAcademicTestSource && !testPayload.success) {
             setTestValidationError(testPayload.message);
             return;
         }
@@ -285,9 +344,91 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                         </div>
                     )}
 
+                    {canEditRedditSubreddits && (
+                        <div className="space-y-3">
+                            <label className="text-sm font-medium flex items-center gap-2">
+                                Tracked Subreddits
+                                {submitting && <span className="text-xs text-muted-foreground animate-pulse">Saving...</span>}
+                            </label>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={subredditDraft}
+                                    onChange={(e) => setSubredditDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            void handleAddRedditSubreddit();
+                                        }
+                                    }}
+                                    placeholder="r/LocalLLaMA"
+                                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                />
+                                <button
+                                    onClick={() => void handleAddRedditSubreddit()}
+                                    disabled={!normalizeRedditSubreddit(subredditDraft) || submitting}
+                                    className="flex shrink-0 h-10 items-center justify-center rounded-md border border-border/60 bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-all hover:-translate-y-px hover:border-foreground/40 hover:bg-foreground hover:text-background hover:shadow-sm disabled:opacity-50"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {redditSubreddits.map((subreddit) => (
+                                    <div key={subreddit} className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs">
+                                        <span>r/{subreddit}</span>
+                                        <button
+                                            onClick={() => void handleRemoveRedditSubreddit(subreddit)}
+                                            disabled={submitting}
+                                            className="text-muted-foreground hover:text-foreground"
+                                            aria-label={`Remove ${subreddit}`}
+                                        >
+                                            <X className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Current watchlist: {redditSubreddits.length}</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Type `r/xxx` then click Add. Changes are saved immediately. Empty list is allowed.
+                            </p>
+                        </div>
+                    )}
+
+                    {canEditApiKey && (
+                        <div className="space-y-3">
+                            <label className="text-sm font-medium flex items-center gap-2">
+                                API Key
+                                {submitting && <span className="text-xs text-muted-foreground animate-pulse">Saving...</span>}
+                            </label>
+                            <div className="flex space-x-2">
+                                <input
+                                    aria-label="API Key"
+                                    type="password"
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                    placeholder="Enter API key"
+                                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                />
+                                <button
+                                    onClick={handleSave}
+                                    disabled={submitting}
+                                    className="flex shrink-0 h-10 items-center justify-center rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
+                                >
+                                    <Save className="w-4 h-4 mr-2" />
+                                    Save
+                                </button>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Saved on the source config and reused for future tests and runs.
+                            </p>
+                        </div>
+                    )}
+
                     <div className="space-y-3">
                         <div className="flex items-center justify-between">
-                            <label className="text-sm font-medium">{isArxivTestSource ? "arXiv Test" : "Connectivity Test"}</label>
+                            <label className="text-sm font-medium">
+                                {isArxivTestSource ? "arXiv Test" : isAcademicTestSource ? "Academic API Test" : "Connectivity Test"}
+                            </label>
                             <button
                                 onClick={handleTest}
                                 disabled={testing}
@@ -298,15 +439,15 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                             </button>
                         </div>
 
-                        {isArxivTestSource && (
+                        {isAcademicTestSource && (
                             <div className="space-y-4 rounded-lg border border-border/50 bg-muted/20 p-4">
                                 <div className="space-y-2">
-                                    <label htmlFor="arxiv-test-keywords" className="text-xs font-medium text-muted-foreground">
+                                    <label htmlFor="academic-test-keywords" className="text-xs font-medium text-muted-foreground">
                                         Keywords
                                     </label>
                                     <input
-                                        id="arxiv-test-keywords"
-                                        aria-label="Keywords for arXiv test"
+                                        id="academic-test-keywords"
+                                        aria-label={isArxivTestSource ? "Keywords for arXiv test" : "Keywords for academic API test"}
                                         type="text"
                                         value={testKeywords}
                                         onChange={(e) => setTestKeywords(e.target.value)}
@@ -319,12 +460,12 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                 </div>
 
                                 <div className="space-y-2">
-                                    <label htmlFor="arxiv-test-max-results" className="text-xs font-medium text-muted-foreground">
+                                    <label htmlFor="academic-test-max-results" className="text-xs font-medium text-muted-foreground">
                                         Max Results
                                     </label>
                                     <input
-                                        id="arxiv-test-max-results"
-                                        aria-label="Max results for arXiv test"
+                                        id="academic-test-max-results"
+                                        aria-label={isArxivTestSource ? "Max results for arXiv test" : "Max results for academic API test"}
                                         type="number"
                                         min={1}
                                         max={200}
@@ -365,12 +506,12 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
 
                                 <div className="grid gap-3 sm:grid-cols-2">
                                     <div className="space-y-2">
-                                        <label htmlFor="arxiv-test-start-date" className="text-xs font-medium text-muted-foreground">
+                                        <label htmlFor="academic-test-start-date" className="text-xs font-medium text-muted-foreground">
                                             Start Date
                                         </label>
                                         <input
-                                            id="arxiv-test-start-date"
-                                            aria-label="Start date for arXiv test"
+                                            id="academic-test-start-date"
+                                            aria-label={isArxivTestSource ? "Start date for arXiv test" : "Start date for academic API test"}
                                             type="date"
                                             value={testStartDate}
                                             onChange={(e) => setTestStartDate(e.target.value)}
@@ -378,12 +519,12 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                         />
                                     </div>
                                     <div className="space-y-2">
-                                        <label htmlFor="arxiv-test-end-date" className="text-xs font-medium text-muted-foreground">
+                                        <label htmlFor="academic-test-end-date" className="text-xs font-medium text-muted-foreground">
                                             End Date
                                         </label>
                                         <input
-                                            id="arxiv-test-end-date"
-                                            aria-label="End date for arXiv test"
+                                            id="academic-test-end-date"
+                                            aria-label={isArxivTestSource ? "End date for arXiv test" : "End date for academic API test"}
                                             type="date"
                                             value={testEndDate}
                                             onChange={(e) => setTestEndDate(e.target.value)}
@@ -407,7 +548,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                             <div className="h-32 rounded-lg border border-dashed border-border/60 bg-muted/20 flex items-center justify-center flex-col gap-2">
                                 <div className="w-5 h-5 rounded-full border-2 border-foreground border-t-transparent animate-spin" />
                                 <p className="text-sm text-muted-foreground">
-                                    {isArxivTestSource ? "Running arXiv retrieval test..." : "Running dry-run collector..."}
+                                    {isArxivTestSource ? "Running arXiv retrieval test..." : isAcademicTestSource ? "Running academic API test..." : "Running dry-run collector..."}
                                 </p>
                             </div>
                         )}
@@ -424,7 +565,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                     </div>
                                 </div>
 
-                                {isArxivTestSource && testResult.success && (
+                                {isAcademicTestSource && testResult.success && (
                                     <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                                         <p>Fetched: {testResult.fetched_count ?? 0}</p>
                                         <p>Matched: {testResult.matched_count ?? 0}</p>
@@ -443,7 +584,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                                 {testResult.sample_articles.length > 0 && (
                                     <div className="space-y-2 mt-4 pt-4 border-t border-border/30">
                                         <p className="text-xs font-medium text-foreground">
-                                            {isArxivTestSource ? "Matched Sample Articles:" : "Sample Items Fetched:"}
+                                            {isAcademicTestSource ? "Matched Sample Articles:" : "Sample Items Fetched:"}
                                         </p>
                                         <div className="space-y-2">
                                             {testResult.sample_articles.map((article, idx) => (
@@ -482,9 +623,53 @@ function normalizeTwitterUsername(value: string): string {
     return normalized;
 }
 
+function normalizeRedditSubreddit(value: string): string {
+    const raw = value.trim();
+    if (!raw) return "";
+    let normalized = raw.toLowerCase().startsWith("r/") ? raw.slice(2) : raw;
+    normalized = normalized.trim().replace(/^\/+|\/+$/g, "");
+    if (!normalized || /[\s/]/.test(normalized)) return "";
+    return normalized;
+}
+
+function normalizeRedditSubreddits(values: string[]): string[] {
+    return dedupeCaseInsensitive(values.map(normalizeRedditSubreddit).filter(Boolean));
+}
+
+function dedupeCaseInsensitive(values: string[]): string[] {
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+        const key = value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        normalized.push(value);
+    }
+    return normalized;
+}
+
+function isConfigurableRedditSource(source: Source): boolean {
+    const sourceConfig = asObject(source.config) ?? {};
+    return source.collect_method === "rss" && (
+        Array.isArray(sourceConfig.subreddits) ||
+        source.name.trim().toLowerCase() === "reddit"
+    );
+}
+
 function isArxivSource(source: Source): boolean {
     const sourceConfig = asObject(source.config) ?? {};
     return source.category === "academic" && source.collect_method === "rss" && Boolean(sourceConfig.arxiv_api);
+}
+
+function isAcademicApiSource(source: Source): boolean {
+    return isArxivSource(source) || ["openalex", "europe_pmc", "pubmed"].includes(source.collect_method);
+}
+
+function supportsApiKeyInput(source: Source): boolean {
+    const sourceConfig = asObject(source.config) ?? {};
+    if (!isAcademicApiSource(source)) return false;
+    const authMode = typeof sourceConfig.auth_mode === "string" ? sourceConfig.auth_mode : "";
+    return source.collect_method !== "europe_pmc" || authMode.includes("api_key");
 }
 
 function buildPresetRange(amount: number, unit: "hours" | "days"): {
@@ -504,7 +689,7 @@ function buildPresetRange(amount: number, unit: "hours" | "days"): {
     };
 }
 
-function buildArxivTestPayload({
+function buildAcademicApiTestPayload({
     keywordsValue,
     maxResultsValue,
     startDate,
@@ -514,7 +699,7 @@ function buildArxivTestPayload({
     maxResultsValue: string;
     startDate: string;
     endDate: string;
-}): { success: true; payload: { keywords?: string[]; start_at?: string; end_at?: string } } | { success: false; message: string } {
+}): { success: true; payload: { keywords?: string[]; max_results?: number; start_at?: string; end_at?: string } } | { success: false; message: string } {
     if ((startDate && !endDate) || (!startDate && endDate)) {
         return { success: false, message: "Please provide both start and end dates." };
     }
@@ -567,7 +752,7 @@ function formatWindowRange(start: string | null | undefined, end: string | null 
     return `${start ?? "Unbounded"} -> ${end ?? "Unbounded"}`;
 }
 
-function resolveInitialArxivMaxResults(sourceConfig: ConfigObject): string {
+function resolveInitialAcademicMaxResults(sourceConfig: ConfigObject): string {
     const candidates = [sourceConfig.max_results, sourceConfig.max_items];
     for (const candidate of candidates) {
         if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 1 && candidate <= 200) {

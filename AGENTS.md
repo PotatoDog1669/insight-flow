@@ -1,12 +1,11 @@
 # LexDeepResearch — Coding Standards
 
-## Spec & Planning Files
+## Docs & Planning Files
 
 - **Before implementing any feature**, read the relevant docs:
-  - `.spec/core/product-requirements-spec.md` — product priorities (P0/P1/P2)
-  - `.spec/core/technical-architecture-spec.md` — DB schema, API contracts, module design
-  - `.spec/plans/` — per-feature design & implementation plans
-- Only implement **P0 features fully**. P1+ only warrant schema/interface stubs.
+  - `README.md` — repo overview and local development entry points
+  - `docs/development/architecture.mdx` — current architecture and module boundaries
+  - `docs/plans/` — per-feature design and implementation records
 
 ---
 

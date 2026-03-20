@@ -11,6 +11,7 @@ from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collectors.reddit_config import build_reddit_feed_url, normalize_reddit_subreddits
 from app.models.database import get_db
 from app.models.source import Source
 from app.models.task import CollectTask
@@ -92,16 +93,23 @@ async def test_source(
 
     try:
         collector = get_collector(source.collect_method)
-        config = dict(source.config or {})
+        config = _resolve_source_test_config(source)
+        is_academic_api_source = _is_academic_api_source(source=source, config=config)
         is_arxiv_source = _is_arxiv_source(source=source, config=config)
         requested_keywords = [item.strip() for item in (payload.keywords if payload else []) if item.strip()]
-        if is_arxiv_source and requested_keywords:
+        if is_academic_api_source and requested_keywords:
             config["keywords"] = list(dict.fromkeys(requested_keywords))[:20]
         effective_max_results = None
-        if is_arxiv_source:
-            effective_max_results = _resolve_arxiv_test_limit(config=config, requested_limit=payload.max_results if payload else None)
+        if is_academic_api_source:
+            effective_max_results = _resolve_test_limit(config=config, requested_limit=payload.max_results if payload else None)
             config["max_results"] = effective_max_results
-            config["max_items"] = effective_max_results
+            if source.collect_method == "rss":
+                config["max_items"] = effective_max_results
+        if is_academic_api_source and payload:
+            if payload.start_at is not None:
+                config["start_at"] = payload.start_at.isoformat()
+            if payload.end_at is not None:
+                config["end_at"] = payload.end_at.isoformat()
 
         raw_articles = await collector.collect(config)
         filtered_articles = raw_articles
@@ -111,7 +119,7 @@ async def test_source(
         window_start = None
         window_end = None
 
-        if is_arxiv_source:
+        if is_academic_api_source:
             fetched_count = len(raw_articles)
             window_start = payload.start_at if payload else None
             window_end = payload.end_at if payload else None
@@ -127,7 +135,7 @@ async def test_source(
             )
             matched_count = len(filtered_articles)
 
-        sample_limit = effective_max_results if is_arxiv_source and isinstance(effective_max_results, int) else 3
+        sample_limit = effective_max_results if is_academic_api_source and isinstance(effective_max_results, int) else 3
         sample = filtered_articles[:sample_limit]
         sample_articles = [
             SampleArticle(
@@ -140,8 +148,8 @@ async def test_source(
         return SourceTestResponse(
             success=True,
             message=(
-                f"Fetched {fetched_count} arXiv items, matched {matched_count} items in the requested window."
-                if is_arxiv_source
+                f"Fetched {fetched_count} items, matched {matched_count} items in the requested window."
+                if is_academic_api_source
                 else f"Connection successful. Retrieved {len(raw_articles)} items."
             ),
             fetched_count=fetched_count,
@@ -256,6 +264,12 @@ def _resolve_target_url(collect_method: str, config: dict[str, Any]) -> str | No
                 return value
         return None
 
+    if collect_method in {"openalex", "europe_pmc", "pubmed"}:
+        base_url = config.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            return base_url
+        return None
+
     if collect_method not in {"blog_scraper", "deepbrowse"}:
         return None
 
@@ -285,6 +299,24 @@ def _resolve_target_url(collect_method: str, config: dict[str, Any]) -> str | No
         if isinstance(item, str) and item.strip():
             return item
     return None
+
+
+def _resolve_source_test_config(source: Source) -> dict[str, Any]:
+    config = dict(source.config or {})
+    if source.collect_method == "rss" and isinstance(config.get("subreddits"), list):
+        subreddits = normalize_reddit_subreddits(config.get("subreddits"))
+        if subreddits:
+            config["subreddits"] = subreddits
+        config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
+    return config
+
+
+def _is_academic_api_source(*, source: Source, config: dict[str, Any]) -> bool:
+    if source.category != "academic":
+        return False
+    if source.collect_method in {"openalex", "europe_pmc", "pubmed"}:
+        return True
+    return source.collect_method == "rss" and bool(config.get("arxiv_api"))
 
 
 def _is_arxiv_source(*, source: Source, config: dict[str, Any]) -> bool:
@@ -317,7 +349,7 @@ def _filter_articles_for_test_window(
     return filtered
 
 
-def _resolve_arxiv_test_limit(*, config: dict[str, Any], requested_limit: int | None) -> int:
+def _resolve_test_limit(*, config: dict[str, Any], requested_limit: int | None) -> int:
     candidates = [
         requested_limit,
         config.get("max_results"),

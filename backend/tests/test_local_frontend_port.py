@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.api.v1.destinations import DESTINATION_PRESETS
+from app.destinations.config import DESTINATION_PRESETS
 from app.sinks.rss import DEFAULT_SITE_URL, _resolve_site_url
 
 

@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
-from pydantic import model_validator
 
 
 ProviderName = Literal["rule", "llm_codex", "llm_openai"]
@@ -67,20 +66,17 @@ class MonitorBase(BaseModel):
     time_period: Literal["daily", "weekly", "custom"]
     report_type: Literal["daily", "weekly", "research", "paper"] | None = None
     source_ids: list[uuid.UUID] = Field(default_factory=list)
-    source_overrides: dict[str, dict] = Field(default_factory=dict)  # dict can contain max_items, limit, max_results, keywords, usernames
+    source_overrides: dict[str, dict] = Field(default_factory=dict)  # dict can contain max_items, limit, max_results, keywords, usernames, subreddits
     ai_routing: MonitorAIRouting = Field(default_factory=MonitorAIRouting)
     destination_ids: list[str] = Field(default_factory=list)
+    destination_instance_ids: list[uuid.UUID] = Field(default_factory=list)
     window_hours: int = Field(default=24, ge=1, le=168)
     custom_schedule: str | None = None
     enabled: bool = True
 
 
 class MonitorCreate(MonitorBase):
-    @model_validator(mode="after")
-    def validate_custom_requires_report_type(self) -> "MonitorCreate":
-        if self.time_period == "custom" and self.report_type is None:
-            raise ValueError("report_type is required when time_period is custom")
-        return self
+    pass
 
 
 class MonitorUpdate(BaseModel):
@@ -91,6 +87,7 @@ class MonitorUpdate(BaseModel):
     source_overrides: dict[str, dict] | None = None
     ai_routing: MonitorAIRouting | None = None
     destination_ids: list[str] | None = None
+    destination_instance_ids: list[uuid.UUID] | None = None
     window_hours: int | None = Field(default=None, ge=1, le=168)
     custom_schedule: str | None = None
     enabled: bool | None = None

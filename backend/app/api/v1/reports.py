@@ -1,24 +1,30 @@
 """报告 API"""
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import HTTPException
-from fastapi import Query
-from fastapi import status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.destinations.instances import (
+    _destination_settings_from_user,
+    _get_or_create_default_user,
+)
 from app.models.database import get_db
 from app.models.report import Report
-from app.schemas.report import ReportCustomRequest
-from app.schemas.report import ReportEvent
-from app.schemas.report import ReportFilterMonitorOption
-from app.schemas.report import ReportFiltersResponse
-from app.schemas.report import ReportResponse
-from app.schemas.report import ReportTopic
+from app.renderers.base import Report as RenderedReport
+from app.scheduler.orchestrator import Orchestrator
+from app.schemas.report import (
+    ReportCustomRequest,
+    ReportEvent,
+    ReportFilterMonitorOption,
+    ReportFiltersResponse,
+    ReportPublishRequest,
+    ReportResponse,
+    ReportTopic,
+)
+from app.sinks.registry import get_sink
 
 router = APIRouter()
 
@@ -92,6 +98,94 @@ async def delete_report(report_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
     await db.delete(report)
     await db.commit()
+
+
+@router.post("/{report_id}/publish", response_model=ReportResponse)
+async def publish_report(report_id: str, payload: ReportPublishRequest, db: AsyncSession = Depends(get_db)):
+    """手动补同步单份报告到指定目标"""
+    report = await db.get(Report, _parse_uuid(report_id))
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    user = await _get_or_create_default_user(db)
+    destination_settings = await _destination_settings_from_user(db, user)
+    targets = _resolve_publish_targets(payload)
+    if not targets:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one destination must be selected",
+        )
+
+    rendered = _to_rendered_report(report)
+    publish_trace = list(report.publish_trace or [])
+    published_to = [str(item) for item in (report.published_to or []) if str(item).strip()]
+    last_failure: str | None = None
+
+    for target in targets:
+        destination = destination_settings.get(target)
+        if not isinstance(destination, dict):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destination not found")
+        if destination.get("enabled") is False:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Destination is not enabled")
+
+        sink_name = Orchestrator._resolve_sink_name(target=target, destination_settings=destination_settings)
+        sink_config = Orchestrator._build_sink_config(
+            target=target,
+            report_id=str(report.id),
+            destination_settings=destination_settings,
+        )
+        sink_config.setdefault("time_period", report.time_period)
+        sink_config.setdefault("template_version", "v1")
+        sink_config.setdefault("report_type", str((report.metadata_ or {}).get("report_type") or report.report_type))
+        sink_config.setdefault("report_date", str(report.report_date))
+        sink_config.setdefault("report_metadata", dict(report.metadata_ or {}))
+        if sink_name == "notion":
+            sink_config.setdefault("summary_property", "TL;DR")
+            summary_text = str((report.metadata_ or {}).get("global_tldr") or "").strip()
+            if summary_text:
+                sink_config["summary_text"] = summary_text
+
+        started_at = datetime.now(UTC)
+        publish_result = await get_sink(sink_name).publish(rendered, sink_config)
+        latency_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        publish_trace.append(
+            {
+                "stage": "publish",
+                "sink": sink_name,
+                "provider": target,
+                "destination_instance_id": Orchestrator._destination_instance_id(
+                    target=target,
+                    destination_settings=destination_settings,
+                ),
+                "destination_instance_name": Orchestrator._destination_instance_name(
+                    target=target,
+                    destination_settings=destination_settings,
+                ),
+                "status": "success" if publish_result.success else "failed",
+                "url": publish_result.url,
+                "error": publish_result.error,
+                "latency_ms": latency_ms,
+                "trigger": "manual",
+            }
+        )
+        if publish_result.success and sink_name not in published_to:
+            published_to.append(sink_name)
+        if not publish_result.success:
+            last_failure = publish_result.error or "Publish failed"
+
+    report.publish_trace = publish_trace
+    report.published_to = published_to
+    report.published_destination_instance_ids = Orchestrator._published_destination_instance_ids(publish_trace)
+    db.add(report)
+    await db.commit()
+    await db.refresh(report)
+
+    if last_failure:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": last_failure, "report": _to_report_response(report)},
+        )
+    return _to_report_response(report)
 
 
 @router.post("/custom", status_code=status.HTTP_501_NOT_IMPLEMENTED)
@@ -177,8 +271,40 @@ def _to_report_response(report: Report, *, include_full_content: bool = True) ->
         content=response_content,
         article_ids=[uuid.UUID(item) if isinstance(item, str) else item for item in (report.article_ids or [])],
         published_to=report.published_to or [],
+        published_destination_instance_ids=[
+            str(item) for item in (report.published_destination_instance_ids or []) if str(item).strip()
+        ],
         publish_trace=report.publish_trace or [],
         metadata=response_metadata,
         report_date=report.report_date if isinstance(report.report_date, date) else date.today(),
         created_at=report.created_at,
     )
+
+
+def _to_rendered_report(report: Report) -> RenderedReport:
+    metadata = dict(report.metadata_ or {})
+    raw_article_ids = report.article_ids or []
+    article_ids = [str(item) for item in raw_article_ids]
+    level = str(metadata.get("level") or "L2").strip() or "L2"
+    return RenderedReport(
+        level=level,
+        title=report.title,
+        content=report.content or "",
+        article_ids=article_ids,
+        metadata=metadata,
+    )
+
+
+def _resolve_publish_targets(payload: ReportPublishRequest) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    requested_targets = [str(item) for item in payload.destination_instance_ids]
+    if payload.destination_id:
+        requested_targets.append(payload.destination_id)
+    for target in requested_targets:
+        value = str(target).strip()
+        if not value or value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    return normalized
