@@ -25,6 +25,7 @@ from app.models.source import Source
 from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
+from app.papers.reporting import build_paper_identity, build_paper_note_report, select_paper_note_candidates
 from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
@@ -34,6 +35,7 @@ from app.processors.report_stage import run_report_with_retry
 from app.processors.window_filter import filter_raw_articles_by_window
 from app.renderers.base import RenderContext, Report as RenderedReport
 from app.renderers.daily import DailyRenderer, build_daily_events, render_daily_report
+from app.renderers.paper import PaperRenderer
 from app.routing.loader import load_routing_profile
 from app.routing.schema import PublishRoute, RoutingProfile, RoutingStages, StageRoute
 from app.sinks.registry import get_sink, normalize_sink_name
@@ -301,6 +303,7 @@ class Orchestrator:
         report_type: str = "daily",
         window_hours: int = 24,
         monitor_ai_routing: dict | None = None,
+        paper_time_period: str | None = None,
     ) -> dict:
         """执行完整的每日采集编排"""
         if db is not None:
@@ -318,6 +321,7 @@ class Orchestrator:
                 report_type=report_type,
                 window_hours=window_hours,
                 monitor_ai_routing=monitor_ai_routing,
+                paper_time_period=paper_time_period,
             )
         async with async_session() as session:
             return await self._run_daily_pipeline(
@@ -334,6 +338,7 @@ class Orchestrator:
                 report_type=report_type,
                 window_hours=window_hours,
                 monitor_ai_routing=monitor_ai_routing,
+                paper_time_period=paper_time_period,
             )
 
     async def _run_daily_pipeline(
@@ -351,6 +356,7 @@ class Orchestrator:
         report_type: str = "daily",
         window_hours: int = 24,
         monitor_ai_routing: dict | None = None,
+        paper_time_period: str | None = None,
     ) -> dict:
         pipeline_run_id = run_id or uuid.uuid4()
         normalized_window_hours = window_hours if isinstance(window_hours, int) and 1 <= window_hours <= 168 else 24
@@ -1111,6 +1117,7 @@ class Orchestrator:
             run_id=pipeline_run_id,
             monitor_id=monitor_id,
             monitor_task_id=monitor_task_id,
+            paper_time_period=paper_time_period,
         )
 
         source_tasks = self._build_source_tasks(subscribed_sources=subscribed_sources, task_rows=task_rows)
@@ -1553,6 +1560,7 @@ class Orchestrator:
         run_id: uuid.UUID | None = None,
         monitor_id: uuid.UUID | None = None,
         monitor_task_id: uuid.UUID | None = None,
+        paper_time_period: str | None = None,
     ) -> tuple[list[uuid.UUID], str, list[dict]]:
         if not processed_articles:
             return [], "success", []
@@ -1564,7 +1572,32 @@ class Orchestrator:
             selected_time_period = "weekly"
         elif selected_report_type == "research":
             selected_time_period = "custom"
+        elif selected_report_type == "paper":
+            selected_time_period = _normalize_paper_time_period(paper_time_period)
         context = RenderContext(date=today.isoformat(), user_id=str(user_id))
+        if selected_report_type == "paper":
+            report_rows, rendered_reports = await self._build_paper_reports(
+                db=db,
+                user_id=user_id,
+                processed_articles=[item for item in processed_articles if isinstance(item, ProcessedArticle)],
+                article_ids=article_ids,
+                selected_time_period=selected_time_period,
+                report_date=today,
+                context=context,
+                monitor_id=monitor_id,
+            )
+            db.add_all(report_rows)
+            await db.commit()
+            return await self._publish_report_rows(
+                db=db,
+                report_rows=report_rows,
+                rendered_reports=rendered_reports,
+                destination_ids=destination_ids,
+                destination_settings=destination_settings,
+                run_id=run_id,
+                monitor_id=monitor_id,
+                monitor_task_id=monitor_task_id,
+            )
         report_events = build_daily_events(processed_articles)
         if run_id is not None:
             report_event_items = build_report_event_log_items(report_events)
@@ -1983,6 +2016,97 @@ class Orchestrator:
             )
             await db.commit()
         return [report_row], [rendered_report]
+
+    async def _build_paper_reports(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        processed_articles: list[ProcessedArticle],
+        article_ids: list[uuid.UUID],
+        selected_time_period: str,
+        report_date: date,
+        context: RenderContext,
+        monitor_id: uuid.UUID | None,
+    ) -> tuple[list[Report], list[RenderedReport]]:
+        paper_renderer = PaperRenderer()
+        digest_report = await paper_renderer.render(processed_articles, context)
+        monitor_name = await self._monitor_name(db, monitor_id)
+        article_id_strings = [str(item) for item in article_ids]
+        article_ids_by_identity = _paper_article_ids_by_identity(processed_articles, article_ids)
+
+        digest_row = Report(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            time_period=selected_time_period,
+            report_type="paper",
+            title=digest_report.title,
+            content=digest_report.content,
+            article_ids=article_id_strings,
+            metadata_=_report_metadata_with_monitor(
+                metadata=digest_report.metadata,
+                report_type="paper",
+                monitor_id=monitor_id,
+                monitor_name=monitor_name,
+            ),
+            published_to=[],
+            publish_trace=[],
+            report_date=report_date,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        report_rows = [digest_row]
+        rendered_reports = [digest_report]
+        note_links_by_identity: dict[str, str] = {}
+
+        for article in select_paper_note_candidates(processed_articles):
+            identity = build_paper_identity(article)
+            note_report = build_paper_note_report(
+                article,
+                context=context,
+                parent_report_id=str(digest_row.id),
+                digest_title=digest_report.title,
+            )
+            note_row = Report(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                time_period=selected_time_period,
+                report_type="paper",
+                title=note_report.title,
+                content=note_report.content,
+                article_ids=article_ids_by_identity.get(identity, []),
+                metadata_=_report_metadata_with_monitor(
+                    metadata=note_report.metadata,
+                    report_type="paper",
+                    monitor_id=monitor_id,
+                    monitor_name=monitor_name,
+                ),
+                published_to=[],
+                publish_trace=[],
+                report_date=report_date,
+                created_at=datetime.now(timezone.utc),
+            )
+            note_links_by_identity[identity] = str(note_row.id)
+            report_rows.append(note_row)
+            rendered_reports.append(note_report)
+
+        digest_metadata = dict(digest_row.metadata_ or {})
+        digest_metadata["paper_note_links"] = [
+            {**link, "report_id": note_links_by_identity[link["paper_identity"]]}
+            for link in digest_metadata.get("paper_note_links", [])
+            if isinstance(link, dict) and link.get("paper_identity") in note_links_by_identity
+        ]
+        digest_row.metadata_ = digest_metadata
+        digest_report.metadata = digest_metadata
+
+        return report_rows, rendered_reports
+
+    async def _monitor_name(self, db: AsyncSession, monitor_id: uuid.UUID | None) -> str:
+        if monitor_id is None:
+            return ""
+        monitor = await db.get(Monitor, monitor_id)
+        if monitor is None:
+            return ""
+        return monitor.name
 
     async def _publish_report_rows(
         self,
@@ -2553,8 +2677,15 @@ class Orchestrator:
 
 def _normalize_report_type(value: str | None) -> str:
     candidate = str(value or "").strip().lower()
-    if candidate in {"daily", "weekly", "research"}:
+    if candidate in {"daily", "weekly", "research", "paper"}:
         return candidate
+    return "daily"
+
+
+def _normalize_paper_time_period(value: str | None) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate == "weekly":
+        return "weekly"
     return "daily"
 
 
@@ -2562,6 +2693,31 @@ def _count_markdown_heading_level(content: str, level: int) -> int:
     normalized_level = max(int(level), 1)
     prefix = f'{"#" * normalized_level} '
     return sum(1 for line in str(content or "").splitlines() if line.lstrip().startswith(prefix))
+
+
+def _paper_article_ids_by_identity(
+    processed_articles: list[ProcessedArticle],
+    article_ids: list[uuid.UUID],
+) -> dict[str, list[str]]:
+    article_ids_by_identity: dict[str, list[str]] = {}
+    for article, article_id in zip(processed_articles, article_ids):
+        identity = build_paper_identity(article)
+        article_ids_by_identity.setdefault(identity, []).append(str(article_id))
+    return article_ids_by_identity
+
+
+def _report_metadata_with_monitor(
+    *,
+    metadata: dict | None,
+    report_type: str,
+    monitor_id: uuid.UUID | None,
+    monitor_name: str,
+) -> dict:
+    enriched = dict(metadata or {})
+    enriched["report_type"] = report_type
+    enriched["monitor_id"] = str(monitor_id) if monitor_id is not None else None
+    enriched["monitor_name"] = monitor_name
+    return enriched
 
 
 def _item_source_categories(item: ProcessedArticle | ProcessedEvent) -> list[str]:

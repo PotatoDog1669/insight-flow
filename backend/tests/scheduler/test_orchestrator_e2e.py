@@ -1723,3 +1723,163 @@ def test_paper_report_type_is_accepted_in_request_shapes() -> None:
 
     assert monitor.report_type == "paper"
     assert report_request.report_type == "paper"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+
+    class _PaperCollector:
+        @property
+        def name(self) -> str:
+            return "paper"
+
+        @property
+        def category(self) -> str:
+            return "academic"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            return [
+                RawArticle(
+                    external_id="paper-raw-1",
+                    title="MVISTA-4D",
+                    url="https://example.com/paper-1",
+                    content="paper one content",
+                    published_at=datetime.now(timezone.utc),
+                    metadata={
+                        "paper_id": "2602.23546",
+                        "authors": ["Jiaxu Wang", "Yicheng Jiang"],
+                        "affiliations": "The Chinese University of Hong Kong",
+                        "figure_url": "https://example.com/figure-1.png",
+                    },
+                ),
+                RawArticle(
+                    external_id="paper-raw-2",
+                    title="World Model Baselines",
+                    url="https://example.com/paper-2",
+                    content="paper two content",
+                    published_at=datetime.now(timezone.utc),
+                    metadata={
+                        "paper_id": "2602.11111",
+                        "authors": ["Alice"],
+                        "affiliations": "Example Lab",
+                        "figure_url": "https://example.com/figure-2.png",
+                    },
+                ),
+                RawArticle(
+                    external_id="paper-raw-3",
+                    title="Auxiliary Paper",
+                    url="https://example.com/paper-3",
+                    content="paper three content",
+                    published_at=datetime.now(timezone.utc),
+                    metadata={
+                        "paper_id": "2602.22222",
+                        "authors": ["Bob"],
+                        "affiliations": "Example Lab",
+                        "figure_url": "https://example.com/figure-3.png",
+                    },
+                ),
+            ]
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _PaperCollector())
+
+    async def _paper_process_source_articles(self, raw_articles: list[RawArticle]):
+        processed: list[ProcessedArticle] = []
+        for index, article in enumerate(raw_articles):
+            processed.append(
+                ProcessedArticle(
+                    raw=article,
+                    summary=f"{article.title} summary",
+                    keywords=["paper", "world-model"],
+                    score=1.0 - (index * 0.1),
+                    importance="high" if index < 2 else "normal",
+                    detail=f"{article.title} detailed notes",
+                    category="academic",
+                    metrics=["+1%"],
+                    evidence=f"{article.title} official abstract",
+                )
+            )
+        return orchestrator_module.SourceProcessResult(
+            relevant_articles=list(raw_articles),
+            candidate_clusters=[],
+            processed_articles=processed,
+            stage_trace=[
+                {"stage": "filter", "provider": "test", "status": "success"},
+                {"stage": "candidate_cluster", "provider": "test", "status": "success"},
+                {"stage": "summarizer", "provider": "test", "status": "success"},
+            ],
+            compat_mode=False,
+        )
+
+    class _DatabaseSink:
+        name = "database"
+
+        async def publish(self, report, config):
+            return PublishResult(success=True, sink_name=self.name, url=f"database://reports/{report.title}")
+
+    monkeypatch.setattr(orchestrator_module, "get_sink", lambda target: _DatabaseSink())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    orchestrator.routing_profile.stages.publish.targets = ["database"]
+    monkeypatch.setattr(Orchestrator, "_process_source_articles", _paper_process_source_articles)
+
+    async with session_factory() as session:
+        result = await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            source_ids=[SOURCE_ID],
+            report_type="paper",
+            paper_time_period="weekly",
+        )
+        assert result["status"] == "success"
+        assert result["reports_created"] == 3
+
+    async with session_factory() as session:
+        reports = (
+            await session.execute(
+                select(Report)
+                .where(
+                    Report.user_id == DEFAULT_USER_ID,
+                    Report.report_date == date.today(),
+                    Report.report_type == "paper",
+                )
+                .order_by(Report.created_at.asc())
+            )
+        ).scalars().all()
+
+        assert len(reports) == 3
+        digest = next(report for report in reports if (report.metadata_ or {}).get("paper_mode") == "digest")
+        notes = [report for report in reports if (report.metadata_ or {}).get("paper_mode") == "note"]
+
+        assert digest.time_period == "weekly"
+        assert all(report.time_period == "weekly" for report in notes)
+        assert all("database" in (report.published_to or []) for report in reports)
+        assert all(report.publish_trace for report in reports)
+        assert all(
+            all(uuid.UUID(str(article_id)) for article_id in report.article_ids or [])
+            for report in reports
+        )
+        assert len((digest.metadata_ or {}).get("paper_note_links", [])) == 2
+        assert all("report_id" in link for link in (digest.metadata_ or {}).get("paper_note_links", []))
+        for note in notes:
+            note_metadata = note.metadata_ or {}
+            assert note_metadata["parent_report_id"] == str(digest.id)
+            assert note_metadata["paper_parent_link"]["report_id"] == str(digest.id)

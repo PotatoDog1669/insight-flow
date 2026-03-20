@@ -105,6 +105,7 @@ async def execute_monitor_pipeline(
             report_type=monitor.report_type,
             window_hours=window_hours,
             monitor_ai_routing=monitor.ai_routing or {},
+            paper_time_period=monitor.time_period if monitor.report_type == "paper" else None,
         )
         pipeline_status = str(result.get("status", "success"))
         if pipeline_status == "partial_success":
