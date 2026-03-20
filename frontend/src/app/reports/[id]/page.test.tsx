@@ -71,7 +71,7 @@ describe("ReportDetailPage", () => {
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });
 
-  it("renders a paper badge for paper reports", async () => {
+  it("renders the paper report title without daily rewriting", async () => {
     mockedGetReportById.mockResolvedValue({
       id: "report-paper",
       user_id: null,
@@ -96,7 +96,9 @@ describe("ReportDetailPage", () => {
 
     render(<ReportDetailPage />);
 
-    await waitFor(() => expect(screen.getByText("Paper Watch")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Paper Digest", { selector: "header h1" })).toBeInTheDocument());
+    expect(screen.getByText("Paper Watch")).toBeInTheDocument();
+    expect(screen.queryByText(/^AI 早报/)).not.toBeInTheDocument();
     expect(screen.getByText("论文")).toBeInTheDocument();
   });
 
