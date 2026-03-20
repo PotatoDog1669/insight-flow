@@ -3,23 +3,15 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from app.collectors.base import RawArticle
-from app.processors.event_models import ProcessedEvent
 from app.processors.pipeline import ProcessedArticle
 from app.renderers.base import RenderContext, Report
 from app.template_engine.renderer import render_report_template
 
 _TITLE_SLUG_RE = re.compile(r"[^a-z0-9\u4e00-\u9fff]+")
 _IMPORTANCE_WEIGHT = {"high": 3, "normal": 2, "low": 1}
-
-
-@dataclass(slots=True)
-class PaperIdentity:
-    paper_identity: str
-    paper_slug: str
 
 
 def build_paper_identity(article: ProcessedArticle) -> str:
@@ -37,7 +29,7 @@ def build_paper_slug(article: ProcessedArticle) -> str:
 
 
 def select_paper_note_candidates(articles: list[ProcessedArticle], *, limit: int = 2) -> list[ProcessedArticle]:
-    ranked = sorted(articles, key=_paper_rank_key, reverse=True)
+    ranked = sorted(_representative_articles_by_identity(articles), key=_paper_rank_key, reverse=True)
     return ranked[:limit]
 
 
@@ -48,11 +40,11 @@ def build_paper_digest_entries(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     entries: list[dict[str, Any]] = []
     note_links: list[dict[str, Any]] = []
-    for article in articles:
+    for article in _representative_articles_by_identity(articles):
         identity = build_paper_identity(article)
         slug = build_paper_slug(article)
         selected = identity in selected_identities
-        detail_link = f"[阅读笔记](#{slug})" if selected else ""
+        detail_link = "见关联阅读笔记" if selected else ""
         entry = {
             "title": _paper_title(article),
             "authors": _authors_text(article),
@@ -77,7 +69,6 @@ def build_paper_digest_entries(
                     "paper_slug": slug,
                     "title": entry["title"],
                     "selected": True,
-                    "detail_link": detail_link,
                 }
             )
     return entries, note_links
@@ -91,8 +82,6 @@ def build_paper_digest_report(*, articles: list[ProcessedArticle], context: Rend
     note_links = build_paper_note_links(
         articles,
         selected_identities=selected_identities,
-        digest_identity=_digest_identity(context),
-        digest_title=digest_title,
     )
     rendered = render_report_template(
         report_type="paper",
@@ -133,7 +122,7 @@ def build_paper_note_report(
     title = _paper_title(article)
     digest_title = digest_title or _digest_title(context)
     parent_link = build_paper_parent_link(parent_report_id=parent_report_id, digest_title=digest_title)
-    back_link = parent_link["detail_link"] if parent_link else ""
+    back_link = digest_title if parent_link else ""
     rendered = render_report_template(
         report_type="paper",
         version="v1",
@@ -189,21 +178,9 @@ def build_paper_note_links(
     articles: list[ProcessedArticle],
     *,
     selected_identities: set[str],
-    digest_identity: str,
-    digest_title: str,
 ) -> list[dict[str, Any]]:
     _, note_links = build_paper_digest_entries(articles, selected_identities=selected_identities)
-    if note_links:
-        return note_links
-    return [
-        {
-            "paper_identity": digest_identity,
-            "paper_slug": _slugify(digest_title),
-            "title": digest_title,
-            "selected": False,
-            "detail_link": "",
-        }
-    ]
+    return note_links
 
 
 def build_paper_parent_link(*, parent_report_id: str | None, digest_title: str) -> dict[str, Any] | None:
@@ -212,7 +189,6 @@ def build_paper_parent_link(*, parent_report_id: str | None, digest_title: str) 
     return {
         "report_id": parent_report_id,
         "title": digest_title,
-        "detail_link": f"[返回 {digest_title}](#{parent_report_id})",
     }
 
 
@@ -433,7 +409,37 @@ def _nonempty_items(values: list[Any]) -> list[str]:
 
 def _normalize_identity(value: Any) -> str:
     candidate = str(value).strip()
-    return candidate or "unknown-paper"
+    if not candidate:
+        return "unknown-paper"
+
+    compact = re.sub(r"\s+", "", candidate)
+    lowered = compact.lower()
+
+    for prefix in ("https://doi.org/", "http://doi.org/", "http://dx.doi.org/", "doi:"):
+        if lowered.startswith(prefix):
+            suffix = compact[len(prefix) :]
+            return suffix.lower() or "unknown-paper"
+
+    for prefix in ("https://arxiv.org/abs/", "https://arxiv.org/pdf/", "http://arxiv.org/abs/", "http://arxiv.org/pdf/", "arxiv:"):
+        if lowered.startswith(prefix):
+            suffix = compact[len(prefix) :]
+            suffix = re.sub(r"\.pdf$", "", suffix, flags=re.IGNORECASE)
+            return suffix.lower() or "unknown-paper"
+
+    return compact.lower()
+
+
+def _representative_articles_by_identity(articles: list[ProcessedArticle]) -> list[ProcessedArticle]:
+    identity_order: list[str] = []
+    best_by_identity: dict[str, ProcessedArticle] = {}
+    for article in articles:
+        identity = build_paper_identity(article)
+        if identity not in best_by_identity:
+            identity_order.append(identity)
+        current = best_by_identity.get(identity)
+        if current is None or _paper_rank_key(article) > _paper_rank_key(current):
+            best_by_identity[identity] = article
+    return [best_by_identity[identity] for identity in identity_order]
 
 
 def _slugify(value: str) -> str:

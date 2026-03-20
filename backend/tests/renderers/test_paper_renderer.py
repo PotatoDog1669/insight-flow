@@ -5,10 +5,17 @@ from datetime import datetime, timezone
 import pytest
 
 from app.collectors.base import RawArticle
+from app.processors.event_models import ProcessedEvent
 from app.processors.pipeline import ProcessedArticle
 from app.renderers.base import RenderContext
 from app.renderers.paper import PaperRenderer
-from app.papers.reporting import build_paper_identity, build_paper_note_links, build_paper_note_report
+from app.papers.reporting import (
+    build_paper_digest_entries,
+    build_paper_identity,
+    build_paper_note_links,
+    build_paper_note_report,
+    select_paper_note_candidates,
+)
 
 
 def _article(
@@ -94,6 +101,7 @@ async def test_paper_renderer_builds_digest_and_marks_note_candidates() -> None:
     assert paper_note_links[0]["selected"] is True
     assert paper_note_links[0]["paper_slug"] == "mvista-4d"
     assert paper_note_links[0]["paper_identity"] == "2602.23546"
+    assert "detail_link" not in paper_note_links[0]
     assert paper_note_links[1]["selected"] is True
     assert paper_note_links[1]["paper_identity"] == "2602.11111"
     assert "paper_parent_link" not in metadata
@@ -131,7 +139,6 @@ async def test_paper_note_report_uses_independent_note_metadata() -> None:
     assert metadata["paper_parent_link"] == {
         "report_id": "digest-1",
         "title": "2026-03-20 论文推荐",
-        "detail_link": "[返回 2026-03-20 论文推荐](#digest-1)",
     }
     assert report.article_ids == ["paper-note-1"]
     assert "论文定位" in report.content
@@ -164,8 +171,6 @@ def test_paper_note_links_helper_returns_only_related_note_candidates() -> None:
     links = build_paper_note_links(
         articles,
         selected_identities={"2602.23546"},
-        digest_identity="digest-1",
-        digest_title="2026-03-20 论文推荐",
     )
 
     assert links == [
@@ -174,7 +179,6 @@ def test_paper_note_links_helper_returns_only_related_note_candidates() -> None:
             "paper_slug": "mvista-4d",
             "title": "MVISTA-4D",
             "selected": True,
-            "detail_link": "[阅读笔记](#mvista-4d)",
         }
     ]
 
@@ -191,3 +195,173 @@ def test_paper_identity_is_stable_from_metadata_and_title() -> None:
     )
 
     assert build_paper_identity(article) == "2602.23546"
+
+
+def test_select_paper_note_candidates_deduplicates_by_identity_before_limit() -> None:
+    duplicate = _article(
+        external_id="paper-1-duplicate",
+        title="MVISTA-4D (mirror)",
+        score=0.95,
+        importance="high",
+        paper_id="arXiv:2602.23546",
+        authors=["Mirror Author"],
+        affiliations="Mirror Lab",
+    )
+    second = _article(
+        external_id="paper-2",
+        title="World Model Baselines",
+        score=0.89,
+        importance="high",
+        paper_id="2602.11111",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+    third = _article(
+        external_id="paper-3",
+        title="Auxiliary Paper",
+        score=0.60,
+        importance="normal",
+        paper_id="2602.22222",
+        authors=["Bob"],
+        affiliations="Example Lab",
+    )
+
+    selected = select_paper_note_candidates(
+        [
+            _article(
+                external_id="paper-1",
+                title="MVISTA-4D",
+                score=0.96,
+                importance="high",
+                paper_id="2602.23546",
+                authors=["Jiaxu Wang", "Yicheng Jiang"],
+                affiliations="The Chinese University of Hong Kong",
+            ),
+            duplicate,
+            second,
+            third,
+        ],
+        limit=2,
+    )
+
+    assert [build_paper_identity(article) for article in selected] == [
+        "2602.23546",
+        "2602.11111",
+    ]
+
+
+def test_paper_note_links_helper_is_empty_when_no_papers_are_selected() -> None:
+    links = build_paper_note_links(
+        [
+            _article(
+                external_id="paper-a",
+                title="MVISTA-4D",
+                score=0.96,
+                importance="high",
+                paper_id="2602.23546",
+                authors=["Jiaxu Wang", "Yicheng Jiang"],
+                affiliations="The Chinese University of Hong Kong",
+            )
+        ],
+        selected_identities=set(),
+    )
+
+    assert links == []
+
+
+def test_paper_digest_entries_use_best_representative_per_identity() -> None:
+    stale_article = _article(
+        external_id="paper-stale",
+        title="MVISTA-4D (mirror)",
+        score=0.40,
+        importance="normal",
+        paper_id="2602.23546",
+        authors=["Mirror Author"],
+        affiliations="Mirror Lab",
+    )
+    stale_article.summary = "过时摘要"
+    canonical_article = _article(
+        external_id="paper-canonical",
+        title="MVISTA-4D",
+        score=0.96,
+        importance="high",
+        paper_id="arXiv:2602.23546",
+        authors=["Jiaxu Wang", "Yicheng Jiang"],
+        affiliations="The Chinese University of Hong Kong",
+    )
+    canonical_article.summary = "推荐阅读的权威摘要"
+
+    entries, note_links = build_paper_digest_entries(
+        [stale_article, canonical_article],
+        selected_identities={"2602.23546"},
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["title"] == "MVISTA-4D"
+    assert entries[0]["authors"] == "Jiaxu Wang，Yicheng Jiang"
+    assert entries[0]["affiliations"] == "The Chinese University of Hong Kong"
+    assert entries[0]["one_line"] == "推荐阅读的权威摘要"
+    assert entries[0]["paper_identity"] == "2602.23546"
+    assert entries[0]["paper_slug"] == "mvista-4d"
+    assert entries[0]["reading_level"] == "必读"
+    assert note_links == [
+        {
+            "paper_identity": "2602.23546",
+            "paper_slug": "mvista-4d",
+            "title": "MVISTA-4D",
+            "selected": True,
+        }
+    ]
+
+
+def test_paper_identity_normalizes_arxiv_and_doi_variants() -> None:
+    arxiv_article = _article(
+        external_id="paper-arxiv",
+        title="ARXIV Variant",
+        score=0.90,
+        importance="high",
+        paper_id="arXiv:2602.23546",
+        authors=["Author"],
+        affiliations="Example Lab",
+    )
+    doi_article = ProcessedArticle(
+        raw=RawArticle(
+            external_id="paper-doi",
+            title="DOI Variant",
+            url="https://example.com/paper-doi",
+            content="DOI Variant abstract and details.",
+            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            metadata={
+                "doi": "https://doi.org/10.1000/182",
+                "authors": ["Author"],
+                "affiliations": "Example Lab",
+            },
+        ),
+        summary="DOI Variant summary",
+        keywords=["paper"],
+        score=0.85,
+        importance="normal",
+        detail="DOI Variant detailed reading notes.",
+        category="academic",
+    )
+
+    assert build_paper_identity(arxiv_article) == "2602.23546"
+    assert build_paper_identity(doi_article) == "10.1000/182"
+
+
+@pytest.mark.asyncio
+async def test_paper_renderer_rejects_non_article_inputs() -> None:
+    renderer = PaperRenderer()
+
+    with pytest.raises(TypeError, match="ProcessedArticle"):
+        await renderer.render(
+            [
+                ProcessedEvent(
+                    event_id="event-1",
+                    title="Event",
+                    summary="summary",
+                    detail="detail",
+                )
+            ],
+            RenderContext(date="2026-03-20"),
+        )
