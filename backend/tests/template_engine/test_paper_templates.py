@@ -9,6 +9,7 @@ def test_render_paper_digest_template() -> None:
         version="v1",
         context={
             "paper_mode": "digest",
+            "title": "2026-03-20 论文推荐",
             "date": "2026-03-20",
             "summary": "本期聚焦世界模型与具身智能。",
             "papers": [
@@ -29,10 +30,25 @@ def test_render_paper_digest_template() -> None:
         },
     )
 
+    assert "# 2026-03-20 论文推荐" in content
     assert "本期导读" in content
     assert "MVISTA-4D" in content
     assert "阅读笔记" in content
     assert "核心图" in content
+
+
+def test_render_paper_digest_template_falls_back_to_date_title() -> None:
+    content = render_report_template(
+        report_type="paper",
+        version="v1",
+        context={
+            "paper_mode": "digest",
+            "date": "2026-03-20",
+            "papers": [],
+        },
+    )
+
+    assert "# 2026-03-20 论文推荐" in content
 
 
 def test_render_paper_note_template() -> None:
@@ -75,7 +91,7 @@ def test_render_paper_notion_sink_digest_and_note_modes() -> None:
         sink="notion",
         report_type="paper",
         version="v1",
-        context={"paper_mode": "note", "content": "note body"},
+        context={"metadata": {"paper_mode": "note"}, "content": "note body"},
     )
 
     assert digest == "digest body"

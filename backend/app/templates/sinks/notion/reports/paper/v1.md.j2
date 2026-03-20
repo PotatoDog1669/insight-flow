@@ -1,4 +1,9 @@
-{% if paper_mode | default("digest", true) == "note" -%}
+{% set metadata_mode = "" -%}
+{% if metadata is defined and metadata.paper_mode is defined -%}
+{% set metadata_mode = metadata.paper_mode | default("", true) | trim -%}
+{% endif -%}
+{% set effective_mode = paper_mode | default("", true) | trim or metadata_mode -%}
+{% if effective_mode == "note" -%}
 {% include "sinks/notion/reports/paper/note/v1.md.j2" %}
 {% else -%}
 {{ content }}

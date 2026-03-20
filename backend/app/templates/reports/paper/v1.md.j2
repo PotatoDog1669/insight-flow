@@ -1,7 +1,14 @@
 {% if paper_mode | default("digest", true) == "note" -%}
 {% include "reports/paper/note/v1.md.j2" %}
 {% else -%}
-# {{ date | default("") }} 论文推荐
+{% set digest_title = title | default("", true) | trim -%}
+{% if digest_title -%}
+# {{ digest_title }}
+{% elif date | default("", true) | trim -%}
+# {{ date | trim }} 论文推荐
+{% else -%}
+# 论文推荐
+{% endif -%}
 
 {% if summary | default("", true) | trim -%}
 ## 本期导读
