@@ -521,6 +521,23 @@ describe("MonitorsPage", () => {
     expect(createButton).not.toBeDisabled();
   });
 
+  it("offers paper as a custom report template", async () => {
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Paper Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "custom" },
+    });
+
+    expect(screen.getByRole("option", { name: "论文" })).toBeInTheDocument();
+  });
+
   it("does not show deprecated test action", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();

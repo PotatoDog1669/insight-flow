@@ -23,15 +23,20 @@ vi.mock("@/components/ReportCard", () => ({
     report,
     onDelete,
   }: {
-    report: { title: string; monitor_name?: string };
+    report: { title: string; monitor_name?: string; report_type: string };
     onDelete?: () => void;
-  }) => (
-    <div>
-      <span>{report.title}</span>
-      {report.monitor_name ? <span>{report.monitor_name}</span> : null}
-      {onDelete ? <button type="button" onClick={onDelete}>删除报告</button> : null}
-    </div>
-  ),
+  }) => {
+    if (report.report_type === "paper") {
+      throw new Error("paper report cards are not wired yet");
+    }
+    return (
+      <div>
+        <span>{report.title}</span>
+        {report.monitor_name ? <span>{report.monitor_name}</span> : null}
+        {onDelete ? <button type="button" onClick={onDelete}>删除报告</button> : null}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -100,6 +105,37 @@ describe("DiscoverPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Agent Watch")).toBeInTheDocument();
+    });
+  });
+
+  it("renders paper reports in the discover feed", async () => {
+    mockedGetReports.mockResolvedValue([
+      {
+        id: "report-paper",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Brief",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: {},
+        monitor_id: "monitor-1",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+    ] as never);
+
+    render(<DiscoverPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Paper Brief")).toBeInTheDocument();
     });
   });
 

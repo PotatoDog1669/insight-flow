@@ -5,6 +5,8 @@ from app.collectors.base import RawArticle
 from app.api.v1.sources import _to_source_response
 from app.collectors.blog_scraper import _resolve_profile
 from app.models.source import Source
+from app.schemas.monitor import MonitorResponse
+from app.schemas.report import ReportResponse
 
 
 def test_to_source_response_resolves_target_url_from_site_key_profile() -> None:
@@ -146,3 +148,37 @@ def test_test_source_keeps_generic_connectivity_flow_for_non_arxiv_sources(clien
     assert payload["success"] is True
     assert payload["message"] == "Connection successful. Retrieved 1 items."
     assert payload["sample_articles"][0]["title"] == "Generic Item"
+
+
+def test_paper_report_type_is_accepted_in_response_shapes() -> None:
+    now = datetime.now(timezone.utc)
+
+    monitor = MonitorResponse(
+        id=uuid.uuid4(),
+        name="Paper Monitor",
+        time_period="daily",
+        report_type="paper",
+        source_ids=[],
+        source_overrides={},
+        destination_ids=[],
+        window_hours=24,
+        enabled=True,
+        status="active",
+        last_run=None,
+        created_at=now,
+        updated_at=now,
+    )
+    report = ReportResponse(
+        id=uuid.uuid4(),
+        user_id=None,
+        monitor_id=None,
+        monitor_name="Paper Monitor",
+        time_period="daily",
+        report_type="paper",
+        title="Paper Digest",
+        report_date=now.date(),
+        created_at=now,
+    )
+
+    assert monitor.report_type == "paper"
+    assert report.report_type == "paper"

@@ -15,6 +15,8 @@ from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.scheduler import orchestrator as orchestrator_module
 from app.scheduler.orchestrator import Orchestrator
 from app.sinks.base import PublishResult
+from app.schemas.monitor import MonitorCreate
+from app.schemas.report import ReportCustomRequest
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 SOURCE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -1713,3 +1715,11 @@ async def test_orchestrator_records_exception_type_when_message_is_empty(
         assert task.status == "failed"
         assert task.error_message
         assert "TimeoutError" in task.error_message
+
+
+def test_paper_report_type_is_accepted_in_request_shapes() -> None:
+    monitor = MonitorCreate(name="Paper Monitor", time_period="custom", report_type="paper")
+    report_request = ReportCustomRequest(title="Paper Digest", prompt="Summarize these papers", report_type="paper")
+
+    assert monitor.report_type == "paper"
+    assert report_request.report_type == "paper"

@@ -71,6 +71,35 @@ describe("ReportDetailPage", () => {
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });
 
+  it("renders a paper badge for paper reports", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-paper",
+      user_id: null,
+      time_period: "daily",
+      report_type: "paper",
+      title: "Paper Digest",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# Paper Digest\n\n## 本期导读\nIntro",
+      article_ids: [],
+      published_to: [],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Paper Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+    mockedGetArticleById.mockResolvedValue(null as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByText("Paper Watch")).toBeInTheDocument());
+    expect(screen.getByText("论文")).toBeInTheDocument();
+  });
+
   it("falls back to grouped article cards when report.content has no heading structure", async () => {
     mockedGetReportById.mockResolvedValue({
       id: "report-2",
