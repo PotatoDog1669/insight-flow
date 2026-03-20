@@ -86,13 +86,19 @@ def build_paper_digest_entries(
 def build_paper_digest_report(*, articles: list[ProcessedArticle], context: RenderContext) -> Report:
     selected = select_paper_note_candidates(articles)
     selected_identities = {build_paper_identity(article) for article in selected}
-    papers, note_links = build_paper_digest_entries(articles, selected_identities=selected_identities)
     digest_title = _digest_title(context)
+    papers, _ = build_paper_digest_entries(articles, selected_identities=selected_identities)
+    note_links = build_paper_note_links(
+        articles,
+        selected_identities=selected_identities,
+        digest_identity=_digest_identity(context),
+        digest_title=digest_title,
+    )
     rendered = render_report_template(
         report_type="paper",
         version="v1",
         context={
-            "paper_mode": "digest",
+            **_paper_mode_context("digest"),
             "title": digest_title,
             "date": context.date,
             "summary": _digest_summary(articles),
@@ -104,14 +110,14 @@ def build_paper_digest_report(*, articles: list[ProcessedArticle], context: Rend
         title=digest_title,
         content=rendered,
         article_ids=[article.raw.external_id for article in articles],
-        metadata={
-            "paper_mode": "digest",
-            "paper_identity": _digest_identity(context),
-            "paper_slug": _slugify(digest_title),
-            "paper_note_links": note_links,
-            "papers": papers,
-            "selected_paper_identities": sorted(selected_identities),
-        },
+        metadata=_paper_metadata(
+            paper_mode="digest",
+            paper_identity=_digest_identity(context),
+            paper_slug=_slugify(digest_title),
+            paper_note_links=note_links,
+            papers=papers,
+            selected_paper_identities=sorted(selected_identities),
+        ),
     )
 
 
@@ -126,12 +132,13 @@ def build_paper_note_report(
     slug = build_paper_slug(article)
     title = _paper_title(article)
     digest_title = digest_title or _digest_title(context)
-    back_link = f"[返回 {digest_title}](#{parent_report_id})" if parent_report_id else ""
+    parent_link = build_paper_parent_link(parent_report_id=parent_report_id, digest_title=digest_title)
+    back_link = parent_link["detail_link"] if parent_link else ""
     rendered = render_report_template(
         report_type="paper",
         version="v1",
         context={
-            "paper_mode": "note",
+            **_paper_mode_context("note"),
             "title": title,
             "authors": _authors_text(article),
             "affiliations": _affiliations_text(article),
@@ -153,21 +160,14 @@ def build_paper_note_report(
         title=title,
         content=rendered,
         article_ids=[article.raw.external_id],
-        metadata={
-            "paper_mode": "note",
-            "parent_report_id": parent_report_id,
-            "paper_identity": identity,
-            "paper_slug": slug,
-            "paper_note_links": [
-                {
-                    "paper_identity": _digest_identity(context),
-                    "paper_slug": _slugify(digest_title),
-                    "title": digest_title,
-                    "selected": False,
-                    "detail_link": back_link,
-                }
-            ],
-        },
+        metadata=_paper_metadata(
+            paper_mode="note",
+            parent_report_id=parent_report_id,
+            paper_identity=identity,
+            paper_slug=slug,
+            paper_note_links=[],
+            paper_parent_link=parent_link,
+        ),
     )
 
 
@@ -206,6 +206,16 @@ def build_paper_note_links(
     ]
 
 
+def build_paper_parent_link(*, parent_report_id: str | None, digest_title: str) -> dict[str, Any] | None:
+    if not parent_report_id:
+        return None
+    return {
+        "report_id": parent_report_id,
+        "title": digest_title,
+        "detail_link": f"[返回 {digest_title}](#{parent_report_id})",
+    }
+
+
 def _paper_rank_key(article: ProcessedArticle) -> tuple[int, float, str]:
     importance = _IMPORTANCE_WEIGHT.get(str(article.importance or "").strip().lower(), 0)
     return importance, float(article.score or 0.0), _paper_title(article).lower()
@@ -223,6 +233,60 @@ def _digest_title(context: RenderContext) -> str:
 
 def _digest_identity(context: RenderContext) -> str:
     return _slugify(_digest_title(context))
+
+
+def _paper_mode_context(paper_mode: str) -> dict[str, str]:
+    return {"paper_mode": paper_mode}
+
+
+def _paper_metadata(
+    *,
+    paper_mode: str,
+    paper_identity: str,
+    paper_slug: str,
+    paper_note_links: list[dict[str, Any]],
+    **extra: Any,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    metadata.update(_paper_mode_metadata(paper_mode))
+    metadata.update(_paper_identity_metadata(paper_identity))
+    metadata.update(_paper_slug_metadata(paper_slug))
+    metadata.update(_paper_note_links_metadata(paper_note_links))
+    metadata.update(_parent_report_id_metadata(extra.get("parent_report_id")))
+    metadata.update(_paper_parent_link_metadata(extra.get("paper_parent_link")))
+    for key, value in extra.items():
+        if key in {"parent_report_id", "paper_parent_link"}:
+            continue
+        metadata[key] = value
+    return metadata
+
+
+def _paper_mode_metadata(paper_mode: str) -> dict[str, str]:
+    return {"paper_mode": paper_mode}
+
+
+def _parent_report_id_metadata(parent_report_id: str | None) -> dict[str, str]:
+    if not parent_report_id:
+        return {}
+    return {"parent_report_id": parent_report_id}
+
+
+def _paper_identity_metadata(paper_identity: str) -> dict[str, str]:
+    return {"paper_identity": paper_identity}
+
+
+def _paper_slug_metadata(paper_slug: str) -> dict[str, str]:
+    return {"paper_slug": paper_slug}
+
+
+def _paper_note_links_metadata(paper_note_links: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    return {"paper_note_links": paper_note_links}
+
+
+def _paper_parent_link_metadata(paper_parent_link: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if paper_parent_link is None:
+        return {}
+    return {"paper_parent_link": paper_parent_link}
 
 
 def _paper_title(article: ProcessedArticle) -> str:
