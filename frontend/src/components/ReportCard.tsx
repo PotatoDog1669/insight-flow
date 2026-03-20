@@ -13,7 +13,7 @@ import { ReportCover } from "./ReportCover";
 export interface Report {
     id: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type: "daily" | "weekly" | "research";
+    report_type: "daily" | "weekly" | "research" | "paper";
     title: string;
     report_date: string;
     tldr: string[];
@@ -34,6 +34,7 @@ const reportTypeConfig = {
     daily: { label: "Daily", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
     weekly: { label: "Weekly", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
     research: { label: "Research", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+    paper: { label: "Paper", color: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
 };
 
 export function ReportCard({ report, index, onDelete, deleting = false }: ReportCardProps) {
@@ -79,7 +80,7 @@ export function ReportCard({ report, index, onDelete, deleting = false }: Report
                             <div className="flex items-center justify-between">
                                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                                     <Badge variant="secondary" className={`${rConfig.color} border-none font-medium px-2 py-0.5 capitalize`}>
-                                        {report.report_type}
+                                        {rConfig.label}
                                     </Badge>
                                     <span className="flex items-center space-x-1 ml-2">
                                         <Calendar className="w-3.5 h-3.5" />

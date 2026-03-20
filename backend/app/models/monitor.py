@@ -19,7 +19,7 @@ class Monitor(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     time_period: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / custom")
-    report_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / research")
+    report_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / research / paper")
     source_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     source_overrides: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     ai_routing: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

@@ -1,7 +1,7 @@
 import { Calendar, Layers, BookOpen, Sparkles } from "lucide-react";
 
 interface ReportCoverProps {
-  reportType: "daily" | "weekly" | "research";
+  reportType: "daily" | "weekly" | "research" | "paper";
   className?: string;
 }
 
@@ -26,6 +26,13 @@ const coverConfig = {
     accent: "text-amber-600/10 dark:text-amber-400/10",
     dot: "bg-amber-500",
     glow: "bg-amber-300/30 dark:bg-amber-700/20",
+  },
+  paper: {
+    bg: "from-sky-100 via-cyan-50 to-sky-50 dark:from-sky-950/80 dark:via-cyan-900/60 dark:to-sky-950/50",
+    icon: Sparkles,
+    accent: "text-sky-600/10 dark:text-sky-400/10",
+    dot: "bg-sky-500",
+    glow: "bg-sky-300/30 dark:bg-sky-700/20",
   },
 } as const;
 

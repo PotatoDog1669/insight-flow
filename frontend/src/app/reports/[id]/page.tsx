@@ -15,6 +15,7 @@ const REPORT_TYPE_LABELS: Record<APIReport["report_type"], string> = {
   daily: "日报",
   weekly: "周报",
   research: "研究",
+  paper: "论文",
 };
 
 function toArticleCard(article: APIArticle): ArticleCardModel {

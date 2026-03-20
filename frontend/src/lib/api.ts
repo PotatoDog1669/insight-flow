@@ -42,7 +42,7 @@ export interface Monitor {
     id: string;
     name: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type: "daily" | "weekly" | "research";
+    report_type: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
     source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
     ai_routing?: MonitorAIRouting;
@@ -122,7 +122,7 @@ export interface ProviderTestResponse {
 export interface MonitorCreate {
     name: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
     source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
     ai_routing?: MonitorAIRouting;
@@ -135,7 +135,7 @@ export interface MonitorCreate {
 export interface MonitorUpdate {
     name?: string;
     time_period?: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids?: string[];
     source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[] }>;
     ai_routing?: MonitorAIRouting | null;
@@ -220,7 +220,7 @@ export interface Report {
     monitor_id: string | null;
     monitor_name: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type: "daily" | "weekly" | "research";
+    report_type: "daily" | "weekly" | "research" | "paper";
     title: string;
     report_date: string;
     tldr: string[];
@@ -254,7 +254,7 @@ export interface UserMe {
 
 export interface UserSettings {
     default_time_period: "daily" | "weekly" | "custom";
-    default_report_type: "daily" | "weekly" | "research";
+    default_report_type: "daily" | "weekly" | "research" | "paper";
     default_sink: string;
 }
 
@@ -274,7 +274,7 @@ export interface CollectTask {
 
 export interface ReportListParams {
     time_period?: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     monitor_id?: string;
     limit?: number;
     page?: number;
@@ -435,7 +435,7 @@ export const createCustomReport = (body: {
     title: string;
     prompt: string;
     time_period?: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     category?: string;
     report_date?: string;
 }) =>
@@ -449,7 +449,7 @@ export const getMe = () => fetchAPI<UserMe>("/api/v1/users/me");
 
 export const updateMySettings = (body: {
     default_time_period?: "daily" | "weekly" | "custom";
-    default_report_type?: "daily" | "weekly" | "research";
+    default_report_type?: "daily" | "weekly" | "research" | "paper";
     default_sink?: string;
 }) =>
     fetchAPI<UserSettings>("/api/v1/users/me/settings", {

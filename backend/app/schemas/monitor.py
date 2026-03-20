@@ -65,7 +65,7 @@ class MonitorAIRoutingDefaultsResponse(BaseModel):
 class MonitorBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     time_period: Literal["daily", "weekly", "custom"]
-    report_type: Literal["daily", "weekly", "research"] | None = None
+    report_type: Literal["daily", "weekly", "research", "paper"] | None = None
     source_ids: list[uuid.UUID] = Field(default_factory=list)
     source_overrides: dict[str, dict] = Field(default_factory=dict)  # dict can contain max_items, limit, max_results, keywords, usernames
     ai_routing: MonitorAIRouting = Field(default_factory=MonitorAIRouting)
@@ -86,7 +86,7 @@ class MonitorCreate(MonitorBase):
 class MonitorUpdate(BaseModel):
     name: str | None = None
     time_period: Literal["daily", "weekly", "custom"] | None = None
-    report_type: Literal["daily", "weekly", "research"] | None = None
+    report_type: Literal["daily", "weekly", "research", "paper"] | None = None
     source_ids: list[uuid.UUID] | None = None
     source_overrides: dict[str, dict] | None = None
     ai_routing: MonitorAIRouting | None = None

@@ -54,7 +54,7 @@ export default function MonitorsPage() {
   const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [timePeriod, setTimePeriod] = useState<"daily" | "weekly" | "custom">("daily");
-  const [reportType, setReportType] = useState<"daily" | "weekly" | "research" | "">("");
+  const [reportType, setReportType] = useState<"daily" | "weekly" | "research" | "paper" | "">("");
   const [customSchedule, setCustomSchedule] = useState("");
   const [windowHours, setWindowHours] = useState("24");
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -659,7 +659,7 @@ export default function MonitorsPage() {
                 <CardTitle className="text-lg font-semibold leading-snug">{monitor.name}</CardTitle>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant="secondary" className="capitalize bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-none">
-                    {monitor.report_type === "daily" ? "日报" : monitor.report_type === "weekly" ? "周报" : monitor.report_type === "research" ? "研究" : monitor.report_type}
+                    {monitor.report_type === "daily" ? "日报" : monitor.report_type === "weekly" ? "周报" : monitor.report_type === "research" ? "研究" : monitor.report_type === "paper" ? "论文" : monitor.report_type}
                   </Badge>
                   <Badge variant="secondary" className={monitor.enabled ? "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}>
                     {monitor.enabled ? "运行中" : "已暂停"}
@@ -831,7 +831,7 @@ export default function MonitorsPage() {
                   <select
                     id="monitor-report-type"
                     value={timePeriod === "daily" ? "daily" : timePeriod === "weekly" ? "weekly" : reportType}
-                    onChange={(e) => setReportType(e.target.value as "daily" | "weekly" | "research" | "")}
+                    onChange={(e) => setReportType(e.target.value as "daily" | "weekly" | "research" | "paper" | "")}
                     disabled={timePeriod !== "custom"}
                     className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
                   >
@@ -839,6 +839,7 @@ export default function MonitorsPage() {
                     <option value="daily">日报</option>
                     <option value="weekly">周报</option>
                     <option value="research">研究</option>
+                    <option value="paper">论文</option>
                   </select>
                 </div>
               </div>

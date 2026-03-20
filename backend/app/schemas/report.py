@@ -47,7 +47,7 @@ class ReportResponse(BaseModel):
     monitor_id: uuid.UUID | None = None
     monitor_name: str = ""
     time_period: Literal["daily", "weekly", "custom"]
-    report_type: Literal["daily", "weekly", "research"]
+    report_type: Literal["daily", "weekly", "research", "paper"]
     title: str
     tldr: list[str] = Field(default_factory=list)
     article_count: int = 0
@@ -76,6 +76,6 @@ class ReportCustomRequest(BaseModel):
     title: str
     prompt: str
     time_period: Literal["daily", "weekly", "custom"] = "custom"
-    report_type: Literal["daily", "weekly", "research"] = "research"
+    report_type: Literal["daily", "weekly", "research", "paper"] = "research"
     category: str | None = None
     report_date: date | None = None
