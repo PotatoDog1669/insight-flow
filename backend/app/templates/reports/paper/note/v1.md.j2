@@ -1,0 +1,70 @@
+# {{ title | default("论文阅读笔记") }}
+
+## 作者与机构
+
+- 作者：{{ authors | default("N/A") }}
+- 机构：{{ affiliations | default("N/A") }}
+{% if links | default([]) -%}
+- 链接：
+{% for link in links | default([]) -%}
+  - {{ link }}
+{% endfor -%}
+{% endif -%}
+
+## 论文定位
+
+{{ summary | default("") }}
+
+## 核心贡献
+
+{% for item in contributions | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 方法拆解
+
+{% for item in method_details | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 图示解读
+
+{% for item in figure_notes | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 实验与结果
+
+{% for item in experiments | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 我的理解
+
+{% for item in interpretation | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 局限与疑问
+
+{% for item in limitations | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 适用场景
+
+{% for item in use_cases | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 相关论文
+
+{% for item in related_reading | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+## 回到推荐页
+
+{% if back_link | default("", true) | trim -%}
+{{ back_link | trim }}
+{% endif -%}

@@ -3,6 +3,7 @@ reports:
   daily: v1
   weekly: v1
   research: v1
+  paper: v1
 sinks:
   notion:
     schema: v1
@@ -10,3 +11,4 @@ sinks:
       daily: v1
       weekly: v1
       research: v1
+      paper: v1

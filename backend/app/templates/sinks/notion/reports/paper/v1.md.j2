@@ -1,0 +1,5 @@
+{% if paper_mode | default("digest", true) == "note" -%}
+{% include "sinks/notion/reports/paper/note/v1.md.j2" %}
+{% else -%}
+{{ content }}
+{% endif -%}
