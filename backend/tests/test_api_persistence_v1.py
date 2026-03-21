@@ -1,6 +1,7 @@
 """Persistence-oriented API tests (DB-backed behavior)."""
 
 import asyncio
+from datetime import date, datetime, timezone
 import uuid
 from datetime import date
 from types import SimpleNamespace
@@ -46,6 +47,110 @@ def test_reports_list_returns_summary_payload_while_detail_keeps_full_content(cl
     assert detail["content"] == "Seed content"
     assert detail["monitor_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     assert detail["monitor_name"] == "Seed Monitor"
+
+
+def test_reports_list_hides_paper_note_reports_from_summary_views(client: TestClient, db_session_factory) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _seed_paper_reports() -> None:
+        async with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            user_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+            monitor_id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            digest_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+            note_id = uuid.UUID("66666666-7777-8888-9999-000000000000")
+            digest = Report(
+                id=digest_id,
+                user_id=user_id,
+                time_period="daily",
+                report_type="paper",
+                title="2026-03-20 论文推荐",
+                content="digest content",
+                article_ids=[],
+                metadata_={
+                    "paper_mode": "digest",
+                    "monitor_id": str(monitor_id),
+                    "monitor_name": "Seed Monitor",
+                },
+                published_to=[],
+                report_date=date.today(),
+                created_at=now,
+            )
+            note = Report(
+                id=note_id,
+                user_id=user_id,
+                time_period="daily",
+                report_type="paper",
+                title="Single Paper Note",
+                content="note content",
+                article_ids=[],
+                metadata_={
+                    "paper_mode": "note",
+                    "parent_report_id": str(digest_id),
+                    "monitor_id": str(monitor_id),
+                    "monitor_name": "Seed Monitor",
+                },
+                published_to=[],
+                report_date=date.today(),
+                created_at=now,
+            )
+            session.add_all([digest, note])
+            await session.commit()
+
+    asyncio.run(_seed_paper_reports())
+
+    response = client.get("/api/v1/reports", params={"limit": 20, "page": 1})
+    assert response.status_code == 200
+
+    reports = response.json()
+    titles = [item["title"] for item in reports]
+    assert "2026-03-20 论文推荐" in titles
+    assert "Single Paper Note" not in titles
+
+
+def test_reports_list_derives_paper_digest_tldr_from_intro_when_missing_metadata(client: TestClient, db_session_factory) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _seed_paper_digest() -> None:
+        async with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            user_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+            digest = Report(
+                id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
+                user_id=user_id,
+                time_period="daily",
+                report_type="paper",
+                title="2026-03-20 论文推荐",
+                content=(
+                    "# 2026-03-20 论文推荐\n\n"
+                    "## 本期导读\n\n"
+                    "本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。\n\n"
+                    "## 推荐论文\n\n"
+                    "### 1. Example Paper"
+                ),
+                article_ids=[],
+                metadata_={
+                    "paper_mode": "digest",
+                    "monitor_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "monitor_name": "Seed Monitor",
+                },
+                published_to=[],
+                report_date=date.today(),
+                created_at=now,
+            )
+            session.add(digest)
+            await session.commit()
+
+    asyncio.run(_seed_paper_digest())
+
+    response = client.get("/api/v1/reports", params={"limit": 20, "page": 1})
+    assert response.status_code == 200
+
+    reports = response.json()
+    digest = next(item for item in reports if item["title"] == "2026-03-20 论文推荐")
+    assert digest["tldr"] == [
+        "本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。"
+    ]
 
 
 def test_delete_report_removes_row_from_database(client: TestClient, db_session_factory) -> None:

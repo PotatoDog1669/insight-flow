@@ -23,6 +23,8 @@ class RoutingStages:
     report: StageRoute
     publish: PublishRoute
     global_summary: StageRoute | None = None
+    paper_review: StageRoute | None = None
+    paper_note: StageRoute | None = None
 
 
 @dataclass(slots=True)

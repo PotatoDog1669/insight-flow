@@ -50,6 +50,6 @@ def test_filter_prompts_allow_snapshot_sources_with_clear_technical_signal() -> 
     assert "daily snapshot" in llm_text
 
 
-@pytest.mark.parametrize("name", ["filter", "keywords", "report", "global_summary"])
+@pytest.mark.parametrize("name", ["filter", "keywords", "report", "global_summary", "paper_review", "paper_note"])
 def test_agent_and_llm_processing_prompts_share_same_template(name: str) -> None:
     assert load_prompt(scope="agent", name=name) == load_prompt(scope="llm", name=name)

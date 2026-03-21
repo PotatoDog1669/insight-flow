@@ -37,6 +37,7 @@ def build_paper_digest_entries(
     articles: list[ProcessedArticle],
     *,
     selected_identities: set[str],
+    detail_links_by_identity: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     entries: list[dict[str, Any]] = []
     note_links: list[dict[str, Any]] = []
@@ -44,7 +45,8 @@ def build_paper_digest_entries(
         identity = build_paper_identity(article)
         slug = build_paper_slug(article)
         selected = identity in selected_identities
-        detail_link = "见关联阅读笔记" if selected else ""
+        detail_report_id = (detail_links_by_identity or {}).get(identity)
+        detail_link = f"[查看详细笔记](/reports/{detail_report_id})" if detail_report_id else ""
         entry = {
             "title": _paper_title(article),
             "authors": _authors_text(article),
@@ -74,11 +76,21 @@ def build_paper_digest_entries(
     return entries, note_links
 
 
-def build_paper_digest_report(*, articles: list[ProcessedArticle], context: RenderContext) -> Report:
+def build_paper_digest_report(
+    *,
+    articles: list[ProcessedArticle],
+    context: RenderContext,
+    detail_links_by_identity: dict[str, str] | None = None,
+) -> Report:
     selected = select_paper_note_candidates(articles)
     selected_identities = {build_paper_identity(article) for article in selected}
     digest_title = _digest_title(context)
-    papers, _ = build_paper_digest_entries(articles, selected_identities=selected_identities)
+    digest_summary = _digest_summary(articles, context=context)
+    papers, _ = build_paper_digest_entries(
+        articles,
+        selected_identities=selected_identities,
+        detail_links_by_identity=detail_links_by_identity,
+    )
     note_links = build_paper_note_links(
         articles,
         selected_identities=selected_identities,
@@ -90,7 +102,7 @@ def build_paper_digest_report(*, articles: list[ProcessedArticle], context: Rend
             **_paper_mode_context("digest"),
             "title": digest_title,
             "date": context.date,
-            "summary": _digest_summary(articles),
+            "summary": digest_summary,
             "papers": papers,
         },
     )
@@ -104,6 +116,8 @@ def build_paper_digest_report(*, articles: list[ProcessedArticle], context: Rend
             paper_identity=_digest_identity(context),
             paper_slug=_slugify(digest_title),
             paper_note_links=note_links,
+            global_tldr=digest_summary,
+            tldr=[digest_summary] if digest_summary else [],
             papers=papers,
             selected_paper_identities=sorted(selected_identities),
         ),
@@ -160,18 +174,30 @@ def build_paper_note_report(
     )
 
 
-def _digest_summary(articles: list[ProcessedArticle]) -> str:
+def _digest_summary(articles: list[ProcessedArticle], *, context: RenderContext | None = None) -> str:
+    extra = (context.extra or {}) if context is not None and context.extra else {}
+    explicit = str(extra.get("digest_summary") or extra.get("global_tldr") or "").strip()
+    if explicit:
+        return explicit
     if not articles:
         return ""
-    selected = select_paper_note_candidates(articles, limit=min(3, len(articles)))
+    selected = select_paper_note_candidates(articles, limit=min(2, len(articles)))
+    summaries: list[str] = []
+    for article in selected:
+        sentence = _clean_digest_sentence(_one_line_summary(article))
+        if sentence and sentence not in summaries:
+            summaries.append(sentence)
+    if len(summaries) >= 2:
+        return (
+            f"{summaries[0]}同时，{summaries[1]}"
+            "整体上，本期更值得关注这些工作是否正在从单点结果走向可复用框架与系统能力。"
+        )
+    if len(summaries) == 1:
+        return f"{summaries[0]}整体上，本期更值得关注这项方向能否进一步沉淀为可复用的方法框架。"
     titles = [_paper_title(article) for article in selected if _paper_title(article)]
     if not titles:
         return ""
-    if len(titles) == 1:
-        return f"本期聚焦 {titles[0]}。"
-    if len(titles) == 2:
-        return f"本期聚焦 {titles[0]} 和 {titles[1]}。"
-    return f"本期聚焦 {titles[0]}、{titles[1]} 等 {len(articles)} 篇论文。"
+    return f"本期收录 {len(articles)} 篇论文，重点围绕 {titles[0]} 等方向展开，后续更值得关注其工程落地与可复用性。"
 
 
 def build_paper_note_links(
@@ -179,7 +205,10 @@ def build_paper_note_links(
     *,
     selected_identities: set[str],
 ) -> list[dict[str, Any]]:
-    _, note_links = build_paper_digest_entries(articles, selected_identities=selected_identities)
+    _, note_links = build_paper_digest_entries(
+        articles,
+        selected_identities=selected_identities,
+    )
     return note_links
 
 
@@ -271,9 +300,10 @@ def _paper_title(article: ProcessedArticle) -> str:
 
 
 def _authors_text(article: ProcessedArticle) -> str:
-    authors = article.raw.metadata.get("authors") if isinstance(article.raw.metadata, dict) else None
+    authors = _paper_authors(article)
     if isinstance(authors, list):
-        items = [str(item).strip() for item in authors if str(item).strip()]
+        items = [_author_name(item) for item in authors]
+        items = [item for item in items if item]
         if items:
             return "，".join(items)
     if isinstance(authors, str) and authors.strip():
@@ -282,19 +312,97 @@ def _authors_text(article: ProcessedArticle) -> str:
 
 
 def _affiliations_text(article: ProcessedArticle) -> str:
-    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
-    affiliations = metadata.get("affiliations")
-    if isinstance(affiliations, list):
-        items = [str(item).strip() for item in affiliations if str(item).strip()]
-        if items:
-            return "，".join(items)
-    if isinstance(affiliations, str) and affiliations.strip():
-        return affiliations.strip()
+    metadata = _article_metadata(article)
+    authors = _paper_authors(article)
+    if isinstance(authors, list) and authors:
+        first_author_affiliation = _author_affiliation(authors[0])
+        if first_author_affiliation:
+            return first_author_affiliation
+    for key in ("first_author_affiliation", "first_author_institution", "affiliations", "institution", "institutions"):
+        value = _first_text(metadata.get(key))
+        if value:
+            return value
+    organization = _organization_name(metadata.get("organization"))
+    if organization:
+        return organization
     return "N/A"
 
 
+def _article_metadata(article: ProcessedArticle) -> dict[str, Any]:
+    return article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+
+
+def _paper_authors(article: ProcessedArticle) -> Any:
+    metadata = _article_metadata(article)
+    authors = metadata.get("authors")
+    if authors:
+        return authors
+    nested_paper = metadata.get("paper")
+    if isinstance(nested_paper, dict):
+        nested_authors = nested_paper.get("authors")
+        if nested_authors:
+            return nested_authors
+    return None
+
+
+def _author_name(author: Any) -> str:
+    if isinstance(author, str):
+        return author.strip()
+    if isinstance(author, dict):
+        for key in ("name", "fullname", "full_name", "display_name"):
+            value = author.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        user = author.get("user")
+        if isinstance(user, dict):
+            for key in ("fullname", "name", "user"):
+                value = user.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
+
+
+def _author_affiliation(author: Any) -> str:
+    if not isinstance(author, dict):
+        return ""
+    for key in ("affiliations", "affiliation", "institution", "institutions", "organization", "org"):
+        value = _first_text(author.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _first_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        for item in value:
+            text = _display_text(item)
+            if text:
+                return text
+        return ""
+    if isinstance(value, dict):
+        return _display_text(value)
+    return ""
+
+
+def _display_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("fullname", "name", "title", "label", "institution", "affiliation"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return ""
+
+
+def _organization_name(value: Any) -> str:
+    return _display_text(value)
+
+
 def _figure_url(article: ProcessedArticle) -> str:
-    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    metadata = _article_metadata(article)
     for key in ("figure_url", "figure", "image", "cover"):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
@@ -304,6 +412,15 @@ def _figure_url(article: ProcessedArticle) -> str:
 
 def _one_line_summary(article: ProcessedArticle) -> str:
     return str(article.summary or article.raw.title or "").strip()
+
+
+def _clean_digest_sentence(text: str) -> str:
+    sentence = str(text or "").strip()
+    if not sentence:
+        return ""
+    sentence = re.sub(r"\s+", " ", sentence)
+    sentence = sentence.rstrip("。！？!?；;，, ")
+    return f"{sentence}。"
 
 
 def _problem_text(article: ProcessedArticle) -> str:
@@ -370,8 +487,19 @@ def _method_details(article: ProcessedArticle) -> list[str]:
 
 
 def _figure_notes(article: ProcessedArticle) -> list[str]:
+    metadata = _article_metadata(article)
+    notes: list[str] = []
+
     figure = _figure_url(article)
-    return [f"核心图：{figure}"] if figure else []
+    figure_caption = _first_text(metadata.get("figure_caption")) or "Figure 1"
+    if figure:
+        notes.append(_render_figure_block(title=figure_caption, image_url=figure, source_label="arXiv HTML"))
+
+    project_teaser = _first_text(metadata.get("project_teaser_url"))
+    if project_teaser and project_teaser != figure:
+        notes.append(_render_figure_block(title="Project Teaser", image_url=project_teaser, source_label="项目页 teaser"))
+
+    return notes
 
 
 def _experiments(article: ProcessedArticle) -> list[str]:
@@ -393,6 +521,16 @@ def _use_cases(article: ProcessedArticle) -> list[str]:
 
 def _related_reading(article: ProcessedArticle) -> list[str]:
     return _nonempty_items([article.keywords])
+
+
+def _render_figure_block(*, title: str, image_url: str, source_label: str) -> str:
+    return "\n\n".join(
+        [
+            f"### {title}",
+            f"![{title}]({image_url})",
+            f"图示来源：{source_label}",
+        ]
+    )
 
 
 def _nonempty_items(values: list[Any]) -> list[str]:

@@ -229,3 +229,53 @@ export function canonicalizeReportContent(content: string, events: ReportEvent[]
   if (!shouldCanonicalize(content, events)) return content;
   return buildCanonicalContent(events, summary);
 }
+
+export function normalizePaperDigestContent(content: string, metadata: Record<string, unknown>): string {
+  const paperMode = typeof metadata.paper_mode === "string" ? metadata.paper_mode : "";
+  if (paperMode !== "digest") return content;
+
+  const noteLinksByTitle = new Map<string, string>();
+  const rawLinks = Array.isArray(metadata.paper_note_links) ? metadata.paper_note_links : [];
+  for (const item of rawLinks) {
+    if (!item || typeof item !== "object") continue;
+    const value = item as Record<string, unknown>;
+    const title = typeof value.title === "string" ? normalizeHeadingTitle(value.title) : "";
+    const reportId = typeof value.report_id === "string" ? value.report_id : "";
+    if (title && reportId) {
+      noteLinksByTitle.set(title, reportId);
+    }
+  }
+
+  const lines = String(content ?? "").replace(/\r\n/g, "\n").split("\n");
+  let currentPaperTitle = "";
+
+  return lines
+    .flatMap((line) => {
+      const headingMatch = line.match(/^###\s+\d+\.\s+(.+)$/);
+      if (headingMatch) {
+        currentPaperTitle = normalizeHeadingTitle(headingMatch[1]);
+        return [line];
+      }
+
+      const trimmed = line.trim();
+      if (trimmed.startsWith("- 为什么重要：")) {
+        return [];
+      }
+      if (trimmed.startsWith("- 阅读建议：")) {
+        return [];
+      }
+      if (!trimmed.startsWith("- 详细笔记：")) {
+        return [line];
+      }
+      if (trimmed.includes("](/reports/")) {
+        return [line];
+      }
+
+      const reportId = noteLinksByTitle.get(currentPaperTitle);
+      if (!reportId) {
+        return [];
+      }
+      return [`- 详细笔记：[查看详细笔记](/reports/${reportId})`];
+    })
+    .join("\n");
+}

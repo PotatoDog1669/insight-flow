@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from html import unescape
+import re
+from urllib.parse import urljoin
 
 import httpx
 
@@ -51,11 +54,12 @@ class HuggingFaceCollector(BaseCollector):
             for paper in list(papers)[:limit]:
                 if not isinstance(paper, dict):
                     continue
+                paper_payload = paper.get("paper") if isinstance(paper.get("paper"), dict) else {}
                 paper_id = _paper_id(paper)
                 if not paper_id:
                     continue
-                title = str(paper.get("title") or paper_id)
-                summary = str(paper.get("summary") or paper.get("abstract") or "")
+                title = str(paper.get("title") or paper_payload.get("title") or paper_id)
+                summary = str(paper.get("summary") or paper.get("abstract") or paper_payload.get("summary") or paper_payload.get("abstract") or "")
                 detail_payload: dict = {}
                 if include_paper_detail:
                     detail_payload = await _safe_json_get(client, f"https://huggingface.co/api/papers/{paper_id}")
@@ -67,6 +71,17 @@ class HuggingFaceCollector(BaseCollector):
                     arxiv_payload = await _safe_json_get(client, f"https://huggingface.co/api/arxiv/{paper_id}/repos")
                     if isinstance(arxiv_payload, dict):
                         arxiv_repos = arxiv_payload
+                organization = paper.get("organization") or paper_payload.get("organization") or detail_payload.get("organization")
+                project_url = _project_url(paper, paper_payload, detail_payload)
+                arxiv_figure_url = ""
+                figure_caption = ""
+                if include_paper_detail:
+                    arxiv_html = await _safe_text_get(client, f"https://arxiv.org/html/{paper_id}")
+                    arxiv_figure_url, figure_caption = _extract_first_figure(arxiv_html, base_url=f"https://arxiv.org/html/{paper_id}")
+                project_teaser_url = ""
+                if project_url:
+                    project_html = await _safe_text_get(client, project_url)
+                    project_teaser_url = _extract_project_teaser(project_html, base_url=project_url)
                 metadata = {
                     "collector": "huggingface_daily_papers",
                     "paper_id": paper_id,
@@ -74,7 +89,12 @@ class HuggingFaceCollector(BaseCollector):
                     "snapshot_at": snapshot_at.isoformat(),
                     "snapshot_date": snapshot_date,
                     "source_endpoint": "/api/daily_papers",
-                    "authors": paper.get("authors") or detail_payload.get("authors") or [],
+                    "authors": paper.get("authors") or paper_payload.get("authors") or detail_payload.get("authors") or [],
+                    "organization": organization,
+                    "project_url": project_url,
+                    "figure_url": arxiv_figure_url,
+                    "figure_caption": figure_caption,
+                    "project_teaser_url": project_teaser_url,
                     "summary_source": "hf_paper_detail" if detail_payload else "daily_papers",
                     "arxiv_repos": arxiv_repos,
                     "fetched_at": snapshot_at.isoformat(),
@@ -106,6 +126,51 @@ def _paper_id(payload: dict) -> str:
     return ""
 
 
+def _project_url(*sources: dict) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("projectPage", "project_page", "projectUrl", "project_url"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _extract_first_figure(html: str, *, base_url: str) -> tuple[str, str]:
+    if not html:
+        return "", ""
+    figure_match = re.search(r"<figure\b[^>]*>(.*?)</figure>", html, flags=re.IGNORECASE | re.DOTALL)
+    if not figure_match:
+        return "", ""
+    figure_block = figure_match.group(1)
+    image_match = re.search(r'<img\b[^>]*src=["\']([^"\']+)["\']', figure_block, flags=re.IGNORECASE)
+    if not image_match:
+        return "", ""
+    caption_match = re.search(r"<figcaption\b[^>]*>(.*?)</figcaption>", figure_block, flags=re.IGNORECASE | re.DOTALL)
+    caption = _clean_html_text(caption_match.group(1)) if caption_match else ""
+    return urljoin(base_url, image_match.group(1).strip()), caption
+
+
+def _extract_project_teaser(html: str, *, base_url: str) -> str:
+    if not html:
+        return ""
+    match = re.search(
+        r'<meta\b[^>]*(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]*content=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return urljoin(base_url, match.group(1).strip())
+
+
+def _clean_html_text(value: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", value or "")
+    text = unescape(re.sub(r"\s+", " ", text)).strip()
+    return text
+
+
 async def _safe_json_get(client: httpx.AsyncClient, url: str) -> dict:
     try:
         response = await client.get(url)
@@ -116,3 +181,12 @@ async def _safe_json_get(client: httpx.AsyncClient, url: str) -> dict:
     except Exception:
         pass
     return {}
+
+
+async def _safe_text_get(client: httpx.AsyncClient, url: str) -> str:
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        return str(response.text or "")
+    except Exception:
+        return ""

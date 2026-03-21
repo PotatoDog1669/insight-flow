@@ -52,7 +52,12 @@ export default function DiscoverPage() {
       setError(null);
       try {
         const data = await withTimeout(getReports({ limit: 10, page: 1 }), DISCOVER_REPORTS_TIMEOUT_MS);
-        setReports(data.map(toCardReport));
+        const filtered = data.filter((report) => {
+          if (report.report_type !== "paper") return true;
+          const rawMeta = (report.metadata ?? {}) as Record<string, unknown>;
+          return rawMeta.paper_mode !== "note";
+        });
+        setReports(filtered.map(toCardReport));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {

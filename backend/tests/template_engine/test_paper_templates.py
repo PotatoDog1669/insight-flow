@@ -65,7 +65,9 @@ def test_render_paper_note_template() -> None:
             "summary": "单篇论文的详细阅读笔记。",
             "contributions": ["贡献 1", "贡献 2"],
             "method_details": ["方法细节 1"],
-            "figure_notes": ["图 1 解读"],
+            "figure_notes": [
+                "### Figure 1: Overview\n\n![Overview](https://example.com/figure.png)\n\n图示说明：整体框架。",
+            ],
             "experiments": ["实验结论"],
             "interpretation": ["我的理解"],
             "limitations": ["局限与疑问"],
@@ -78,6 +80,9 @@ def test_render_paper_note_template() -> None:
     assert "核心贡献" in content
     assert "方法拆解" in content
     assert "局限与疑问" in content
+    assert "### Figure 1: Overview" in content
+    assert "![Overview](https://example.com/figure.png)" in content
+    assert "- ### Figure 1: Overview" not in content
 
 
 def test_render_paper_notion_sink_digest_and_note_modes() -> None:

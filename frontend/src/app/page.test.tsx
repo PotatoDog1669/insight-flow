@@ -23,14 +23,19 @@ vi.mock("@/components/ReportCard", () => ({
     report,
     onDelete,
   }: {
-    report: { title: string; monitor_name?: string; report_type: string };
+    report: { title: string; monitor_name?: string; tldr?: string[] };
     onDelete?: () => void;
   }) => {
     return (
       <div>
         <span>{report.title}</span>
         {report.monitor_name ? <span>{report.monitor_name}</span> : null}
-        {onDelete ? <button type="button" onClick={onDelete}>删除报告</button> : null}
+        {report.tldr && report.tldr.length > 0 ? <span>{report.tldr[0]}</span> : null}
+        {onDelete ? (
+          <button type="button" onClick={onDelete}>
+            删除报告
+          </button>
+        ) : null}
       </div>
     );
   },
@@ -114,7 +119,7 @@ describe("DiscoverPage", () => {
         report_type: "paper",
         title: "Paper Brief",
         report_date: "2026-03-02",
-        tldr: [],
+        tldr: ["本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。"],
         article_count: 1,
         topics: [],
         events: [],
@@ -133,6 +138,61 @@ describe("DiscoverPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Paper Brief")).toBeInTheDocument();
+      expect(
+        screen.getByText("本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。")
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("does not render paper note reports in the discover feed", async () => {
+    mockedGetReports.mockResolvedValue([
+      {
+        id: "report-paper-digest",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Digest",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: { paper_mode: "digest" },
+        monitor_id: "monitor-1",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+      {
+        id: "report-paper-note",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Note Report",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: { paper_mode: "note" },
+        monitor_id: "monitor-1",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+    ] as never);
+
+    render(<DiscoverPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Paper Digest")).toBeInTheDocument();
+      expect(screen.queryByText("Paper Note Report")).not.toBeInTheDocument();
     });
   });
 

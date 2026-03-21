@@ -23,7 +23,7 @@ vi.mock("@/components/ReportCard", () => ({
     report,
     onDelete,
   }: {
-    report: { id: string; title: string; monitor_name?: string; report_type: string };
+    report: { id: string; title: string; monitor_name?: string };
     onDelete?: (id: string) => void;
   }) => {
     return (
@@ -197,6 +197,58 @@ describe("LibraryPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Paper Report")).toBeInTheDocument();
+    });
+  });
+
+  it("does not render paper note reports in the archive list", async () => {
+    mockedGetReports.mockResolvedValue([
+      {
+        id: "report-paper-digest",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Digest",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: { paper_mode: "digest" },
+        monitor_id: "monitor-3",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+      {
+        id: "report-paper-note",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Note Report",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: { paper_mode: "note" },
+        monitor_id: "monitor-3",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+    ] as never);
+
+    render(<LibraryPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Paper Digest")).toBeInTheDocument();
+      expect(screen.queryByText("Paper Note Report")).not.toBeInTheDocument();
     });
   });
 });

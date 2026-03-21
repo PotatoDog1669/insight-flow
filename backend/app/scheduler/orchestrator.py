@@ -28,11 +28,16 @@ from app.models.source import Source
 from app.models.subscription import UserSubscription
 from app.models.task import CollectTask
 from app.models.user import User
-from app.papers.reporting import build_paper_identity, build_paper_note_report, select_paper_note_candidates
 from app.papers.acquisition import acquire_paper_fulltext
 from app.papers.evidence import build_evidence_coverage
 from app.papers.literature import build_literature_context
 from app.papers.service import sync_article_paper_link
+from app.papers.reporting import (
+    build_paper_digest_report,
+    build_paper_identity,
+    build_paper_note_report,
+    select_paper_note_candidates,
+)
 from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
@@ -2145,6 +2150,13 @@ class Orchestrator:
             if isinstance(link, dict) and link.get("paper_identity") in note_links_by_identity
         ]
         digest_row.metadata_ = digest_metadata
+        updated_digest = build_paper_digest_report(
+            articles=processed_articles,
+            context=context,
+            detail_links_by_identity=note_links_by_identity,
+        )
+        digest_row.content = updated_digest.content
+        digest_report.content = updated_digest.content
         digest_report.metadata = digest_metadata
 
         return report_rows, rendered_reports

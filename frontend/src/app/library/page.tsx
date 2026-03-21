@@ -37,11 +37,16 @@ export default function LibraryPage() {
       setLoading(true);
       setError(null);
       try {
-        const [data, filters] = await Promise.all([
+        const [rawReports, filters] = await Promise.all([
           getReports({ limit: 100, page: 1 }),
           getReportFilters(),
         ]);
-        setReports(data.map(toCardReport));
+        const filteredReports = rawReports.filter((report) => {
+          if (report.report_type !== "paper") return true;
+          const rawMeta = (report.metadata ?? {}) as Record<string, unknown>;
+          return rawMeta.paper_mode !== "note";
+        });
+        setReports(filteredReports.map(toCardReport));
         setReportFilters(filters);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");

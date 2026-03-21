@@ -163,6 +163,77 @@ describe("ReportDetailPage", () => {
     expect(screen.getByText("论文")).toBeInTheDocument();
   });
 
+  it("does not render a top digest relations banner for paper reports", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-paper-digest",
+      user_id: null,
+      time_period: "daily",
+      report_type: "paper",
+      title: "Paper Digest",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content:
+        "# Paper Digest\n\n## 本期导读\nIntro\n\n### 1. Nemotron-Cascade 2\n- 为什么重要：值得重点关注\n- 阅读建议：必读\n- 详细笔记：见关联阅读笔记",
+      article_ids: [],
+      published_to: [],
+      metadata: {
+        paper_mode: "digest",
+        paper_note_links: [
+          { report_id: "note-1", title: "Nemotron-Cascade 2" },
+        ],
+      },
+      monitor_id: "monitor-1",
+      monitor_name: "Paper Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+    mockedGetArticleById.mockResolvedValue(null as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByText("Paper Digest", { selector: "header h1" })).toBeInTheDocument());
+    expect(screen.queryByText("本期包含的详细阅读笔记")).not.toBeInTheDocument();
+    expect(screen.queryByText("为什么重要：值得重点关注")).not.toBeInTheDocument();
+    expect(screen.queryByText("阅读建议：必读")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看详细笔记" })).toHaveAttribute("href", "/reports/note-1");
+  });
+
+  it("does not render a top source hint for paper note reports", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-paper-note",
+      user_id: null,
+      time_period: "daily",
+      report_type: "paper",
+      title: "Paper Note",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# Paper Note\n\nContent",
+      article_ids: [],
+      published_to: [],
+      metadata: {
+        paper_mode: "note",
+        parent_report_id: "report-paper-digest",
+      },
+      monitor_id: "monitor-1",
+      monitor_name: "Paper Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+    mockedGetArticleById.mockResolvedValue(null as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByText("Paper Note", { selector: "header h1" })).toBeInTheDocument());
+    expect(screen.queryByText(/本笔记来自/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "论文推荐 digest" })).not.toBeInTheDocument();
+  });
+
   it("falls back to grouped article cards when report.content has no heading structure", async () => {
     mockedGetReportById.mockResolvedValue({
       id: "report-2",

@@ -2220,6 +2220,8 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
         )
         assert len((digest.metadata_ or {}).get("paper_note_links", [])) == 2
         assert all("report_id" in link for link in (digest.metadata_ or {}).get("paper_note_links", []))
+        assert "/reports/" in digest.content
+        assert "查看详细笔记" in digest.content
         for note in notes:
             note_metadata = note.metadata_ or {}
             assert note_metadata["parent_report_id"] == str(digest.id)

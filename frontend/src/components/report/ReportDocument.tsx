@@ -120,6 +120,13 @@ const markdownComponents: Components = {
         </a>
       );
     }
+    if (link.startsWith("/")) {
+      return (
+        <a href={link} className="text-blue-600 hover:underline">
+          {children}
+        </a>
+      );
+    }
     return (
       <a href={link} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
         {children}

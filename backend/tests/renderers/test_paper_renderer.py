@@ -107,7 +107,77 @@ async def test_paper_renderer_builds_digest_and_marks_note_candidates() -> None:
     assert "paper_parent_link" not in metadata
     assert report.article_ids == ["paper-1", "paper-2", "paper-3"]
     assert "核心图" in report.content
-    assert "详细笔记" in report.content
+    assert "详细笔记" not in report.content
+
+
+@pytest.mark.asyncio
+async def test_paper_renderer_prefers_explicit_digest_summary_and_exposes_it_in_metadata() -> None:
+    renderer = PaperRenderer()
+    articles = [
+        _article(
+            external_id="paper-1",
+            title="Nemotron-Cascade 2",
+            score=0.96,
+            importance="high",
+            paper_id="2603.00001",
+            authors=["Alice"],
+            affiliations="Example Lab",
+        ),
+        _article(
+            external_id="paper-2",
+            title="OS-Themis",
+            score=0.89,
+            importance="high",
+            paper_id="2603.00002",
+            authors=["Bob"],
+            affiliations="Example Lab",
+        ),
+    ]
+
+    summary = "本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。"
+    report = await renderer.render(
+        articles,
+        RenderContext(date="2026-03-20", extra={"digest_summary": summary}),
+    )
+    metadata = report.metadata or {}
+
+    assert summary in report.content
+    assert metadata["global_tldr"] == summary
+    assert metadata["tldr"] == [summary]
+    assert "本期聚焦 Nemotron-Cascade 2" not in report.content
+
+
+@pytest.mark.asyncio
+async def test_paper_renderer_fallback_digest_summary_uses_paper_summaries_with_commentary() -> None:
+    renderer = PaperRenderer()
+    first = _article(
+        external_id="paper-1",
+        title="Nemotron-Cascade 2",
+        score=0.96,
+        importance="high",
+        paper_id="2603.00001",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+    first.summary = "后训练强化学习开始从单轮技巧堆叠走向更成体系的蒸馏与策略优化。"
+    second = _article(
+        external_id="paper-2",
+        title="OS-Themis",
+        score=0.89,
+        importance="high",
+        paper_id="2603.00002",
+        authors=["Bob"],
+        affiliations="Example Lab",
+    )
+    second.summary = "GUI 奖励建模正在从任务特例走向可扩展的通用 critic 框架。"
+
+    report = await renderer.render([first, second], RenderContext(date="2026-03-20"))
+    metadata = report.metadata or {}
+
+    assert "后训练强化学习开始从单轮技巧堆叠走向更成体系的蒸馏与策略优化。" in report.content
+    assert "GUI 奖励建模正在从任务特例走向可扩展的通用 critic 框架。" in report.content
+    assert "整体上，本期更值得关注这些工作是否正在从单点结果走向可复用框架与系统能力。" in report.content
+    assert metadata["tldr"] == [metadata["global_tldr"]]
 
 
 @pytest.mark.asyncio
@@ -144,6 +214,35 @@ async def test_paper_note_report_uses_independent_note_metadata() -> None:
     assert "论文定位" in report.content
     assert "回到推荐页" in report.content
     assert "2026-03-20 论文推荐" in report.content
+
+
+@pytest.mark.asyncio
+async def test_paper_note_report_renders_visual_blocks_from_enriched_metadata() -> None:
+    article = _article(
+        external_id="paper-note-visuals",
+        title="OS-Themis",
+        score=0.96,
+        importance="high",
+        paper_id="2603.19191",
+        authors=["Zehao Li"],
+        affiliations="Example Lab",
+        figure_url="https://arxiv.org/html/2603.19191v1/x1.png",
+    )
+    article.raw.metadata.update(
+        {
+            "figure_caption": "Figure 1: Pipeline overview",
+            "project_teaser_url": "https://demo.example.com/assets/teaser.png",
+        }
+    )
+
+    report = build_paper_note_report(
+        article,
+        context=RenderContext(date="2026-03-20"),
+    )
+
+    assert "### Figure 1: Pipeline overview" in report.content
+    assert "![Figure 1: Pipeline overview](https://arxiv.org/html/2603.19191v1/x1.png)" in report.content
+    assert "https://demo.example.com/assets/teaser.png" in report.content
 
 
 def test_paper_note_links_helper_returns_only_related_note_candidates() -> None:
@@ -312,6 +411,73 @@ def test_paper_digest_entries_use_best_representative_per_identity() -> None:
             "selected": True,
         }
     ]
+
+
+def test_paper_digest_entries_extract_author_names_and_first_author_institution_from_author_objects() -> None:
+    article = ProcessedArticle(
+        raw=RawArticle(
+            external_id="paper-rich-metadata",
+            title="Rich Metadata Paper",
+            url="https://example.com/paper-rich-metadata",
+            content="Rich Metadata Paper abstract and details.",
+            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            metadata={
+                "paper_id": "2603.13045",
+                "authors": [
+                    {
+                        "name": "Yifeng Liu",
+                        "affiliations": ["Tsinghua University", "Institute A"],
+                    },
+                    {
+                        "name": "Siqi Ouyang",
+                        "affiliations": ["Institute B"],
+                    },
+                ],
+            },
+        ),
+        summary="Rich Metadata Paper summary",
+        keywords=["paper"],
+        score=0.91,
+        importance="high",
+        detail="Rich Metadata Paper detailed reading notes.",
+        category="academic",
+    )
+
+    entries, _ = build_paper_digest_entries([article], selected_identities=set())
+
+    assert entries[0]["authors"] == "Yifeng Liu，Siqi Ouyang"
+    assert entries[0]["affiliations"] == "Tsinghua University"
+
+
+def test_paper_digest_entries_fall_back_to_source_organization_when_institution_missing() -> None:
+    article = ProcessedArticle(
+        raw=RawArticle(
+            external_id="paper-organization-fallback",
+            title="Organization Fallback Paper",
+            url="https://example.com/paper-organization-fallback",
+            content="Organization Fallback Paper abstract and details.",
+            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            metadata={
+                "paper_id": "2603.19224",
+                "authors": [
+                    {"name": "Yang Fu"},
+                    {"name": "Yike Zheng"},
+                ],
+                "organization": {"fullname": "FudanCVL"},
+            },
+        ),
+        summary="Organization Fallback Paper summary",
+        keywords=["paper"],
+        score=0.88,
+        importance="high",
+        detail="Organization Fallback Paper detailed reading notes.",
+        category="academic",
+    )
+
+    entries, _ = build_paper_digest_entries([article], selected_identities=set())
+
+    assert entries[0]["authors"] == "Yang Fu，Yike Zheng"
+    assert entries[0]["affiliations"] == "FudanCVL"
 
 
 def test_paper_identity_normalizes_arxiv_and_doi_variants() -> None:

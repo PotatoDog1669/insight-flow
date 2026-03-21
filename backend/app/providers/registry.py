@@ -18,6 +18,8 @@ def _ensure_loaded() -> None:
     __import__("app.providers.filter")
     __import__("app.providers.global_summary")
     __import__("app.providers.keywords")
+    __import__("app.providers.paper_note")
+    __import__("app.providers.paper_review")
     __import__("app.providers.report")
     _LOADED = True
 

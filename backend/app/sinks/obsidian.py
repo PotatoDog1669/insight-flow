@@ -57,6 +57,27 @@ class ObsidianSink(BaseSink):
                 error="Missing Obsidian file config: vault_path is required for file mode",
             )
 
+        base_dir = target_dir
+        if report.level == "paper":
+            metadata = report.metadata or {}
+            paper_mode = metadata.get("paper_mode")
+            if paper_mode == "digest":
+                report_date = str(metadata.get("report_date") or "").strip()
+                target_dir = base_dir / "DailyPapers"
+                filename = f"{report_date}-论文推荐.md" if report_date else _build_filename(report.title)
+            elif paper_mode == "note":
+                paper_slug = (
+                    str(metadata.get("paper_slug") or "").strip()
+                    or report.title.replace("/", "-").strip()
+                    or "paper-note"
+                )
+                target_dir = base_dir / "DailyPapers" / "Papers"
+                filename = f"{paper_slug}.md"
+            else:
+                target_dir = base_dir
+                filename = _build_filename(report.title)
+        else:
+            target_dir = base_dir
         target_dir.mkdir(parents=True, exist_ok=True)
         output = target_dir / filename
         output.write_text(report.content, encoding="utf-8")

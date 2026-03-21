@@ -31,9 +31,18 @@
 - 核心问题：{{ paper.problem | default("") }}
 - 核心方法：{{ paper.method | default("") }}
 - 关键结果：{{ paper.result | default("") }}
-- 为什么重要：{{ paper.importance | default("") }}
-- 阅读建议：{{ paper.reading_level | default("") }}
-- 详细笔记：{{ paper.detail_link | default("") }}
+{%- set importance = paper.importance | default("", true) | trim -%}
+{%- if importance and importance != "值得重点关注" -%}
+- 为什么重要：{{ importance }}
+{%- endif -%}
+{%- set reading_level = paper.reading_level | default("", true) | trim -%}
+{%- if reading_level and reading_level != "必读" -%}
+- 阅读建议：{{ reading_level }}
+{%- endif -%}
+{%- set detail_link = paper.detail_link | default("", true) | trim -%}
+{%- if detail_link -%}
+- 详细笔记：{{ detail_link }}
+{%- endif -%}
 
 {% endfor -%}
 {% endif -%}

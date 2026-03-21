@@ -9,7 +9,7 @@ import { ArticleCard, type Article as ArticleCardModel } from "@/components/Arti
 import { ReportDocument } from "@/components/report/ReportDocument";
 import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
-import { canonicalizeReportContent, extractOutline, parseReportContent } from "@/lib/report-content-parser";
+import { canonicalizeReportContent, extractOutline, normalizePaperDigestContent, parseReportContent } from "@/lib/report-content-parser";
 import {
   getArticleById,
   getDestinations,
@@ -47,7 +47,8 @@ function getDestinationStatus(report: APIReport, destinationId: Destination["id"
   label: string;
   detail: string;
 } {
-  if (report.published_destination_instance_ids.includes(destinationId)) {
+  const publishedDestinationIds = report.published_destination_instance_ids ?? [];
+  if (publishedDestinationIds.includes(destinationId)) {
     return { state: "success", label: "已同步", detail: "该目标已经拥有当前报告内容。" };
   }
 
@@ -91,8 +92,12 @@ export default function ReportDetailPage() {
         if (cancelled) return;
         setReport(reportData);
         setDestinations((destinationData || []).filter((item) => item.enabled));
+        const normalizedPaperContent =
+          reportData.report_type === "paper"
+            ? normalizePaperDigestContent(reportData.content ?? "", (reportData.metadata ?? {}) as Record<string, unknown>)
+            : reportData.content ?? "";
         const effectiveContent = canonicalizeReportContent(
-          reportData.content ?? "",
+          normalizedPaperContent,
           reportData.events ?? [],
           reportData.global_tldr ?? ""
         );
@@ -142,7 +147,11 @@ export default function ReportDetailPage() {
 
   const effectiveReportContent = useMemo(() => {
     if (!report) return "";
-    return canonicalizeReportContent(report.content ?? "", report.events, report.global_tldr ?? "");
+    const normalizedPaperContent =
+      report.report_type === "paper"
+        ? normalizePaperDigestContent(report.content ?? "", (report.metadata ?? {}) as Record<string, unknown>)
+        : report.content ?? "";
+    return canonicalizeReportContent(normalizedPaperContent, report.events, report.global_tldr ?? "");
   }, [report]);
   const parsedReport = useMemo(() => parseReportContent(effectiveReportContent), [effectiveReportContent]);
   const hasTemplateContent = Boolean(effectiveReportContent.trim() && parsedReport.sections.length > 0);
@@ -257,7 +266,6 @@ export default function ReportDetailPage() {
               </div>
             )}
           </header>
-
           {hasTemplateContent ? (
             <section className="bg-background rounded-2xl border-none sm:border sm:border-border/40 sm:shadow-sm sm:p-8 md:p-10">
               <ReportDocument

@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, date, datetime
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -27,6 +28,10 @@ from app.schemas.report import (
 from app.sinks.registry import get_sink
 
 router = APIRouter()
+_PAPER_DIGEST_SUMMARY_RE = re.compile(
+    r"^##\s*本期导读\s*(?:\n+)(.+?)(?=\n##\s|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 @router.get("", response_model=list[ReportResponse])
@@ -47,6 +52,15 @@ async def list_reports(
     stmt = stmt.order_by(Report.report_date.desc(), Report.created_at.desc())
     result = await db.execute(stmt)
     reports = result.scalars().all()
+    reports = [
+        report
+        for report in reports
+        if not (
+            report.report_type == "paper"
+            and isinstance(report.metadata_, dict)
+            and str(report.metadata_.get("paper_mode") or "").strip().lower() == "note"
+        )
+    ]
     monitor_uuid = _parse_optional_uuid(monitor_id)
     if monitor_uuid is not None:
         reports = [report for report in reports if _report_monitor_id(report) == monitor_uuid]
@@ -237,6 +251,11 @@ def _to_report_response(report: Report, *, include_full_content: bool = True) ->
     tldr = metadata.get("tldr", [])
     if not isinstance(tldr, list):
         tldr = []
+    tldr = [str(item).strip() for item in tldr if str(item).strip()]
+    if not tldr:
+        fallback_tldr = _fallback_report_tldr(report=report, metadata=metadata)
+        if fallback_tldr:
+            tldr = [fallback_tldr]
     events: list[ReportEvent] = []
     global_tldr = ""
     response_metadata: dict = {}
@@ -263,7 +282,7 @@ def _to_report_response(report: Report, *, include_full_content: bool = True) ->
         time_period=report.time_period,  # type: ignore[arg-type]
         report_type=report.report_type,  # type: ignore[arg-type]
         title=report.title,
-        tldr=[str(item) for item in tldr],
+        tldr=tldr,
         article_count=len(report.article_ids or []),
         topics=topics,
         events=events,
@@ -308,3 +327,25 @@ def _resolve_publish_targets(payload: ReportPublishRequest) -> list[str]:
         normalized.append(value)
         seen.add(value)
     return normalized
+
+
+def _fallback_report_tldr(*, report: Report, metadata: dict) -> str:
+    global_tldr = str(metadata.get("global_tldr") or "").strip()
+    if global_tldr:
+        return global_tldr
+    if report.report_type != "paper":
+        return ""
+    if str(metadata.get("paper_mode") or "").strip().lower() != "digest":
+        return ""
+    return _extract_paper_digest_summary(report.content or "")
+
+
+def _extract_paper_digest_summary(content: str) -> str:
+    text = str(content or "").replace("\r\n", "\n")
+    match = _PAPER_DIGEST_SUMMARY_RE.search(text)
+    if not match:
+        return ""
+    summary = match.group(1).strip()
+    summary = re.sub(r"\n{2,}", "\n", summary)
+    summary = re.sub(r"\s+", " ", summary)
+    return summary.strip()
