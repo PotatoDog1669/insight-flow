@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import DestinationsPage from "@/app/destinations/page";
 import {
@@ -121,21 +121,76 @@ describe("DestinationsPage", () => {
 
     expect(screen.getByRole("button", { name: "Obsidian 落盘点" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("heading", { name: "Obsidian" })).toBeInTheDocument();
-    expect(screen.getByText("同步报告到本地 Obsidian。")).toBeInTheDocument();
+    expect(screen.getByText("将报告写入 Obsidian 仓库，或通过本地接口同步。")).toBeInTheDocument();
+    expect(screen.queryByText("当前概览")).not.toBeInTheDocument();
+    expect(screen.queryByText("使用建议")).not.toBeInTheDocument();
   });
 
-  it("keeps destination secrets hidden by default and reveals them on demand", async () => {
+  it("renders localized destination detail copy without english helper text", async () => {
     render(<DestinationsPage />);
 
     await screen.findByRole("heading", { name: "输出配置" });
 
-    expect(screen.queryByText("secret_notion_token")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "显示 Notion Token" }));
-    expect(screen.getByText("secret_notion_token")).toBeInTheDocument();
+    expect(screen.getByText("将报告写入 Obsidian 仓库，或通过本地接口同步。")).toBeInTheDocument();
+    expect(screen.queryByText("Write markdown to your Obsidian vault or REST bridge.")).not.toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "隐藏 Notion Token" }));
-    expect(screen.queryByText("secret_notion_token")).not.toBeInTheDocument();
+  it("uses a compact action area instead of the old status card", async () => {
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+
+    expect(screen.queryByText("启用状态")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前已启用")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "启用落盘点" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑配置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+  });
+
+  it("renders target position under the compact action buttons", async () => {
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+
+    const actionArea = screen.getByTestId("destination-actions");
+    expect(within(actionArea).getByText("目标位置: AI-Reports/")).toBeInTheDocument();
+  });
+
+  it("shows destination details in readonly mode until entering edit mode", async () => {
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    const notionNameInput = screen.getByLabelText("实例名称");
+    expect(notionNameInput).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "编辑配置" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存并启用" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+
+    expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "测试连接" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存并启用" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("实例名称"), {
+      target: { value: "Workspace Obsidian" },
+    });
+    expect(screen.getByLabelText("实例名称")).toHaveValue("Workspace Obsidian");
+  });
+
+  it("keeps editable secret inputs hidden by default and reveals them on demand", async () => {
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
 
     const notionTokenInput = screen.getByPlaceholderText("secret_...");
     expect(notionTokenInput).toHaveAttribute("type", "password");
@@ -147,6 +202,7 @@ describe("DestinationsPage", () => {
     expect(notionTokenInput).toHaveAttribute("type", "password");
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
 
     expect(screen.getByRole("radio", { name: /^REST API/ })).toBeChecked();
 
@@ -166,6 +222,7 @@ describe("DestinationsPage", () => {
     await screen.findByRole("heading", { name: "输出配置" });
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
     fireEvent.change(screen.getByPlaceholderText("https://127.0.0.1:27124"), {
       target: { value: "https://127.0.0.1:27124/" },
     });
@@ -196,6 +253,7 @@ describe("DestinationsPage", () => {
     await screen.findByRole("heading", { name: "输出配置" });
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
     fireEvent.click(screen.getByRole("radio", { name: /^本地文件/ }));
 
     expect(screen.getByRole("radio", { name: /^本地文件/ })).toBeChecked();
@@ -210,6 +268,7 @@ describe("DestinationsPage", () => {
     await screen.findByRole("heading", { name: "输出配置" });
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
     fireEvent.click(screen.getByRole("radio", { name: /^本地文件/ }));
     fireEvent.click(screen.getByRole("button", { name: "自动检测路径" }));
 
@@ -218,6 +277,88 @@ describe("DestinationsPage", () => {
     });
 
     expect(await screen.findByDisplayValue("/Users/leo/Documents/Obsidian Vault")).toBeInTheDocument();
-    expect(screen.getByText("Detected current Obsidian vault.")).toBeInTheDocument();
+    expect(screen.queryByText("Detected current Obsidian vault.")).not.toBeInTheDocument();
+  });
+
+  it("keeps vault auto-detection available in readonly file mode", async () => {
+    mockedGetDestinations.mockResolvedValue([
+      destinationFixtures[0],
+      {
+        ...destinationFixtures[1],
+        config: {
+          mode: "file",
+          vault_path: "/Users/leo/Documents/Obsidian Vault",
+          target_folder: "AI Daily",
+        },
+      },
+    ] as never);
+
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+
+    expect(screen.getByRole("button", { name: "自动检测路径" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测试连接" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "自动检测路径" }));
+
+    await waitFor(() => {
+      expect(mockedDiscoverObsidianVaults).toHaveBeenCalled();
+    });
+
+    expect(await screen.findByDisplayValue("/Users/leo/Documents/Obsidian Vault")).toBeInTheDocument();
+    expect(screen.queryByText("Detected current Obsidian vault.")).not.toBeInTheDocument();
+  });
+
+  it("allows renaming a destination instance and saves the new name", async () => {
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.change(screen.getByLabelText("实例名称"), {
+      target: { value: "Paper Daily" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "保存并启用" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateDestination).toHaveBeenCalledWith(
+        "obsidian",
+        expect.objectContaining({
+          name: "Paper Daily",
+          enabled: true,
+        }),
+      );
+    });
+
+    expect(await screen.findByRole("heading", { name: "Paper Daily" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Paper Daily 落盘点" })).toBeInTheDocument();
+  });
+
+  it("cancels unsaved edits and restores the saved destination state", async () => {
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    fireEvent.change(screen.getByLabelText("实例名称"), {
+      target: { value: "Paper Daily" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://127.0.0.1:27124"), {
+      target: { value: "https://localhost:27124/" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    expect(mockedUpdateDestination).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("实例名称")).toHaveValue("Obsidian");
+    expect(screen.getByLabelText("实例名称")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: "保存并启用" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测试连接" })).not.toBeInTheDocument();
   });
 });

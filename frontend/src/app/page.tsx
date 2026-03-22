@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ReportCard, type Report as ReportCardModel } from "@/components/ReportCard";
 import { getReports, type Report as APIReport } from "@/lib/api";
+import { getReportDisplayTitle } from "@/lib/report-display";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
@@ -31,7 +32,7 @@ function toCardReport(report: APIReport): ReportCardModel {
     id: report.id,
     time_period: report.time_period,
     report_type: report.report_type,
-    title: report.title,
+    title: getReportDisplayTitle(report),
     report_date: report.report_date,
     tldr: report.tldr,
     article_count: report.article_count,

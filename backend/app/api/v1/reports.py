@@ -1,8 +1,8 @@
 """报告 API"""
 
+import re
 import uuid
 from datetime import UTC, date, datetime
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -29,7 +29,7 @@ from app.sinks.registry import get_sink
 
 router = APIRouter()
 _PAPER_DIGEST_SUMMARY_RE = re.compile(
-    r"^##\s*本期导读\s*(?:\n+)(.+?)(?=\n##\s|\Z)",
+    r"^##\s*(?:本期导读|今日锐评|总结)\s*(?:\n+)(.+?)(?=\n##\s|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 

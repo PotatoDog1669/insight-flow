@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeReportContent, extractOutline, parseReportContent } from "@/lib/report-content-parser";
+import {
+  canonicalizeReportContent,
+  extractOutline,
+  normalizePaperDigestContent,
+  parseReportContent,
+} from "@/lib/report-content-parser";
 
 const SAMPLE = `## 概览
 - Event A [↗](https://example.com) [#1](#event-1)
@@ -13,6 +18,36 @@ Source：One line
 - https://example.com`;
 
 describe("report-content-parser", () => {
+  it("ignores yaml frontmatter and parses the authored digest body", () => {
+    const parsed = parseReportContent(`---
+date: 2026-03-20
+keywords:
+  - gui agent
+tags:
+  - daily-papers
+---
+
+# 2026-03-20 论文推荐
+
+## 总结
+本期聚焦 GUI 评测。
+
+## Safety
+
+### 1. Paper A
+
+**核心方法**
+
+方法段落`);
+
+    expect(parsed.sections.map((section) => section.title)).toEqual([
+      "2026-03-20 论文推荐",
+      "总结",
+      "Safety",
+    ]);
+    expect(parsed.sections[2]?.lines.join("\n")).toContain("**核心方法**");
+  });
+
   it("parses sections and event index from template content", () => {
     const parsed = parseReportContent(SAMPLE);
     expect(parsed.sections.map((section) => section.title)).toEqual([
@@ -95,5 +130,58 @@ describe("report-content-parser", () => {
     expect(normalized).toContain("## 概览");
     expect(normalized).toContain("## [A summary](https://example.com/a) #1");
     expect(normalized).toContain("[#1](#event-1)");
+  });
+
+  it("drops deprecated digest detail-note lines instead of patching them back in", () => {
+    const normalized = normalizePaperDigestContent(
+      `---
+date: 2026-03-20
+---
+
+# Paper Digest
+
+### 1. Nemotron-Cascade 2
+**核心方法**
+
+值得重点关注
+
+- 详细笔记：见关联阅读笔记`,
+      {
+        paper_mode: "digest",
+        paper_note_links: [{ report_id: "note-1", title: "Nemotron-Cascade 2" }],
+      }
+    );
+
+    expect(normalized).toContain("**核心方法**");
+    expect(normalized).not.toContain("详细笔记");
+    expect(normalized).not.toContain("/reports/note-1");
+  });
+
+  it("normalizes legacy paper digest headings and section labels for display", () => {
+    const normalized = normalizePaperDigestContent(
+      `# GUI 智能体的评测、安全与长程记忆
+
+## 今日锐评
+
+这是一段旧总结。
+
+## Safety
+
+### 1. Paper A
+
+**锐评**
+
+先看评测再看攻击面。`,
+      {
+        paper_mode: "digest",
+      },
+      "2026-03-22"
+    );
+
+    expect(normalized).toContain("# 2026-03-22 论文推荐");
+    expect(normalized).toContain("## 总结");
+    expect(normalized).toContain("**阅读建议**");
+    expect(normalized).not.toContain("## 今日锐评");
+    expect(normalized).not.toContain("**锐评**");
   });
 });

@@ -26,7 +26,7 @@ export interface OutlineItem {
 const HEADING_RE = /^(#{1,2})\s+(.+)$/;
 const EVENT_INDEX_RE = /\s#(\d{1,3})\s*$/;
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
-const SUMMARY_HINTS = ["全局总结与锐评", "摘要", "执行摘要"];
+const SUMMARY_HINTS = ["全局总结与锐评", "摘要", "执行摘要", "本期导读", "总结"];
 const OVERVIEW_HINT = "概览";
 const CANONICAL_OVERVIEW_HEADING_RE = /^##\s*概览\s*$/m;
 const CANONICAL_EVENT_HEADING_RE = /^##\s+.+\s#\d{1,3}\s*$/m;
@@ -230,52 +230,37 @@ export function canonicalizeReportContent(content: string, events: ReportEvent[]
   return buildCanonicalContent(events, summary);
 }
 
-export function normalizePaperDigestContent(content: string, metadata: Record<string, unknown>): string {
+export function normalizePaperDigestContent(
+  content: string,
+  metadata: Record<string, unknown>,
+  reportDate?: string
+): string {
   const paperMode = typeof metadata.paper_mode === "string" ? metadata.paper_mode : "";
   if (paperMode !== "digest") return content;
 
-  const noteLinksByTitle = new Map<string, string>();
-  const rawLinks = Array.isArray(metadata.paper_note_links) ? metadata.paper_note_links : [];
-  for (const item of rawLinks) {
-    if (!item || typeof item !== "object") continue;
-    const value = item as Record<string, unknown>;
-    const title = typeof value.title === "string" ? normalizeHeadingTitle(value.title) : "";
-    const reportId = typeof value.report_id === "string" ? value.report_id : "";
-    if (title && reportId) {
-      noteLinksByTitle.set(title, reportId);
-    }
-  }
-
   const lines = String(content ?? "").replace(/\r\n/g, "\n").split("\n");
-  let currentPaperTitle = "";
+  const normalizedTitle = reportDate ? `${reportDate} 论文推荐` : "";
+  let titleNormalized = false;
 
   return lines
     .flatMap((line) => {
-      const headingMatch = line.match(/^###\s+\d+\.\s+(.+)$/);
-      if (headingMatch) {
-        currentPaperTitle = normalizeHeadingTitle(headingMatch[1]);
-        return [line];
-      }
-
       const trimmed = line.trim();
-      if (trimmed.startsWith("- 为什么重要：")) {
+      if (trimmed.startsWith("- 详细笔记：")) {
         return [];
       }
-      if (trimmed.startsWith("- 阅读建议：")) {
-        return [];
+      if (!titleNormalized && /^#\s+/.test(trimmed)) {
+        titleNormalized = true;
+        if (normalizedTitle) {
+          return [`# ${normalizedTitle}`];
+        }
       }
-      if (!trimmed.startsWith("- 详细笔记：")) {
-        return [line];
+      if (trimmed === "## 今日锐评" || trimmed === "## 本期导读") {
+        return ["## 总结"];
       }
-      if (trimmed.includes("](/reports/")) {
-        return [line];
+      if (trimmed === "**锐评**") {
+        return ["**阅读建议**"];
       }
-
-      const reportId = noteLinksByTitle.get(currentPaperTitle);
-      if (!reportId) {
-        return [];
-      }
-      return [`- 详细笔记：[查看详细笔记](/reports/${reportId})`];
+      return [line];
     })
     .join("\n");
 }

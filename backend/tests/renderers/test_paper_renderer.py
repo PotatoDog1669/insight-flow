@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from app.collectors.base import RawArticle
-from app.processors.event_models import ProcessedEvent
-from app.processors.pipeline import ProcessedArticle
-from app.renderers.base import RenderContext
-from app.renderers.paper import PaperRenderer
 from app.papers.reporting import (
     build_paper_digest_entries,
     build_paper_identity,
@@ -16,6 +12,10 @@ from app.papers.reporting import (
     build_paper_note_report,
     select_paper_note_candidates,
 )
+from app.processors.event_models import ProcessedEvent
+from app.processors.pipeline import ProcessedArticle
+from app.renderers.base import RenderContext
+from app.renderers.paper import PaperRenderer
 
 
 def _article(
@@ -35,7 +35,7 @@ def _article(
             title=title,
             url=f"https://example.com/{external_id}",
             content=f"{title} abstract and details.",
-            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            published_at=datetime(2026, 3, 20, tzinfo=UTC),
             metadata={
                 "paper_id": paper_id,
                 "authors": authors,
@@ -93,8 +93,18 @@ async def test_paper_renderer_builds_digest_and_marks_note_candidates() -> None:
 
     assert report.title == "2026-03-20 论文推荐"
     assert metadata["paper_mode"] == "digest"
-    assert "本期导读" in report.content
-    assert "推荐论文" in report.content
+    assert report.content.startswith("---\n")
+    assert "date: 2026-03-20" in report.content
+    assert "keywords:" in report.content
+    assert "tags:" in report.content
+    assert "## Properties" not in report.content
+    assert "## 总结" in report.content
+    assert report.content.count("## 总结") == 1
+    assert "## Paper Picks" in report.content
+    assert "**核心方法**" in report.content
+    assert "**对比方法 / Baselines**" in report.content
+    assert "**借鉴意义**" in report.content
+    assert "**阅读建议**" in report.content
 
     paper_note_links = metadata["paper_note_links"]
     assert len(paper_note_links) == 2
@@ -106,8 +116,70 @@ async def test_paper_renderer_builds_digest_and_marks_note_candidates() -> None:
     assert paper_note_links[1]["paper_identity"] == "2602.11111"
     assert "paper_parent_link" not in metadata
     assert report.article_ids == ["paper-1", "paper-2", "paper-3"]
-    assert "核心图" in report.content
+    assert "![MVISTA-4D](https://example.com/figure-1.png)" in report.content
+    assert "- 核心图：" not in report.content
     assert "详细笔记" not in report.content
+
+
+@pytest.mark.asyncio
+async def test_paper_renderer_prefers_review_payload_for_digest_structure() -> None:
+    renderer = PaperRenderer()
+    article = _article(
+        external_id="paper-1",
+        title="World Model Policy",
+        score=0.96,
+        importance="high",
+        paper_id="2603.12345",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+
+    report = await renderer.render(
+        [article],
+        RenderContext(
+            date="2026-03-20",
+            extra={
+                "paper_review_payload": {
+                    "digest_title": "GUI 智能体的评测、安全与长程记忆",
+                    "digest_summary": "本期重点不只是新论文数量，而是方法接口开始明显收敛。",
+                    "papers": [
+                        {
+                            "paper_identity": "2603.12345",
+                            "paper_slug": "world-model-policy",
+                    "title": "World Model Policy",
+                    "authors": ["Alice"],
+                    "affiliations": ["Example Lab"],
+                    "links": ["https://arxiv.org/abs/2603.12345"],
+                    "topic_label": "World Model",
+                    "recommendation": "必读",
+                    "one_line_judgment": "这篇工作终于把方法边界说清楚了。",
+                    "core_problem": "现有方法接口割裂。",
+                            "core_method": "统一 world model 与 policy 表达。",
+                            "key_result": "多任务上超过 baseline。",
+                            "why_it_matters": "更接近可复用框架。",
+                            "reading_advice": "先看方法定义再看实验。",
+                            "note_candidate": True,
+                        }
+                    ],
+                }
+            },
+        ),
+    )
+    metadata = report.metadata or {}
+
+    assert report.content.startswith("---\n")
+    assert "## Properties" not in report.content
+    assert report.title == "2026-03-20 论文推荐"
+    assert "# 2026-03-20 论文推荐" in report.content
+    assert "## 总结" in report.content
+    assert "## 今日锐评" not in report.content
+    assert "## World Model" in report.content
+    assert "- 详细笔记：" not in report.content
+    assert "**核心方法**" in report.content
+    assert "**锐评**" not in report.content
+    assert "**阅读建议**" in report.content
+    assert metadata["selected_paper_identities"] == ["2603.12345"]
+    assert metadata["paper_recommendations"] == [{"paper_identity": "2603.12345", "recommendation": "必读"}]
 
 
 @pytest.mark.asyncio
@@ -181,6 +253,31 @@ async def test_paper_renderer_fallback_digest_summary_uses_paper_summaries_with_
 
 
 @pytest.mark.asyncio
+async def test_paper_renderer_cleans_blockquote_style_digest_fields() -> None:
+    renderer = PaperRenderer()
+    article = _article(
+        external_id="paper-1",
+        title="OS-Themis",
+        score=0.96,
+        importance="high",
+        paper_id="2603.19191",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+    article.what = "发布论文提出多智能体奖励评审框架。"
+    article.detail = "> OS-Themis 通过多智能体评审与里程碑分解，提升 GUI 奖励建模质量。"
+    article.metrics = ["AndroidWorld 在线 RL 提升 10.3%"]
+
+    report = await renderer.render([article], RenderContext(date="2026-03-20"))
+
+    assert "核心方法：> " not in report.content
+    assert "**核心方法**" in report.content
+    assert "OS-Themis 通过多智能体评审与里程碑分解，提升 GUI 奖励建模质量。" in report.content
+    assert "**对比方法 / Baselines**" in report.content
+    assert "AndroidWorld 在线 RL 提升 10.3%" in report.content
+
+
+@pytest.mark.asyncio
 async def test_paper_note_report_uses_independent_note_metadata() -> None:
     article = _article(
         external_id="paper-note-1",
@@ -211,9 +308,54 @@ async def test_paper_note_report_uses_independent_note_metadata() -> None:
         "title": "2026-03-20 论文推荐",
     }
     assert report.article_ids == ["paper-note-1"]
-    assert "论文定位" in report.content
+    assert "元信息" in report.content
+    assert "一句话总结" in report.content
+    assert "批判性思考" in report.content
     assert "回到推荐页" in report.content
-    assert "2026-03-20 论文推荐" in report.content
+    assert "[2026-03-20 论文推荐](/reports/digest-1)" in report.content
+
+
+@pytest.mark.asyncio
+async def test_paper_note_report_prefers_note_payload_sections() -> None:
+    article = _article(
+        external_id="paper-note-stage-1",
+        title="World Model Policy",
+        score=0.96,
+        importance="high",
+        paper_id="2603.12345",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+
+    report = build_paper_note_report(
+        article,
+        context=RenderContext(date="2026-03-20"),
+        parent_report_id="digest-1",
+        digest_title="2026-03-20 论文推荐",
+        note_payload={
+            "paper_identity": "2603.12345",
+            "paper_slug": "world-model-policy",
+            "title": "World Model Policy",
+            "authors": ["Alice"],
+            "affiliations": ["Example Lab"],
+            "links": ["https://arxiv.org/abs/2603.12345"],
+            "summary": "这篇工作把 world model 和 policy 学习的接口真正打通了。",
+            "core_contributions": ["统一了训练目标", "降低了规划成本"],
+            "problem_background": ["现有方法推理开销高"],
+            "method_breakdown": ["分层建模", "基于 latent 的规划"],
+            "figure_notes": ["图 1 展示了整体训练流程。"],
+            "experiments": ["在多个控制任务上优于 baseline"],
+            "strengths": ["结构完整"],
+            "limitations": ["真实世界验证有限"],
+            "related_reading": ["DreamerV3"],
+            "next_steps": ["关注真实机器人迁移"],
+        },
+    )
+
+    assert "统一了训练目标" in report.content
+    assert "现有方法推理开销高" in report.content
+    assert "分层建模" in report.content
+    assert "DreamerV3" in report.content
 
 
 @pytest.mark.asyncio
@@ -243,6 +385,29 @@ async def test_paper_note_report_renders_visual_blocks_from_enriched_metadata() 
     assert "### Figure 1: Pipeline overview" in report.content
     assert "![Figure 1: Pipeline overview](https://arxiv.org/html/2603.19191v1/x1.png)" in report.content
     assert "https://demo.example.com/assets/teaser.png" in report.content
+
+
+@pytest.mark.asyncio
+async def test_paper_note_report_sanitizes_stringified_list_fields() -> None:
+    article = _article(
+        external_id="paper-note-sanitized",
+        title="Structured Paper",
+        score=0.95,
+        importance="high",
+        paper_id="2603.19999",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+    article.detail = "['方法分为编码器与时序建模两部分。', '作者强调多视角一致性。']"
+    article.evidence = "['实验显示在公开视频基准上有提升。', '摘要提到真实世界泛化更稳定。']"
+    article.unknowns = "['未披露完整训练成本。', '代码是否开源未说明。']"
+
+    report = build_paper_note_report(article, context=RenderContext(date="2026-03-20"))
+
+    assert "['" not in report.content
+    assert "方法分为编码器与时序建模两部分。" in report.content
+    assert "实验显示在公开视频基准上有提升。" in report.content
+    assert "未披露完整训练成本。" in report.content
 
 
 def test_paper_note_links_helper_returns_only_related_note_candidates() -> None:
@@ -420,7 +585,7 @@ def test_paper_digest_entries_extract_author_names_and_first_author_institution_
             title="Rich Metadata Paper",
             url="https://example.com/paper-rich-metadata",
             content="Rich Metadata Paper abstract and details.",
-            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            published_at=datetime(2026, 3, 20, tzinfo=UTC),
             metadata={
                 "paper_id": "2603.13045",
                 "authors": [
@@ -456,7 +621,7 @@ def test_paper_digest_entries_fall_back_to_source_organization_when_institution_
             title="Organization Fallback Paper",
             url="https://example.com/paper-organization-fallback",
             content="Organization Fallback Paper abstract and details.",
-            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            published_at=datetime(2026, 3, 20, tzinfo=UTC),
             metadata={
                 "paper_id": "2603.19224",
                 "authors": [
@@ -496,7 +661,7 @@ def test_paper_identity_normalizes_arxiv_and_doi_variants() -> None:
             title="DOI Variant",
             url="https://example.com/paper-doi",
             content="DOI Variant abstract and details.",
-            published_at=datetime(2026, 3, 20, tzinfo=timezone.utc),
+            published_at=datetime(2026, 3, 20, tzinfo=UTC),
             metadata={
                 "doi": "https://doi.org/10.1000/182",
                 "authors": ["Author"],

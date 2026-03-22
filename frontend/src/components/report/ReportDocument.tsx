@@ -14,6 +14,7 @@ interface ReportDocumentProps {
   events: ReportEvent[];
   globalTldr: string;
   topics: ReportTopic[];
+  suppressFirstHeading?: boolean;
 }
 
 interface RuntimeMetaSplit {
@@ -96,6 +97,14 @@ const markdownComponents: Components = {
   ul: ({ children }) => <ul className="mt-4 list-disc space-y-1 pl-6 text-sm leading-6 text-muted-foreground">{children}</ul>,
   ol: ({ children }) => <ol className="mt-4 list-decimal space-y-1 pl-6 text-sm leading-6 text-muted-foreground">{children}</ol>,
   li: ({ children }) => <li>{children}</li>,
+  img: ({ src, alt }) => (
+    // Render authored paper digest figures as standalone visual blocks.
+    <img
+      src={String(src ?? "")}
+      alt={String(alt ?? "")}
+      className="mt-4 w-full rounded-xl border border-border/40 object-cover"
+    />
+  ),
   a: ({ href, children }) => {
     const link = String(href ?? "").trim();
     if (link.startsWith("#")) {
@@ -155,7 +164,7 @@ function headingClass(level: 1 | 2): string {
   return level === 1 ? "text-3xl font-bold tracking-tight" : "text-xl font-semibold tracking-tight";
 }
 
-export function ReportDocument({ content, events, globalTldr, topics }: ReportDocumentProps) {
+export function ReportDocument({ content, events, globalTldr, topics, suppressFirstHeading = false }: ReportDocumentProps) {
   const effectiveContent = useMemo(
     () => canonicalizeReportContent(content, events, globalTldr),
     [content, events, globalTldr]
@@ -214,7 +223,9 @@ export function ReportDocument({ content, events, globalTldr, topics }: ReportDo
 
         return (
           <section key={section.id} id={section.id} className="space-y-3">
-            <HeadingTag className={headingClass(section.level)}>{section.title}</HeadingTag>
+            {!(suppressFirstHeading && idx === 0 && section.level === 1) && (
+              <HeadingTag className={headingClass(section.level)}>{section.title}</HeadingTag>
+            )}
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeSanitize]}

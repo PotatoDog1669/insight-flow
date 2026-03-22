@@ -1,0 +1,23 @@
+site_key: groq
+profile_version: v1
+start_urls:
+  - https://groq.com/blog/
+list_page:
+  item_selector: article a[href*='/blog/']
+  url_attr: href
+detail_page:
+  content_selector: article
+  remove_selectors:
+    - script
+    - style
+    - nav
+    - footer
+    - header
+    - .share
+    - .social
+  title_selector: h1
+  published_selector: time
+  published_attr: datetime
+normalization:
+  url_prefix: https://groq.com
+  min_content_chars: 300

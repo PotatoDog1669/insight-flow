@@ -312,3 +312,44 @@ def test_test_source_builds_reddit_feed_url_from_subreddits(client, monkeypatch)
     assert parsed.path == "/search.rss"
     assert params["sort"][0] == "new"
     assert params["q"][0] == "subreddit:LocalLLaMA OR subreddit:OpenAI OR subreddit:MachineLearning"
+
+
+def test_test_source_disables_rss_detail_fetch_for_connectivity_checks(client, monkeypatch) -> None:
+    collected_configs: list[dict] = []
+
+    class StubCollector:
+        async def collect(self, config: dict) -> list[RawArticle]:
+            collected_configs.append(dict(config))
+            return [
+                RawArticle(
+                    external_id="item-1",
+                    title="Feed Item",
+                    url="https://example.com/item-1",
+                )
+            ]
+
+    monkeypatch.setattr("app.api.v1.sources.get_collector", lambda _: StubCollector())
+
+    create_resp = client.post(
+        "/api/v1/sources",
+        json={
+            "name": "Qwen",
+            "category": "blog",
+            "collect_method": "rss",
+            "config": {
+                "feed_url": "https://qwenlm.github.io/blog/index.xml",
+                "max_items": 30,
+                "fetch_detail": True,
+                "reader_mode": "prefer",
+                "reader_fallback_enabled": True,
+            },
+            "enabled": True,
+        },
+    )
+    assert create_resp.status_code == 201
+    source_id = create_resp.json()["id"]
+
+    response = client.post(f"/api/v1/sources/{source_id}/test", json={})
+
+    assert response.status_code == 200
+    assert collected_configs[0]["fetch_detail"] is False

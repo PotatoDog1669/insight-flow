@@ -81,7 +81,7 @@ export function DestinationListPanel({
                   className={cn(
                     "group rounded-2xl border transition-all",
                     selected
-                      ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/10"
+                      ? "border-slate-900 bg-slate-50 shadow-sm ring-1 ring-inset ring-slate-900 text-foreground"
                       : "border-border/70 bg-background hover:border-slate-300 hover:bg-slate-50/70",
                   )}
                 >
@@ -95,13 +95,12 @@ export function DestinationListPanel({
                     <div
                       className={cn(
                         "mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border",
-                        selected
-                          ? "border-white/20 bg-white/10 text-white"
-                          : destination.type === "notion"
-                            ? "border-slate-200 bg-white text-slate-900"
-                            : destination.type === "obsidian"
-                              ? "border-violet-200 bg-violet-50 text-violet-700"
-                              : "border-amber-200 bg-amber-50 text-amber-700",
+                        destination.type === "notion"
+                          ? "border-slate-200 bg-white text-slate-900"
+                          : destination.type === "obsidian"
+                            ? "border-violet-200 bg-violet-50 text-violet-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700",
+                        selected && "shadow-sm"
                       )}
                     >
                       {getTypeIcon(destination.type)}
@@ -112,14 +111,14 @@ export function DestinationListPanel({
                         <span
                           className={cn(
                             "inline-flex h-2.5 w-2.5 rounded-full",
-                            destination.enabled ? "bg-emerald-400" : selected ? "bg-white/40" : "bg-slate-300",
+                            destination.enabled ? "bg-emerald-500" : "bg-slate-300",
                           )}
                         />
                       </div>
-                      <p className={cn("mt-1 text-xs", selected ? "text-white/70" : "text-muted-foreground")}>
+                      <p className={cn("mt-1 text-xs", selected ? "text-slate-600 font-medium" : "text-muted-foreground")}>
                         {getTypeLabel(destination.type)}
                       </p>
-                      <p className={cn("mt-3 truncate text-xs leading-5", selected ? "text-white/80" : "text-slate-600")}>
+                      <p className={cn("mt-3 truncate text-xs leading-5", selected ? "text-slate-700" : "text-slate-600")}>
                         {getDestinationSummary(destination)}
                       </p>
                     </div>

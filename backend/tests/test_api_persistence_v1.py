@@ -1,9 +1,8 @@
 """Persistence-oriented API tests (DB-backed behavior)."""
 
 import asyncio
-from datetime import date, datetime, timezone
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -54,7 +53,7 @@ def test_reports_list_hides_paper_note_reports_from_summary_views(client: TestCl
 
     async def _seed_paper_reports() -> None:
         async with session_factory() as session:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             user_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
             monitor_id = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
             digest_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
@@ -108,12 +107,15 @@ def test_reports_list_hides_paper_note_reports_from_summary_views(client: TestCl
     assert "Single Paper Note" not in titles
 
 
-def test_reports_list_derives_paper_digest_tldr_from_intro_when_missing_metadata(client: TestClient, db_session_factory) -> None:
+def test_reports_list_derives_paper_digest_tldr_from_intro_when_missing_metadata(
+    client: TestClient,
+    db_session_factory,
+) -> None:
     session_factory, _ = db_session_factory
 
     async def _seed_paper_digest() -> None:
         async with session_factory() as session:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             user_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
             digest = Report(
                 id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
@@ -123,9 +125,9 @@ def test_reports_list_derives_paper_digest_tldr_from_intro_when_missing_metadata
                 title="2026-03-20 论文推荐",
                 content=(
                     "# 2026-03-20 论文推荐\n\n"
-                    "## 本期导读\n\n"
+                    "## 今日锐评\n\n"
                     "本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。\n\n"
-                    "## 推荐论文\n\n"
+                    "## World Model\n\n"
                     "### 1. Example Paper"
                 ),
                 article_ids=[],
@@ -293,6 +295,82 @@ def test_create_monitor_persists_report_type(client: TestClient, db_session_fact
     assert monitor.ai_routing["providers"]["llm_openai"]["model"] == "gpt-4o-mini"
 
 
+def test_create_monitor_persists_arxiv_expansion_and_single_ai_provider(client: TestClient, db_session_factory) -> None:
+    source_create_response = client.post(
+        "/api/v1/sources",
+        json={
+            "name": "arXiv",
+            "category": "academic",
+            "collect_method": "rss",
+            "config": {
+                "arxiv_api": True,
+                "feed_url": "https://export.arxiv.org/api/query",
+                "categories": ["cs.AI"],
+            },
+            "enabled": True,
+        },
+    )
+    assert source_create_response.status_code == 201
+    arxiv_source = source_create_response.json()
+
+    response = client.post(
+        "/api/v1/monitors",
+        json=monitor_create_payload(
+            "Arxiv Intent Monitor",
+            [arxiv_source["id"]],
+            report_type="paper",
+            source_overrides={
+                arxiv_source["id"]: {
+                    "keywords": ["webagent"],
+                    "max_results": 40,
+                }
+            },
+            ai_provider="llm_codex",
+        ),
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["ai_provider"] == "llm_codex"
+    assert payload["source_overrides"][arxiv_source["id"]]["expanded_keywords"] == [
+        "webagent",
+        "web agents",
+        "web navigation",
+        "browser agent",
+        "gui agent",
+        "computer use",
+    ]
+
+    session_factory, _ = db_session_factory
+
+    async def _fetch_monitor() -> Monitor | None:
+        async with session_factory() as session:
+            result = await session.execute(select(Monitor).where(Monitor.name == "Arxiv Intent Monitor"))
+            return result.scalars().first()
+
+    monitor = asyncio.run(_fetch_monitor())
+    assert monitor is not None
+    assert monitor.source_overrides == {
+        arxiv_source["id"]: {
+            "keywords": ["webagent"],
+            "expanded_keywords": [
+                "webagent",
+                "web agents",
+                "web navigation",
+                "browser agent",
+                "gui agent",
+                "computer use",
+            ],
+            "max_results": 40,
+        }
+    }
+    assert monitor.ai_routing["stages"]["filter"]["primary"] == "llm_codex"
+    assert monitor.ai_routing["stages"]["keywords"]["primary"] == "llm_codex"
+    assert monitor.ai_routing["stages"]["global_summary"]["primary"] == "llm_codex"
+    assert monitor.ai_routing["stages"]["report"]["primary"] == "llm_codex"
+    assert monitor.ai_routing["stages"]["paper_review"]["primary"] == "llm_codex"
+    assert monitor.ai_routing["stages"]["paper_note"]["primary"] == "llm_codex"
+
+
 def test_update_monitor_with_null_ai_routing_clears_override(client: TestClient, db_session_factory) -> None:
     create_response = client.post(
         "/api/v1/monitors",
@@ -331,6 +409,48 @@ def test_update_monitor_with_null_ai_routing_clears_override(client: TestClient,
     monitor = asyncio.run(_fetch_monitor())
     assert monitor is not None
     assert monitor.ai_routing == {}
+
+
+def test_list_monitors_backfills_legacy_paper_stage_routes_in_response(client: TestClient, db_session_factory) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _seed_legacy_monitor() -> None:
+        async with session_factory() as session:
+            monitor = Monitor(
+                id=uuid.uuid4(),
+                user_id=uuid.UUID("99999999-9999-9999-9999-999999999999"),
+                name="Legacy Paper Monitor",
+                time_period="daily",
+                report_type="paper",
+                source_ids=["11111111-1111-1111-1111-111111111111"],
+                source_overrides={},
+                ai_routing={
+                    "stages": {
+                        "filter": {"primary": "llm_codex"},
+                        "keywords": {"primary": "llm_codex"},
+                        "global_summary": {"primary": "llm_codex"},
+                        "report": {"primary": "llm_codex"},
+                    }
+                },
+                destination_ids=[],
+                destination_instance_ids=[],
+                window_hours=24,
+                custom_schedule=None,
+                enabled=True,
+            )
+            session.add(monitor)
+            await session.commit()
+
+    asyncio.run(_seed_legacy_monitor())
+
+    response = client.get("/api/v1/monitors")
+
+    assert response.status_code == 200
+    items = response.json()
+    legacy = next(item for item in items if item["name"] == "Legacy Paper Monitor")
+    assert legacy["ai_provider"] == "llm_codex"
+    assert legacy["ai_routing"]["stages"]["paper_review"]["primary"] == "llm_codex"
+    assert legacy["ai_routing"]["stages"]["paper_note"]["primary"] == "llm_codex"
 
 
 def test_update_destination_persists_to_user_settings(client: TestClient, db_session_factory) -> None:

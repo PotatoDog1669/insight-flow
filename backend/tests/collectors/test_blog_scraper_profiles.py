@@ -160,3 +160,115 @@ async def test_cursor_profile_extracts_recent_blog_posts(monkeypatch: pytest.Mon
     assert items[0].url == post_url
     assert items[0].title == "Build agents that run automatically"
     assert "automations for recurring agent workflows" in (items[0].content or "")
+
+
+@pytest.mark.asyncio
+async def test_blog_scraper_skips_anchor_links_and_prefers_detail_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_url = "https://example.com/blog"
+    post_url = "https://example.com/blog/launch"
+
+    async def fake_get(self, url, *args, **kwargs):
+        key = str(url)
+        if key == list_url:
+            return DummyResponse(
+                200,
+                text=f"""
+                <html><body>
+                  <a href="#content">Skip to content</a>
+                  <a href="{post_url}">Read More</a>
+                </body></html>
+                """,
+            )
+        if key == post_url:
+            return DummyResponse(
+                200,
+                text="""
+                <html><body>
+                  <main>
+                    <h1>Launch Notes</h1>
+                    <article>
+                      <p>Detailed launch notes for the collector test.</p>
+                      <p>This should be the only collected article.</p>
+                    </article>
+                  </main>
+                </body></html>
+                """,
+            )
+        if key == f"{list_url}#content":
+            return DummyResponse(200, text="<html><body><main><p>Navigation shell</p></main></body></html>")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = BlogScraperCollector()
+    items = await collector.collect(
+        {
+            "profile": {
+                "site_key": "anchor_filter",
+                "start_urls": [list_url],
+                "list_page": {"item_selector": "a[href]", "url_attr": "href"},
+                "detail_page": {"content_selector": "article"},
+                "normalization": {"min_content_chars": 20},
+            },
+            "max_items": 5,
+        }
+    )
+
+    assert len(items) == 1
+    assert items[0].url == post_url
+    assert items[0].title == "Launch Notes"
+
+
+@pytest.mark.asyncio
+async def test_blog_scraper_prefers_meaningful_duplicate_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_url = "https://example.com/news"
+    post_url = "https://example.com/news/post-1"
+
+    async def fake_get(self, url, *args, **kwargs):
+        key = str(url)
+        if key == list_url:
+            return DummyResponse(
+                200,
+                text=f"""
+                <html><body>
+                  <a href="{post_url}">Real article title</a>
+                  <a href="{post_url}">Read More</a>
+                </body></html>
+                """,
+            )
+        if key == post_url:
+            return DummyResponse(
+                200,
+                text="""
+                <html><body>
+                  <article>
+                    <h1>Real article title</h1>
+                    <p>This entry should keep the better list title instead of the generic duplicate.</p>
+                  </article>
+                </body></html>
+                """,
+            )
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = BlogScraperCollector()
+    items = await collector.collect(
+        {
+            "profile": {
+                "site_key": "duplicate_title",
+                "start_urls": [list_url],
+                "list_page": {"item_selector": "a[href]", "url_attr": "href"},
+                "detail_page": {"content_selector": "article"},
+                "normalization": {"min_content_chars": 20},
+            },
+            "max_items": 5,
+        }
+    )
+
+    assert len(items) == 1
+    assert items[0].title == "Real article title"

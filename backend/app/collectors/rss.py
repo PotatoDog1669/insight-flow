@@ -253,19 +253,7 @@ def _build_arxiv_api_url(config: dict, max_items: int) -> str:
         or config.get("rss_url")
         or "https://export.arxiv.org/api/query"
     ).strip()
-    search_query = str(config.get("search_query") or "").strip()
-    if not search_query:
-        keyword_expr = _join_terms(
-            [f"all:{kw}" for kw in _normalize_str_list(config.get("keywords"))],
-            operator=str(config.get("keyword_operator") or "OR"),
-        )
-        category_expr = _join_terms(
-            [f"cat:{cat}" for cat in _normalize_str_list(config.get("categories"))],
-            operator=str(config.get("category_operator") or "OR"),
-        )
-        parts = [expr for expr in [keyword_expr, category_expr] if expr]
-        search_query = " AND ".join(parts)
-
+    search_query = _build_arxiv_search_query(config)
     if not search_query:
         raise ValueError("arXiv API query requires search_query or keywords/categories")
 
@@ -281,6 +269,63 @@ def _build_arxiv_api_url(config: dict, max_items: int) -> str:
         sep = "&" if not base_url.endswith("?") and not base_url.endswith("&") else ""
         return f"{base_url}{sep}{encoded}"
     return f"{base_url}?{encoded}"
+
+
+def _build_arxiv_search_query(config: dict) -> str:
+    search_query = str(config.get("search_query") or "").strip()
+    submitted_date_expr = _build_arxiv_submitted_date_expr(
+        config.get("submitted_date_from"),
+        config.get("submitted_date_to"),
+    )
+    if search_query:
+        if submitted_date_expr and "submittedDate:[" not in search_query:
+            return f"{search_query} AND {submitted_date_expr}"
+        return search_query
+
+    keyword_expr = _join_terms(
+        [_build_arxiv_keyword_term(keyword) for keyword in _normalize_str_list(config.get("keywords"))],
+        operator=str(config.get("keyword_operator") or "OR"),
+    )
+    category_expr = _join_terms(
+        [f"cat:{cat}" for cat in _normalize_str_list(config.get("categories"))],
+        operator=str(config.get("category_operator") or "OR"),
+    )
+    parts = [expr for expr in [keyword_expr, category_expr, submitted_date_expr] if expr]
+    return " AND ".join(parts)
+
+
+def _build_arxiv_keyword_term(keyword: str) -> str:
+    normalized = " ".join(keyword.replace('"', " ").split())
+    if not normalized:
+        return ""
+    if " " in normalized:
+        return f'all:"{normalized}"'
+    return f"all:{normalized}"
+
+
+def _build_arxiv_submitted_date_expr(start: object, end: object) -> str:
+    start_value = _format_arxiv_datetime_value(start)
+    end_value = _format_arxiv_datetime_value(end)
+    if not start_value or not end_value:
+        return ""
+    return f"submittedDate:[{start_value} TO {end_value}]"
+
+
+def _format_arxiv_datetime_value(value: object) -> str:
+    if isinstance(value, datetime):
+        normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return normalized.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if len(raw) == 12 and raw.isdigit():
+        return raw
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return ""
+    normalized = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return normalized.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
 
 
 def _normalize_str_list(raw: object) -> list[str]:

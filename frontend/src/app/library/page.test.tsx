@@ -112,7 +112,7 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Report")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
       expect(screen.getByText("Infra Report")).toBeInTheDocument();
     });
 
@@ -120,7 +120,7 @@ describe("LibraryPage", () => {
       target: { value: "monitor-1" },
     });
 
-    expect(screen.getByText("Agent Report")).toBeInTheDocument();
+    expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     expect(screen.queryByText("Infra Report")).not.toBeInTheDocument();
   });
 
@@ -140,16 +140,16 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Report")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Agent Report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete AI 早报 2026-03-02" }));
 
     await waitFor(() => {
       expect(window.confirm).toHaveBeenCalledWith("确认删除这份报告吗？");
       expect(mockedDeleteReport).toHaveBeenCalledWith("report-1");
     });
-    expect(screen.queryByText("Agent Report")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI 早报 2026-03-02")).not.toBeInTheDocument();
   });
 
   it("does not delete when the archive confirmation is cancelled", async () => {
@@ -157,16 +157,16 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Report")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Agent Report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete AI 早报 2026-03-02" }));
 
     await waitFor(() => {
       expect(window.confirm).toHaveBeenCalledWith("确认删除这份报告吗？");
     });
     expect(mockedDeleteReport).not.toHaveBeenCalled();
-    expect(screen.getByText("Agent Report")).toBeInTheDocument();
+    expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
   });
 
   it("renders paper reports in the archive list", async () => {
@@ -196,7 +196,7 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Paper Report")).toBeInTheDocument();
+      expect(screen.getByText("2026-03-02 论文推荐")).toBeInTheDocument();
     });
   });
 
@@ -247,7 +247,7 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Paper Digest")).toBeInTheDocument();
+      expect(screen.getByText("2026-03-02 论文推荐")).toBeInTheDocument();
       expect(screen.queryByText("Paper Note Report")).not.toBeInTheDocument();
     });
   });

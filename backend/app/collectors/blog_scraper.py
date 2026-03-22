@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from datetime import timezone
+import re
 from typing import Any
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 import httpx
@@ -53,7 +55,9 @@ class BlogScraperCollector(BaseCollector):
 
             dedup: dict[str, dict[str, Any]] = {}
             for entry in entries:
-                dedup[entry["url"]] = entry
+                existing = dedup.get(entry["url"])
+                if existing is None or _is_better_entry(candidate=entry, existing=existing):
+                    dedup[entry["url"]] = entry
             selected_entries = list(dedup.values())[:max_items]
 
             results: list[RawArticle] = []
@@ -64,13 +68,13 @@ class BlogScraperCollector(BaseCollector):
                     response.raise_for_status()
                 except Exception:
                     continue
-                content, published_at = _extract_detail(response.text, detail_page)
+                content, published_at, detail_title = _extract_detail(response.text, detail_page)
                 if len(content) < min_content_chars:
                     continue
                 results.append(
                     RawArticle(
                         external_id=url,
-                        title=entry.get("title") or url,
+                        title=_resolve_article_title(entry.get("title"), detail_title, url),
                         url=url,
                         content=content,
                         published_at=published_at or entry.get("published_at"),
@@ -132,9 +136,11 @@ def _extract_list_entries(
     for item in soup.select(item_selector):
         url_node = item.select_one(url_selector) if url_selector else item
         raw_url = url_node.get(url_attr) if url_node and hasattr(url_node, "get") else None
-        if not raw_url:
+        if not raw_url or _should_skip_raw_url(raw_url):
             continue
         normalized_url = _normalize_url(raw_url, base_url=base_url, url_prefix=url_prefix)
+        if _should_skip_normalized_url(normalized_url, base_url=base_url):
+            continue
         title_node = item.select_one(title_selector) if title_selector else item
         title = title_node.get_text(" ", strip=True) if title_node else normalized_url
 
@@ -150,7 +156,7 @@ def _extract_list_entries(
     return entries
 
 
-def _extract_detail(html: str, detail_page: dict) -> tuple[str, datetime | None]:
+def _extract_detail(html: str, detail_page: dict) -> tuple[str, datetime | None, str | None]:
     soup = BeautifulSoup(html, "html.parser")
     for selector in detail_page.get("remove_selectors", []):
         for node in soup.select(selector):
@@ -159,6 +165,7 @@ def _extract_detail(html: str, detail_page: dict) -> tuple[str, datetime | None]
     content_selector = detail_page.get("content_selector", "article")
     container = soup.select_one(content_selector) or soup.select_one("main") or soup.body or soup
     content = container.get_text("\n", strip=True) if container else ""
+    detail_title = _extract_detail_title(soup, detail_page)
     published_at = None
     published_selector = detail_page.get("published_selector")
     if published_selector:
@@ -167,7 +174,7 @@ def _extract_detail(html: str, detail_page: dict) -> tuple[str, datetime | None]
             published_attr = detail_page.get("published_attr")
             raw_published = published_node.get(published_attr) if published_attr else published_node.get_text(" ", strip=True)
             published_at = _parse_datetime(raw_published)
-    return content.strip(), published_at
+    return content.strip(), published_at, detail_title
 
 
 def _normalize_url(raw_url: str, base_url: str, url_prefix: str | None) -> str:
@@ -187,3 +194,96 @@ def _parse_datetime(raw: str | None) -> datetime | None:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def _extract_detail_title(soup: BeautifulSoup, detail_page: dict) -> str | None:
+    title_selector = detail_page.get("title_selector")
+    if isinstance(title_selector, str) and title_selector.strip():
+        title_node = soup.select_one(title_selector)
+        if title_node:
+            title_attr = detail_page.get("title_attr")
+            if title_attr:
+                title_value = title_node.get(title_attr)
+                if isinstance(title_value, str) and title_value.strip():
+                    return title_value.strip()
+            title_text = title_node.get_text(" ", strip=True)
+            if title_text:
+                return title_text
+
+    h1 = soup.select_one("h1")
+    if h1:
+        title_text = h1.get_text(" ", strip=True)
+        if title_text:
+            return title_text
+
+    if soup.title:
+        title_text = soup.title.get_text(" ", strip=True)
+        if title_text:
+            return title_text
+    return None
+
+
+def _should_skip_raw_url(raw_url: str) -> bool:
+    value = raw_url.strip()
+    if not value:
+        return True
+    lowered = value.lower()
+    return lowered.startswith(("#", "javascript:", "mailto:", "tel:"))
+
+
+def _should_skip_normalized_url(normalized_url: str, *, base_url: str) -> bool:
+    parsed = urlparse(normalized_url)
+    if parsed.scheme not in {"http", "https"}:
+        return True
+    base_parsed = urlparse(base_url)
+    same_document = (
+        parsed.scheme == base_parsed.scheme
+        and parsed.netloc == base_parsed.netloc
+        and parsed.path == base_parsed.path
+        and parsed.fragment
+        and not parsed.query
+    )
+    return same_document
+
+
+def _title_quality(title: str | None, url: str) -> tuple[int, int]:
+    normalized = (title or "").strip()
+    if not normalized:
+        return (0, 0)
+    if normalized == url:
+        return (1, len(normalized))
+    if _looks_like_placeholder_title(normalized):
+        return (2, len(normalized))
+    return (3, len(normalized))
+
+
+def _looks_like_placeholder_title(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", title.strip()).lower()
+    return normalized in {
+        "read more",
+        "learn more",
+        "skip to content",
+        "skip to main content",
+        "skip to main menu",
+        "skip to footer",
+        "company",
+        "products",
+        "groq",
+        "简体中文",
+        "×",
+        "了解更多",
+    }
+
+
+def _is_better_entry(*, candidate: dict[str, Any], existing: dict[str, Any]) -> bool:
+    candidate_quality = _title_quality(str(candidate.get("title") or ""), str(candidate.get("url") or ""))
+    existing_quality = _title_quality(str(existing.get("title") or ""), str(existing.get("url") or ""))
+    if candidate_quality != existing_quality:
+        return candidate_quality > existing_quality
+    return bool(candidate.get("published_at")) and not existing.get("published_at")
+
+
+def _resolve_article_title(list_title: str | None, detail_title: str | None, url: str) -> str:
+    if detail_title and _title_quality(detail_title, url) > _title_quality(list_title, url):
+        return detail_title
+    return (list_title or detail_title or url).strip() or url

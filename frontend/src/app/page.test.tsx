@@ -137,7 +137,7 @@ describe("DiscoverPage", () => {
     render(<DiscoverPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Paper Brief")).toBeInTheDocument();
+      expect(screen.getByText("2026-03-02 论文推荐")).toBeInTheDocument();
       expect(
         screen.getByText("本期重点不只是新论文数量，而是后训练强化学习与 GUI 奖励建模两条线开始进入更可复用的工程阶段。")
       ).toBeInTheDocument();
@@ -191,7 +191,7 @@ describe("DiscoverPage", () => {
     render(<DiscoverPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Paper Digest")).toBeInTheDocument();
+      expect(screen.getByText("2026-03-02 论文推荐")).toBeInTheDocument();
       expect(screen.queryByText("Paper Note Report")).not.toBeInTheDocument();
     });
   });
@@ -223,7 +223,7 @@ describe("DiscoverPage", () => {
     render(<DiscoverPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Brief")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     });
 
     expect(screen.queryByRole("button", { name: "删除报告" })).not.toBeInTheDocument();

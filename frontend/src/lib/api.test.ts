@@ -16,7 +16,7 @@ describe("api", () => {
     await expect(deleteMonitor("monitor-1")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/monitors/monitor-1",
+      "http://127.0.0.1:8000/api/v1/monitors/monitor-1",
       expect.objectContaining({
         method: "DELETE",
       })
@@ -38,6 +38,35 @@ describe("api", () => {
     await expect(getMonitors()).resolves.toEqual(monitors);
   });
 
+  it("uses the backend port directly for localhost browser sessions when no API base is configured", async () => {
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: new URL("http://localhost:3018/providers"),
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getMonitors()).resolves.toEqual([]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/v1/monitors",
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
   it("treats report delete 204 responses as success without parsing JSON", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(null, {
@@ -49,7 +78,7 @@ describe("api", () => {
     await expect(deleteReport("report-1")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/reports/report-1",
+      "http://127.0.0.1:8000/api/v1/reports/report-1",
       expect.objectContaining({
         method: "DELETE",
       })

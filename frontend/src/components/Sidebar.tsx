@@ -97,7 +97,7 @@ export function Sidebar() {
                         {isLoggedIn ? (
                             <div className="space-y-1">
                                 <div className="px-3 py-2 text-xs text-muted-foreground border-b border-border/50 mb-1">
-                                    Signed in as <strong>admin@lexmount.com</strong>
+                                    Signed in as <strong>admin@example.com</strong>
                                 </div>
                                 <button className="w-full flex items-center gap-3 px-3 py-2 text-sm text-foreground rounded-md hover:bg-muted transition-colors">
                                     <User className="w-4 h-4 text-muted-foreground" />
@@ -150,7 +150,7 @@ export function Sidebar() {
                                     <User className="w-4 h-4 text-blue-700 dark:text-blue-300 group-hover:text-blue-800 dark:group-hover:text-blue-200 transition-colors" />
                                 </div>
                                 <div className="flex-1 overflow-hidden transition-transform duration-200 group-hover:translate-x-0.5">
-                                    <p className="font-semibold text-sm text-foreground truncate transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400">Lex Researcher</p>
+                                    <p className="font-semibold text-sm text-foreground truncate transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400">Researcher</p>
                                     <p className="text-xs text-muted-foreground truncate">Free Plan</p>
                                 </div>
                             </button>

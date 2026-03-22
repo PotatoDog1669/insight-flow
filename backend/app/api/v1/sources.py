@@ -303,11 +303,15 @@ def _resolve_target_url(collect_method: str, config: dict[str, Any]) -> str | No
 
 def _resolve_source_test_config(source: Source) -> dict[str, Any]:
     config = dict(source.config or {})
-    if source.collect_method == "rss" and isinstance(config.get("subreddits"), list):
-        subreddits = normalize_reddit_subreddits(config.get("subreddits"))
-        if subreddits:
-            config["subreddits"] = subreddits
-        config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
+    if source.collect_method == "rss":
+        # Source tests are connectivity checks; fetching every article detail makes them slow
+        # enough to trip frontend proxy timeouts on large feeds.
+        config["fetch_detail"] = False
+        if isinstance(config.get("subreddits"), list):
+            subreddits = normalize_reddit_subreddits(config.get("subreddits"))
+            if subreddits:
+                config["subreddits"] = subreddits
+            config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
     return config
 
 

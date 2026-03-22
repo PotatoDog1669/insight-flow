@@ -86,6 +86,7 @@ async def test_run_codex_json_uses_local_codex_cli_when_auth_mode_local(
     async def _fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN002, ANN003
         captured.setdefault("calls", []).append(args)
         captured["cwd"] = kwargs.get("cwd")
+        captured.setdefault("envs", []).append(kwargs.get("env"))
         call_index = len(captured["calls"])
         if call_index == 1:
             return _FakeProcess(returncode=0, stdout=b"Logged in using ChatGPT\n")
@@ -93,6 +94,8 @@ async def test_run_codex_json_uses_local_codex_cli_when_auth_mode_local(
 
     monkeypatch.setattr(codex_transport.httpx, "AsyncClient", _ForbiddenAsyncClient)
     monkeypatch.setattr(codex_transport.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setenv("CODEX_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-leak")
 
     output = await codex_transport.run_codex_json(
         "hello local codex",
@@ -108,3 +111,7 @@ async def test_run_codex_json_uses_local_codex_cli_when_auth_mode_local(
     assert "--skip-git-repo-check" in exec_call
     assert "--output-last-message" in exec_call
     assert b"hello local codex" in captured["inputs"][1]
+    for child_env in captured["envs"]:
+        assert child_env is not None
+        assert "CODEX_API_KEY" not in child_env
+        assert "OPENAI_API_KEY" not in child_env

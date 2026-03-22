@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   createDestination,
@@ -35,6 +34,8 @@ export default function DestinationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeDestinationId, setActiveDestinationId] = useState<string | null>(null);
   const [filter, setFilter] = useState<DestinationFilter>("all");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
   const [editConfig, setEditConfig] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -92,9 +93,13 @@ export default function DestinationsPage() {
 
   useEffect(() => {
     if (!activeDestination) {
+      setIsEditing(false);
+      setEditName("");
       setEditConfig({});
       return;
     }
+    setIsEditing(false);
+    setEditName(activeDestination.name);
     const normalized = configToEditableStrings(activeDestination.config ?? {});
     setEditConfig(activeDestination.type === "obsidian" ? normalizeObsidianConfig(normalized) : normalized);
     setTestResult(null);
@@ -132,12 +137,14 @@ export default function DestinationsPage() {
             ? normalizeObsidianConfig(editConfig)
             : normalizeRssConfig(editConfig);
       const updated = await updateDestination(activeDestination.id, {
+        name: editName.trim() || activeDestination.name,
         config: normalizedConfig,
         enabled: true,
       });
       setDestinations((current) =>
         current.map((item) => (item.id === activeDestination.id ? { ...updated, enabled: true } : item)),
       );
+      setIsEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存落盘点配置失败");
     } finally {
@@ -234,13 +241,25 @@ export default function DestinationsPage() {
     }
   };
 
+  const handleCancelEditing = () => {
+    if (!activeDestination) {
+      setIsEditing(false);
+      return;
+    }
+    setEditName(activeDestination.name);
+    const normalized = configToEditableStrings(activeDestination.config ?? {});
+    setEditConfig(activeDestination.type === "obsidian" ? normalizeObsidianConfig(normalized) : normalized);
+    setTestResult(null);
+    setTestError(null);
+    setDetectedVaults([]);
+    setVaultDetectMessage(null);
+    setIsEditing(false);
+  };
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-3">
-          <Badge variant="outline" className="rounded-full border-sky-200 bg-sky-50 px-3 py-1 text-sky-700">
-            多实例落盘管理
-          </Badge>
           <div>
             <h1 className="text-3xl font-semibold tracking-tight text-slate-950">输出配置</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
@@ -276,13 +295,18 @@ export default function DestinationsPage() {
           activeDestination={activeDestination}
           detectedVaults={detectedVaults}
           detectingVaultPath={detectingVaultPath}
+          editName={editName}
           editConfig={editConfig}
+          isEditing={isEditing}
           onCreate={() => setIsCreateModalOpen(true)}
+          onCancelEditing={handleCancelEditing}
           onDelete={setDeleteTarget}
           onDetectObsidianVaultPath={() => void handleDetectObsidianVaultPath()}
+          onEdit={() => setIsEditing(true)}
           onEnableToggle={(destination) => void handleEnableToggle(destination)}
           onSaveConfig={() => void handleSaveConfig()}
           onTestConfig={() => void handleTestConfig()}
+          setEditName={setEditName}
           setEditConfig={setEditConfig}
           submitting={submitting}
           testError={testError}

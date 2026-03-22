@@ -1,0 +1,22 @@
+site_key: ai21_labs
+profile_version: v1
+start_urls:
+  - https://www.ai21.com/blog/
+list_page:
+  item_selector: a.post__main[href*='/blog/']
+  url_attr: href
+  title_selector: h3.post__title
+detail_page:
+  content_selector: .post-content, article
+  remove_selectors:
+    - script
+    - style
+    - nav
+    - footer
+    - header
+    - .share
+    - .social
+  title_selector: h1
+normalization:
+  url_prefix: https://www.ai21.com
+  min_content_chars: 300

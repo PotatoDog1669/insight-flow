@@ -132,6 +132,26 @@ export function getTypeLabel(type: Destination["type"]): string {
   return "RSS";
 }
 
+export function getDestinationDescription(destination: Destination): string {
+  if (destination.type === "notion") {
+    return "将报告同步到 Notion 数据库或页面，适合结构化归档和协作整理。";
+  }
+  if (destination.type === "obsidian") {
+    return "将报告写入 Obsidian 仓库，或通过本地接口同步。";
+  }
+  return "生成可订阅的 RSS 输出，方便在阅读器里持续跟踪更新。";
+}
+
+export function getDestinationSummaryLabel(destination: Destination): string {
+  if (destination.type === "notion") {
+    return "写入目标";
+  }
+  if (destination.type === "obsidian") {
+    return "目标位置";
+  }
+  return "订阅地址";
+}
+
 export function getDestinationSummary(destination: Destination): string {
   const config = destination.config as Record<string, unknown>;
   if (destination.type === "notion") {

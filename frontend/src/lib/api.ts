@@ -5,6 +5,21 @@
 // Use same-origin API by default so browser clients work in remote/devbox access too.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
+function getAPIBase(): string {
+    if (API_BASE) {
+        return API_BASE;
+    }
+    if (typeof window === "undefined") {
+        return "";
+    }
+
+    const { hostname } = window.location;
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return "http://127.0.0.1:8000";
+    }
+    return "";
+}
+
 export interface Source {
     id: string;
     name: string;
@@ -44,7 +59,7 @@ export interface Monitor {
     time_period: "daily" | "weekly" | "custom";
     report_type: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
+    source_overrides?: Record<string, MonitorSourceOverride>;
     ai_routing?: MonitorAIRouting;
     destination_ids: string[];
     destination_instance_ids: string[];
@@ -78,6 +93,16 @@ export interface MonitorAIRouting {
 export interface MonitorAIRoutingDefaults {
     profile_name: string;
     stages: Record<MonitorAIStageName, string>;
+}
+
+export interface MonitorSourceOverride {
+    max_items?: number;
+    limit?: number;
+    max_results?: number;
+    keywords?: string[];
+    expanded_keywords?: string[];
+    usernames?: string[];
+    subreddits?: string[];
 }
 
 export interface Destination {
@@ -147,7 +172,7 @@ export interface MonitorCreate {
     time_period: "daily" | "weekly" | "custom";
     report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
+    source_overrides?: Record<string, MonitorSourceOverride>;
     ai_routing?: MonitorAIRouting;
     destination_ids?: string[];
     destination_instance_ids?: string[];
@@ -161,7 +186,7 @@ export interface MonitorUpdate {
     time_period?: "daily" | "weekly" | "custom";
     report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids?: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
+    source_overrides?: Record<string, MonitorSourceOverride>;
     ai_routing?: MonitorAIRouting | null;
     destination_ids?: string[];
     destination_instance_ids?: string[];
@@ -345,7 +370,7 @@ export class APIError extends Error {
 }
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${getAPIBase()}${path}`, {
         headers: { "Content-Type": "application/json" },
         ...options,
     });

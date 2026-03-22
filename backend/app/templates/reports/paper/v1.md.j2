@@ -1,6 +1,32 @@
 {% if paper_mode | default("digest", true) == "note" -%}
 {% include "reports/paper/note/v1.md.j2" %}
 {% else -%}
+{% set fm = frontmatter | default({}, true) -%}
+{% if not fm and properties | default([]) -%}
+{% set derived = namespace(date="", keywords=[], tags=[]) -%}
+{% for item in properties -%}
+{% set label = item.label | default("") | trim -%}
+{% set value = item.value | default("") | trim -%}
+{% if label == "date" and value -%}
+{% set derived.date = value -%}
+{% elif label == "keywords" and value -%}
+{% set derived.keywords = value.split(",") -%}
+{% elif label == "tags" and value -%}
+{% set derived.tags = value.split(",") -%}
+{% endif -%}
+{% endfor -%}
+{% set fm = {"date": derived.date, "keywords": derived.keywords, "tags": derived.tags} -%}
+{% endif -%}
+---
+{% if fm.date is defined and fm.date %}date: {{ fm.date }}
+{% endif %}{% if fm.keywords is defined and fm.keywords %}
+keywords:
+{% for keyword in fm.keywords %}  - {{ keyword | trim }}
+{% endfor %}{% endif %}{% if fm.tags is defined and fm.tags %}
+tags:
+{% for tag in fm.tags %}  - {{ tag | trim }}
+{% endfor %}{% endif %}---
+
 {% set digest_title = title | default("", true) | trim -%}
 {% if digest_title -%}
 # {{ digest_title }}
@@ -11,38 +37,55 @@
 {% endif -%}
 
 {% if summary | default("", true) | trim -%}
-## 本期导读
+## 总结
 
 {{ summary | trim }}
 
 {% endif -%}
-## 推荐论文
+{% for group in theme_groups | default([]) -%}
+## {{ group.title | default("Paper Picks") }}
 
-{% for paper in papers | default([]) -%}
+{% for paper in group.papers | default([]) -%}
 ---
 ### {{ loop.index }}. {{ paper.title | default("未命名论文") }}
 
-- 作者：{{ paper.authors | default("N/A") }}
-- 机构：{{ paper.affiliations | default("N/A") }}
 {% if paper.figure | default("", true) | trim -%}
-- 核心图：![核心图]({{ paper.figure }})
-{% endif -%}
-- 一句话判断：{{ paper.one_line | default("") }}
-- 核心问题：{{ paper.problem | default("") }}
-- 核心方法：{{ paper.method | default("") }}
-- 关键结果：{{ paper.result | default("") }}
-{%- set importance = paper.importance | default("", true) | trim -%}
-{%- if importance and importance != "值得重点关注" -%}
-- 为什么重要：{{ importance }}
-{%- endif -%}
-{%- set reading_level = paper.reading_level | default("", true) | trim -%}
-{%- if reading_level and reading_level != "必读" -%}
-- 阅读建议：{{ reading_level }}
-{%- endif -%}
-{%- set detail_link = paper.detail_link | default("", true) | trim -%}
-{%- if detail_link -%}
-- 详细笔记：{{ detail_link }}
-{%- endif -%}
+![{{ paper.title | default("Paper figure") }}]({{ paper.figure | trim }})
 
+{% endif -%}
+{% if paper.authors | default("", true) | trim and paper.authors != "N/A" %}- 作者：{{ paper.authors | trim }}
+{% endif %}{% if paper.affiliations | default("", true) | trim and paper.affiliations != "N/A" %}- 机构：{{ paper.affiliations | trim }}
+{% endif %}{% if paper.source_label | default("", true) | trim %}- 来源：{{ paper.source_label | trim }}
+{% endif %}{% if paper.links | default([]) %}
+- 链接：{% for link in paper.links %}[{{ link.label | default("Link") }}]({{ link.url }}){% if not loop.last %} / {% endif %}{% endfor %}
+{% endif %}
+
+**核心方法**
+
+{% set core_problem = paper.core_problem | default(paper.problem) | default("") | trim -%}
+{% set core_method = paper.core_method | default(paper.method) | default("") | trim -%}
+{% if core_problem %}{{ core_problem }}
+
+{% endif -%}
+{{ core_method }}
+
+**对比方法 / Baselines**
+
+{{ paper.key_result | default(paper.result) | default("") }}
+
+**借鉴意义**
+
+{{ paper.why_it_matters | default(paper.importance) | default("") }}
+
+**阅读建议**
+
+{% set one_line_judgment = paper.one_line_judgment | default(paper.one_line) | default("") | trim -%}
+{% set reading_advice = paper.reading_advice | default("") | trim -%}
+{% if one_line_judgment %}{{ one_line_judgment }}
+
+{% endif -%}
+{{ reading_advice }}
+
+{% endfor %}
 {% endfor -%}
 {% endif -%}

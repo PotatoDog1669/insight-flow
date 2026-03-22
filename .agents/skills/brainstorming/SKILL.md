@@ -1,6 +1,7 @@
 ---
 name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+description: You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation.
+skills_hub_project_relative_path: .agents/skills/brainstorming
 ---
 
 # Brainstorming Ideas Into Designs

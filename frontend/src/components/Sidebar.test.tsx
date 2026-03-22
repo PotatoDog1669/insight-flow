@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { Sidebar } from "@/components/Sidebar";
 
@@ -24,5 +24,15 @@ describe("Sidebar", () => {
 
     expect(screen.getAllByText("Insight Flow").length).toBeGreaterThan(0);
     expect(screen.queryByText("LexDeepResearch")).not.toBeInTheDocument();
+    expect(screen.queryByText("Lex Researcher")).not.toBeInTheDocument();
+  });
+
+  it("shows the updated default admin email in the user menu", () => {
+    render(<Sidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: /researcher/i }));
+
+    expect(screen.getByText("admin@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("admin@lexmount.com")).not.toBeInTheDocument();
   });
 });

@@ -104,6 +104,57 @@ describe("ReportDetailPage", () => {
     expect(mockedGetArticleById).not.toHaveBeenCalled();
   });
 
+  it("renders the research summary in the cover area", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-research",
+      user_id: null,
+      time_period: "custom",
+      report_type: "research",
+      title: "Anthropic MCP Research",
+      report_date: "2026-03-02",
+      tldr: ["MCP 正从工具协议变成平台分发层，接下来要看谁能占住生态入口。"],
+      article_count: 0,
+      topics: [],
+      events: [
+        {
+          event_id: "event-1",
+          index: 1,
+          title: "Anthropic expands MCP ecosystem",
+          category: "开发生态",
+          one_line_tldr: "MCP 正在进入平台化竞争阶段。",
+          detail: "Detailed research body",
+          keywords: [],
+          entities: [],
+          metrics: [],
+          source_links: ["https://example.com/mcp"],
+          source_count: 2,
+          source_name: "Anthropic",
+          published_at: null,
+        },
+      ],
+      global_tldr: "MCP 正从工具协议变成平台分发层，接下来要看谁能占住生态入口。",
+      content: "# Anthropic MCP Research\n\n## 执行摘要\n研究正文",
+      article_ids: [],
+      published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+    mockedGetArticleById.mockResolvedValue(null as never);
+
+    const { container } = render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByText("Anthropic MCP Research", { selector: "header h1" })).toBeInTheDocument());
+    const header = container.querySelector("header");
+    expect(header).not.toBeNull();
+    expect(
+      within(header as HTMLElement).getByText("MCP 正从工具协议变成平台分发层，接下来要看谁能占住生态入口。")
+    ).toBeInTheDocument();
+  });
+
   it("renders the paper report title without daily rewriting", async () => {
     mockedGetReportById.mockResolvedValue({
       id: "report-paper",
@@ -129,9 +180,41 @@ describe("ReportDetailPage", () => {
 
     render(<ReportDetailPage />);
 
-    await waitFor(() => expect(screen.getByText("Paper Digest", { selector: "header h1" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("2026-03-02 论文推荐", { selector: "header h1" })).toBeInTheDocument());
     expect(screen.getByText("Paper Watch")).toBeInTheDocument();
     expect(screen.queryByText(/^AI 早报/)).not.toBeInTheDocument();
+  });
+
+  it("normalizes legacy paper digest titles and summary headings on detail pages", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-paper-legacy",
+      user_id: null,
+      time_period: "daily",
+      report_type: "paper",
+      title: "GUI 智能体的评测、安全与长程记忆",
+      report_date: "2026-03-22",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# GUI 智能体的评测、安全与长程记忆\n\n## 今日锐评\n\n本期聚焦 GUI agent 的奖励建模。",
+      article_ids: [],
+      published_to: [],
+      metadata: { paper_mode: "digest" },
+      monitor_id: "monitor-1",
+      monitor_name: "Paper Watch",
+      created_at: "2026-03-22T00:00:00Z",
+    } as never);
+    mockedGetArticleById.mockResolvedValue(null as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText("2026-03-22 论文推荐", { selector: "header h1" })).toBeInTheDocument()
+    );
+    expect(screen.getByRole("heading", { name: "总结" })).toBeInTheDocument();
+    expect(screen.queryByText("今日锐评")).not.toBeInTheDocument();
   });
 
   it("renders a paper badge for paper reports", async () => {
@@ -159,7 +242,7 @@ describe("ReportDetailPage", () => {
 
     render(<ReportDetailPage />);
 
-    await waitFor(() => expect(screen.getByText("Paper Digest", { selector: "header h1" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("2026-03-02 论文推荐", { selector: "header h1" })).toBeInTheDocument());
     expect(screen.getByText("论文")).toBeInTheDocument();
   });
 
@@ -194,11 +277,72 @@ describe("ReportDetailPage", () => {
 
     render(<ReportDetailPage />);
 
-    await waitFor(() => expect(screen.getByText("Paper Digest", { selector: "header h1" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("2026-03-02 论文推荐", { selector: "header h1" })).toBeInTheDocument());
     expect(screen.queryByText("本期包含的详细阅读笔记")).not.toBeInTheDocument();
-    expect(screen.queryByText("为什么重要：值得重点关注")).not.toBeInTheDocument();
-    expect(screen.queryByText("阅读建议：必读")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "查看详细笔记" })).toHaveAttribute("href", "/reports/note-1");
+    expect(screen.getByText("为什么重要：值得重点关注")).toBeInTheDocument();
+    expect(screen.getByText("阅读建议：必读")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "查看详细笔记" })).not.toBeInTheDocument();
+  });
+
+  it("renders authored paper digests without duplicate body titles or raw frontmatter", async () => {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-paper-authored",
+      user_id: null,
+      time_period: "daily",
+      report_type: "paper",
+      title: "Paper Digest",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: `---
+date: 2026-03-02
+keywords:
+  - gui agent
+tags:
+  - daily-papers
+---
+
+# Paper Digest
+
+## 总结
+
+本期聚焦 GUI agent 的奖励建模。
+
+## Safety
+
+### 1. OS-Themis
+
+![OS-Themis](https://example.com/os-themis.png)
+
+- 作者：Alice
+- 来源：arXiv
+
+**核心方法**
+
+通过多智能体 critic 建模奖励。`,
+      article_ids: [],
+      published_to: [],
+      metadata: {
+        paper_mode: "digest",
+      },
+      monitor_id: "monitor-1",
+      monitor_name: "Paper Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+    mockedGetArticleById.mockResolvedValue(null as never);
+
+    render(<ReportDetailPage />);
+
+    await waitFor(() => expect(screen.getByText("2026-03-02 论文推荐", { selector: "header h1" })).toBeInTheDocument());
+    expect(screen.getAllByText("2026-03-02 论文推荐", { selector: "h1" })).toHaveLength(1);
+    expect(screen.queryByText("date: 2026-03-02")).not.toBeInTheDocument();
+    expect(screen.getByText("本期聚焦 GUI agent 的奖励建模。")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "总结" })).toBeInTheDocument();
+    expect(screen.getByText("通过多智能体 critic 建模奖励。")).toBeInTheDocument();
+    expect(screen.getByAltText("OS-Themis")).toBeInTheDocument();
   });
 
   it("does not render a top source hint for paper note reports", async () => {

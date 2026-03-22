@@ -200,6 +200,58 @@ async def test_rss_supports_arxiv_api_keyword_query(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_rss_quotes_arxiv_phrase_keywords_and_applies_submitted_date_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article_url = "https://arxiv.org/abs/2603.00002"
+    feed_xml = f"""
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <id>http://arxiv.org/abs/2603.00002v1</id>
+        <title>Web Agents for Computer Use</title>
+        <link href="{article_url}" rel="alternate" type="text/html" />
+        <summary>abstract summary</summary>
+      </entry>
+    </feed>
+    """
+    called_urls: list[str] = []
+
+    async def fake_get(self, url, *args, **kwargs):
+        raw = str(url)
+        called_urls.append(raw)
+        if raw.startswith("https://export.arxiv.org/api/query?"):
+            return DummyResponse(200, text=feed_xml)
+        if raw == article_url:
+            return DummyResponse(200, text="<html><body><article><p>paper full text</p></article></body></html>")
+        raise AssertionError(f"unexpected url: {raw}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    collector = RSSCollector()
+    await collector.collect(
+        {
+            "arxiv_api": True,
+            "feed_url": "https://export.arxiv.org/api/query",
+            "keywords": ["webagent", "web agents", "computer use"],
+            "categories": ["cs.AI"],
+            "submitted_date_from": "202603140000",
+            "submitted_date_to": "202603210000",
+            "max_items": 5,
+        }
+    )
+
+    parsed = urlparse(called_urls[0])
+    params = parse_qs(parsed.query)
+    query = params["search_query"][0]
+
+    assert 'all:webagent' in query
+    assert 'all:"web agents"' in query
+    assert 'all:"computer use"' in query
+    assert "submittedDate:[202603140000 TO 202603210000]" in query
+    assert "cat:cs.AI" in query
+
+
+@pytest.mark.asyncio
 async def test_rss_reader_fallback_when_browser_required_and_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     feed_url = "https://example.com/openai-feed.xml"
     article_url = "https://openai.com/index/example-post"

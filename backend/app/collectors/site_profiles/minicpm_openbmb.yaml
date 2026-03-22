@@ -1,0 +1,17 @@
+site_key: minicpm_openbmb
+profile_version: v1
+start_urls:
+  - https://modelbest.cn/news
+list_page:
+  item_selector: div.detail-item
+  url_selector: a[href*='mp.weixin.qq.com/s/']
+  url_attr: href
+  title_selector: span[class*='text-18px'], span[class*='whitespace-break-spaces']
+detail_page:
+  content_selector: "#js_content, .rich_media_content, .rich_media_wrp, article, main"
+  remove_selectors:
+    - script
+    - style
+  title_selector: "#activity-name, h1"
+normalization:
+  min_content_chars: 300

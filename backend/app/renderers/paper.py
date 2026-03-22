@@ -17,4 +17,9 @@ class PaperRenderer(BaseRenderer):
         invalid_items = [article for article in articles if not isinstance(article, ProcessedArticle)]
         if invalid_items:
             raise TypeError("PaperRenderer expects ProcessedArticle inputs only")
-        return build_paper_digest_report(articles=list(articles), context=context)
+        review_payload = None
+        if isinstance(context.extra, dict):
+            candidate = context.extra.get("paper_review_payload")
+            if isinstance(candidate, dict):
+                review_payload = candidate
+        return build_paper_digest_report(articles=list(articles), context=context, review_payload=review_payload)

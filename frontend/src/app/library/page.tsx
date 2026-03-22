@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { ReportCard, type Report as ReportCardModel } from "@/components/ReportCard";
 import { deleteReport, getReportFilters, getReports, type Report as APIReport, type ReportFilters } from "@/lib/api";
+import { getReportDisplayTitle } from "@/lib/report-display";
 
 function toCardReport(report: APIReport): ReportCardModel {
   return {
     id: report.id,
     time_period: report.time_period,
     report_type: report.report_type,
-    title: report.title,
+    title: getReportDisplayTitle(report),
     report_date: report.report_date,
     tldr: report.tldr,
     article_count: report.article_count,

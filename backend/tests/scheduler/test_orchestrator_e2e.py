@@ -12,7 +12,9 @@ from app.collectors.reddit_config import build_reddit_feed_url
 from app.models import Article, CollectTask, Paper, PaperContent, Report, Source, TaskEvent, User, UserSubscription
 from app.providers.errors import ProviderUnavailableError
 from app.agents.schemas import ResearchResult, ResearchSource
+from app.models.monitor import Monitor
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
+from app.scheduler.monitor_runner import execute_monitor_pipeline, prepare_monitor_run
 from app.scheduler import orchestrator as orchestrator_module
 from app.scheduler.orchestrator import Orchestrator
 from app.sinks.base import PublishResult
@@ -43,6 +45,69 @@ class FakeCollector(BaseCollector):
                 published_at=datetime.now(timezone.utc) - timedelta(minutes=5),
             )
         ]
+
+
+@pytest.mark.asyncio
+async def test_process_source_articles_uses_higher_stage_concurrency_for_paper(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, int] = {}
+    article = RawArticle(
+        external_id="paper-1",
+        title="Paper One",
+        url="https://arxiv.org/abs/2603.00001",
+        content="content",
+        published_at=datetime.now(timezone.utc),
+    )
+
+    async def _fake_run_filter_stage(self, articles: list[RawArticle]):
+        captured["filter_stage_concurrency"] = self.stage_concurrency
+        self.last_stage_trace["filter"] = {
+            "provider": "llm_codex",
+            "model": "gpt-5.4",
+            "input": len(articles),
+            "output": len(articles),
+        }
+        return articles, self.last_stage_trace["filter"]
+
+    async def _fake_run_candidate_cluster_stage(self, articles: list[RawArticle]):
+        self.last_stage_trace["candidate_cluster"] = {
+            "provider": "candidate_rule",
+            "input": len(articles),
+            "output": 0,
+            "largest_cluster": 0,
+        }
+        return [], self.last_stage_trace["candidate_cluster"]
+
+    async def _fake_run_keywords_stage(self, articles: list[RawArticle]):
+        captured["keywords_stage_concurrency"] = self.stage_concurrency
+        self.last_stage_trace["summarizer"] = {
+            "provider": "llm_codex",
+            "model": "gpt-5.4",
+            "input": len(articles),
+            "output": len(articles),
+            "compact_output": 0,
+            "stage_concurrency": self.stage_concurrency,
+        }
+        return [
+            ProcessedArticle(
+                raw=item,
+                event_title=item.title,
+                summary="summary",
+                keywords=["paper"],
+            )
+            for item in articles
+        ], self.last_stage_trace["summarizer"]
+
+    monkeypatch.setattr(ProcessingPipeline, "run_filter_stage", _fake_run_filter_stage)
+    monkeypatch.setattr(ProcessingPipeline, "run_candidate_cluster_stage", _fake_run_candidate_cluster_stage)
+    monkeypatch.setattr(ProcessingPipeline, "run_keywords_stage", _fake_run_keywords_stage)
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    result = await orchestrator._process_source_articles([article], stage_concurrency=4)
+
+    assert captured["filter_stage_concurrency"] == 4
+    assert captured["keywords_stage_concurrency"] == 4
+    summarizer_trace = next(item for item in result.stage_trace if item.get("stage") == "summarizer")
+    assert summarizer_trace["stage_concurrency"] == 4
 
 
 @pytest.fixture(autouse=True)
@@ -782,6 +847,145 @@ async def test_orchestrator_applies_arxiv_overrides_to_collect_config(
     assert captured_config["keywords"] == ["reasoning", "agent"]
     assert captured_config["max_results"] == 7
     assert captured_config["max_items"] == 7
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_prefers_expanded_arxiv_keywords_when_present(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.collect_method = "rss"
+            source.config = {
+                "feed_url": "https://export.arxiv.org/api/query",
+                "arxiv_api": True,
+                "keywords": ["baseline"],
+                "max_results": 25,
+                "max_items": 25,
+            }
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+
+    captured_config: dict = {}
+
+    class _CaptureCollector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "capture"
+
+        @property
+        def category(self) -> str:
+            return "academic"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            captured_config.update(config)
+            return []
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _CaptureCollector())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    async with session_factory() as session:
+        await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            source_ids=[SOURCE_ID],
+            source_overrides={
+                str(SOURCE_ID): {
+                    "keywords": ["webagent"],
+                    "expanded_keywords": ["webagent", "web agents", "browser agent"],
+                    "max_results": 11,
+                }
+            },
+        )
+
+    assert captured_config["keywords"] == ["webagent", "web agents", "browser agent"]
+    assert captured_config["max_results"] == 11
+    assert captured_config["max_items"] == 11
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_pushes_monitor_window_into_arxiv_collect_config(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_subscription() -> None:
+        async with session_factory() as session:
+            source = await session.get(Source, SOURCE_ID)
+            assert source is not None
+            source.collect_method = "rss"
+            source.config = {
+                "feed_url": "https://export.arxiv.org/api/query",
+                "arxiv_api": True,
+                "keywords": ["webagent"],
+                "max_results": 25,
+                "max_items": 25,
+            }
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            await session.commit()
+
+    await _prepare_subscription()
+
+    captured_config: dict = {}
+
+    class _CaptureCollector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "capture"
+
+        @property
+        def category(self) -> str:
+            return "academic"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            captured_config.update(config)
+            return []
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _CaptureCollector())
+
+    orchestrator = Orchestrator(max_concurrency=2)
+    async with session_factory() as session:
+        await orchestrator.run_daily_pipeline(
+            db=session,
+            user_id=DEFAULT_USER_ID,
+            trigger_type="manual",
+            source_ids=[SOURCE_ID],
+            window_hours=48,
+        )
+
+    assert "submitted_date_from" in captured_config
+    assert "submitted_date_to" in captured_config
+    submitted_from = datetime.strptime(captured_config["submitted_date_from"], "%Y%m%d%H%M").replace(
+        tzinfo=timezone.utc
+    )
+    submitted_to = datetime.strptime(captured_config["submitted_date_to"], "%Y%m%d%H%M").replace(
+        tzinfo=timezone.utc
+    )
+    assert submitted_to > submitted_from
+    assert submitted_to - submitted_from == timedelta(hours=48)
 
 
 @pytest.mark.asyncio
@@ -2101,14 +2305,14 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
                 RawArticle(
                     external_id="paper-raw-1",
                     title="MVISTA-4D",
-                    url="https://example.com/paper-1",
+                    url="https://arxiv.org/abs/2602.23546",
                     content="paper one content",
                     published_at=datetime.now(timezone.utc),
                     metadata={
                         "paper_id": "2602.23546",
+                        "arxiv_url": "https://arxiv.org/abs/2602.23546",
                         "authors": ["Jiaxu Wang", "Yicheng Jiang"],
                         "affiliations": "The Chinese University of Hong Kong",
-                        "figure_url": "https://example.com/figure-1.png",
                     },
                 ),
                 RawArticle(
@@ -2141,7 +2345,7 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
 
     monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _PaperCollector())
 
-    async def _paper_process_source_articles(self, raw_articles: list[RawArticle]):
+    async def _paper_process_source_articles(self, raw_articles: list[RawArticle], **kwargs):
         processed: list[ProcessedArticle] = []
         for index, article in enumerate(raw_articles):
             processed.append(
@@ -2177,9 +2381,128 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
 
     monkeypatch.setattr(orchestrator_module, "get_sink", lambda target: _DatabaseSink())
 
+    class _FigureResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _FigureClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str):
+            if url == "https://arxiv.org/html/2602.23546":
+                return _FigureResponse(
+                    '<html><body><figure><img src="x1.png"/><figcaption>Figure 1: Overview</figcaption></figure></body></html>'
+                )
+            return _FigureResponse("<html></html>")
+
+    monkeypatch.setattr(orchestrator_module.httpx, "AsyncClient", _FigureClient)
+
+    captured_payloads: dict[str, object] = {"review": None, "notes": []}
+
+    async def _fake_run_paper_review_with_retry(self, route, payload):  # noqa: ANN001
+        captured_payloads["review"] = payload
+        payload_papers = payload.get("papers") if isinstance(payload.get("papers"), list) else []
+        return (
+            {
+                "digest_title": "2026-03-20 论文推荐",
+                "digest_summary": "本期重点不是论文数量，而是方法接口开始明显收敛。",
+                "papers": [
+                    {
+                        "paper_identity": "2602.23546",
+                        "paper_slug": "mvista-4d",
+                        "title": "MVISTA-4D",
+                        "authors": ["Jiaxu Wang", "Yicheng Jiang"],
+                        "affiliations": ["The Chinese University of Hong Kong"],
+                        "links": ["https://arxiv.org/abs/2602.23546"],
+                        "figure": str(payload_papers[0].get("figure") or ""),
+                        "recommendation": "必读",
+                        "one_line_judgment": "这篇工作把时空一致性真正说清楚了。",
+                        "core_problem": "多视角时空建模仍然割裂。",
+                        "core_method": "统一 4D 表征和一致性目标。",
+                        "key_result": "多个基准上超过 baseline。",
+                        "why_it_matters": "更接近可复用框架。",
+                        "reading_advice": "先读方法再看实验。",
+                        "note_candidate": True,
+                    },
+                    {
+                        "paper_identity": "2602.11111",
+                        "paper_slug": "world-model-baselines",
+                        "title": "World Model Baselines",
+                        "authors": ["Alice"],
+                        "affiliations": ["Example Lab"],
+                        "links": ["https://example.com/paper-2"],
+                        "figure": "https://example.com/figure-2.png",
+                        "recommendation": "值得看",
+                        "one_line_judgment": "更像一篇基线清理工作。",
+                        "core_problem": "比较口径不统一。",
+                        "core_method": "重做 baseline 对齐。",
+                        "key_result": "重新校准多个结论。",
+                        "why_it_matters": "适合作为背景材料。",
+                        "reading_advice": "重点看设定差异。",
+                        "note_candidate": True,
+                    },
+                    {
+                        "paper_identity": "2602.22222",
+                        "paper_slug": "auxiliary-paper",
+                        "title": "Auxiliary Paper",
+                        "authors": ["Bob"],
+                        "affiliations": ["Example Lab"],
+                        "links": ["https://example.com/paper-3"],
+                        "figure": "https://example.com/figure-3.png",
+                        "recommendation": "可略读",
+                        "one_line_judgment": "信息量有限。",
+                        "core_problem": "补充性问题。",
+                        "core_method": "轻量方法改进。",
+                        "key_result": "边际提升有限。",
+                        "why_it_matters": "作为补充阅读即可。",
+                        "reading_advice": "按需查看。",
+                        "note_candidate": False,
+                    },
+                ],
+            },
+            "llm_openai",
+        )
+
+    async def _fake_run_paper_note_with_retry(self, route, payload):  # noqa: ANN001
+        paper = dict(payload.get("paper") or {})
+        captured_payloads["notes"].append(paper)
+        return (
+            {
+                "paper_identity": paper["paper_identity"],
+                "paper_slug": paper.get("paper_slug") or paper["title"].lower().replace(" ", "-"),
+                "title": paper["title"],
+                "authors": paper.get("authors", []),
+                "affiliations": paper.get("affiliations", []),
+                "links": paper.get("links", []),
+                "summary": f'{paper["title"]} 的结构化精读笔记。',
+                "core_contributions": ["贡献 1", "贡献 2"],
+                "problem_background": ["背景 1"],
+                "method_breakdown": ["方法 1"],
+                "figure_notes": ["图示 1"],
+                "experiments": ["实验 1"],
+                "strengths": ["优点 1"],
+                "limitations": ["局限 1"],
+                "related_reading": ["相关工作 1"],
+                "next_steps": ["后续阅读 1"],
+            },
+            "llm_openai",
+        )
+
     orchestrator = Orchestrator(max_concurrency=2)
     orchestrator.routing_profile.stages.publish.targets = ["database"]
     monkeypatch.setattr(Orchestrator, "_process_source_articles", _paper_process_source_articles)
+    monkeypatch.setattr(Orchestrator, "_run_paper_review_with_retry", _fake_run_paper_review_with_retry, raising=False)
+    monkeypatch.setattr(Orchestrator, "_run_paper_note_with_retry", _fake_run_paper_note_with_retry, raising=False)
 
     async with session_factory() as session:
         result = await orchestrator.run_daily_pipeline(
@@ -2192,6 +2515,13 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
         )
         assert result["status"] == "success"
         assert result["reports_created"] == 3
+        assert captured_payloads["review"] is not None
+        assert len(captured_payloads["notes"]) == 2
+        review_payload = captured_payloads["review"]
+        assert isinstance(review_payload, dict)
+        review_papers = review_payload.get("papers")
+        assert isinstance(review_papers, list)
+        assert review_papers[0]["figure"] == "https://arxiv.org/html/2602.23546/x1.png"
 
     async with session_factory() as session:
         reports = (
@@ -2220,9 +2550,167 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
         )
         assert len((digest.metadata_ or {}).get("paper_note_links", [])) == 2
         assert all("report_id" in link for link in (digest.metadata_ or {}).get("paper_note_links", []))
-        assert "/reports/" in digest.content
-        assert "查看详细笔记" in digest.content
+        assert "![MVISTA-4D](https://arxiv.org/html/2602.23546/x1.png)" in digest.content
+        assert "## 总结" in digest.content
+        assert "## Properties" not in digest.content
+        assert (digest.metadata_ or {}).get("paper_recommendations") == [
+            {"paper_identity": "2602.23546", "recommendation": "必读"},
+            {"paper_identity": "2602.11111", "recommendation": "值得看"},
+            {"paper_identity": "2602.22222", "recommendation": "可略读"},
+        ]
         for note in notes:
             note_metadata = note.metadata_ or {}
             assert note_metadata["parent_report_id"] == str(digest.id)
             assert note_metadata["paper_parent_link"]["report_id"] == str(digest.id)
+            assert "结构化精读笔记" in note.content
+
+
+@pytest.mark.asyncio
+async def test_execute_monitor_pipeline_reuses_successful_source_results_after_report_failure(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    async def _prepare_monitor() -> uuid.UUID:
+        async with session_factory() as session:
+            monitor = Monitor(
+                id=uuid.uuid4(),
+                user_id=DEFAULT_USER_ID,
+                name="Resume Failed Report Monitor",
+                time_period="daily",
+                report_type="paper",
+                source_ids=[str(SOURCE_ID)],
+                source_overrides={},
+                ai_routing={"stages": {"filter": {"primary": "llm_codex"}}},
+                destination_ids=[],
+                destination_instance_ids=[],
+                window_hours=24,
+                custom_schedule=None,
+                enabled=True,
+                last_run=None,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(
+                UserSubscription(
+                    user_id=DEFAULT_USER_ID,
+                    source_id=SOURCE_ID,
+                    enabled=True,
+                    custom_config={},
+                )
+            )
+            session.add(monitor)
+            await session.commit()
+            return monitor.id
+
+    monitor_id = await _prepare_monitor()
+
+    collect_calls = {"count": 0}
+    process_calls = {"count": 0}
+    render_calls = {"count": 0}
+    render_inputs: list[int] = []
+
+    class _ResumeCollector(BaseCollector):
+        @property
+        def name(self) -> str:
+            return "resume"
+
+        @property
+        def category(self) -> str:
+            return "academic"
+
+        async def collect(self, config: dict) -> list[RawArticle]:
+            collect_calls["count"] += 1
+            return [
+                RawArticle(
+                    external_id="resume-article-1",
+                    title="Resume Paper",
+                    url="https://example.com/resume-paper",
+                    content="resume content",
+                    published_at=datetime.now(timezone.utc),
+                    metadata={"paper_id": "2603.99999"},
+                )
+            ]
+
+    async def _fake_process_source_articles(self, raw_articles: list[RawArticle], **kwargs):
+        process_calls["count"] += 1
+        processed = [
+            ProcessedArticle(
+                raw=article,
+                summary=f"{article.title} summary",
+                keywords=["resume", "paper"],
+                score=0.91,
+                importance="high",
+                detail=f"{article.title} detail",
+                category="academic",
+                evidence=f"{article.title} evidence",
+            )
+            for article in raw_articles
+        ]
+        return orchestrator_module.SourceProcessResult(
+            relevant_articles=list(raw_articles),
+            candidate_clusters=[],
+            processed_articles=processed,
+            stage_trace=[
+                {"stage": "filter", "provider": "llm_codex", "status": "success"},
+                {"stage": "candidate_cluster", "provider": "candidate_rule", "status": "success"},
+                {"stage": "summarizer", "provider": "llm_codex", "status": "success"},
+            ],
+            compat_mode=False,
+        )
+
+    async def _fake_render_and_persist_reports(
+        self,
+        db,
+        user_id,
+        processed_articles,
+        article_ids,
+        destination_ids=None,
+        destination_settings=None,
+        report_type="daily",
+        run_id=None,
+        monitor_id=None,
+        monitor_task_id=None,
+        paper_time_period=None,
+    ):
+        render_calls["count"] += 1
+        render_inputs.append(len(processed_articles))
+        if render_calls["count"] == 1:
+            raise RuntimeError("placeholder_api_key")
+        return [uuid.uuid4()], "success", []
+
+    monkeypatch.setattr(orchestrator_module, "get_collector", lambda method: _ResumeCollector())
+    monkeypatch.setattr(Orchestrator, "_process_source_articles", _fake_process_source_articles)
+    monkeypatch.setattr(Orchestrator, "_render_and_persist_reports", _fake_render_and_persist_reports)
+
+    async with session_factory() as session:
+        monitor = await session.get(Monitor, monitor_id)
+        assert monitor is not None
+        first_task = await prepare_monitor_run(db=session, monitor=monitor, trigger_type="manual")
+        with pytest.raises(RuntimeError, match="placeholder_api_key"):
+            await execute_monitor_pipeline(
+                db=session,
+                monitor=monitor,
+                task=first_task,
+                trigger_type="manual",
+                window_hours_override=None,
+            )
+
+    async with session_factory() as session:
+        monitor = await session.get(Monitor, monitor_id)
+        assert monitor is not None
+        second_task = await prepare_monitor_run(db=session, monitor=monitor, trigger_type="manual")
+        completed_task = await execute_monitor_pipeline(
+            db=session,
+            monitor=monitor,
+            task=second_task,
+            trigger_type="manual",
+            window_hours_override=None,
+        )
+        assert completed_task.status == "success"
+
+    assert collect_calls["count"] == 1
+    assert process_calls["count"] == 1
+    assert render_calls["count"] == 2
+    assert render_inputs == [1, 1]

@@ -56,7 +56,7 @@ async def seed(session: AsyncSession) -> None:
     session.add(
         User(
             id=DEFAULT_USER_ID,
-            email="admin@lexmount.com",
+            email="admin@example.com",
             name="Lex Researcher",
             settings={"default_time_period": "daily", "default_depth": "brief", "default_sink": "database"},
             created_at=now,

@@ -10,6 +10,7 @@ import { ReportDocument } from "@/components/report/ReportDocument";
 import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
 import { canonicalizeReportContent, extractOutline, normalizePaperDigestContent, parseReportContent } from "@/lib/report-content-parser";
+import { getReportDisplayTitle } from "@/lib/report-display";
 import {
   getArticleById,
   getDestinations,
@@ -94,7 +95,11 @@ export default function ReportDetailPage() {
         setDestinations((destinationData || []).filter((item) => item.enabled));
         const normalizedPaperContent =
           reportData.report_type === "paper"
-            ? normalizePaperDigestContent(reportData.content ?? "", (reportData.metadata ?? {}) as Record<string, unknown>)
+            ? normalizePaperDigestContent(
+                reportData.content ?? "",
+                (reportData.metadata ?? {}) as Record<string, unknown>,
+                reportData.report_date
+              )
             : reportData.content ?? "";
         const effectiveContent = canonicalizeReportContent(
           normalizedPaperContent,
@@ -149,21 +154,25 @@ export default function ReportDetailPage() {
     if (!report) return "";
     const normalizedPaperContent =
       report.report_type === "paper"
-        ? normalizePaperDigestContent(report.content ?? "", (report.metadata ?? {}) as Record<string, unknown>)
+        ? normalizePaperDigestContent(
+            report.content ?? "",
+            (report.metadata ?? {}) as Record<string, unknown>,
+            report.report_date
+          )
         : report.content ?? "";
     return canonicalizeReportContent(normalizedPaperContent, report.events, report.global_tldr ?? "");
   }, [report]);
   const parsedReport = useMemo(() => parseReportContent(effectiveReportContent), [effectiveReportContent]);
   const hasTemplateContent = Boolean(effectiveReportContent.trim() && parsedReport.sections.length > 0);
+  const shouldShowCoverSummary = Boolean(
+    report?.tldr.length && (!hasTemplateContent || report.report_type === "research")
+  );
 
   const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
   const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
   const displayTitle = useMemo(() => {
     if (!report) return "";
-    if (report.report_type === "daily" && report.report_date) {
-      return `AI 早报 ${report.report_date}`;
-    }
-    return report.title;
+    return getReportDisplayTitle(report);
   }, [report]);
 
   const sourceCount = useMemo(() => {
@@ -260,7 +269,7 @@ export default function ReportDetailPage() {
               {displayTitle}
             </h1>
 
-            {report.tldr.length > 0 && !hasTemplateContent && (
+            {shouldShowCoverSummary && (
               <div className="text-xl sm:text-2xl font-medium text-foreground/70 max-w-3xl leading-relaxed border-l-4 border-blue-500/30 pl-5 py-1">
                 {report.tldr[0]}
               </div>
@@ -273,6 +282,7 @@ export default function ReportDetailPage() {
                 events={report.events}
                 globalTldr={report.global_tldr}
                 topics={report.topics}
+                suppressFirstHeading={report.report_type === "paper"}
               />
             </section>
           ) : (

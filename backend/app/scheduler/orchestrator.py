@@ -1,11 +1,13 @@
 """采集流水线编排器"""
 
 import asyncio
+import re
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urljoin
 
 import httpx
 import structlog
@@ -36,18 +38,18 @@ from app.papers.reporting import (
     build_paper_digest_report,
     build_paper_identity,
     build_paper_note_report,
-    select_paper_note_candidates,
 )
 from app.providers.errors import ProviderUnavailableError
 from app.providers.registry import get_provider
 from app.processors.event_models import CandidateCluster, GlobalSummary, ProcessedEvent
 from app.processors.global_summary import run_global_summary_stage, run_global_summary_with_retry
+from app.processors.paper_note_stage import run_paper_note_with_retry
+from app.processors.paper_review_stage import run_paper_review_with_retry
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.processors.report_stage import run_report_with_retry
 from app.processors.window_filter import filter_raw_articles_by_window
 from app.renderers.base import RenderContext, Report as RenderedReport
 from app.renderers.daily import DailyRenderer, build_daily_events, render_daily_report
-from app.renderers.paper import PaperRenderer
 from app.routing.loader import load_routing_profile
 from app.routing.schema import PublishRoute, RoutingProfile, RoutingStages, StageRoute
 from app.sinks.registry import get_sink, normalize_sink_name
@@ -62,6 +64,7 @@ from app.scheduler.run_debug import (
     write_run_debug_artifact,
 )
 from app.scheduler.task_events import append_task_event
+from app.utils.monitor_ai_routing import backfill_monitor_ai_routing
 
 logger = structlog.get_logger()
 
@@ -70,6 +73,8 @@ _AI_STAGE_ALLOWED_PROVIDERS: dict[str, set[str]] = {
     "filter": {"rule", "llm_codex", "llm_openai"},
     "keywords": {"rule", "llm_codex", "llm_openai"},
     "global_summary": {"llm_codex", "llm_openai"},
+    "paper_review": {"llm_codex", "llm_openai"},
+    "paper_note": {"llm_codex", "llm_openai"},
     "report": {"llm_codex", "llm_openai"},
 }
 _AI_PROVIDER_NAMES = {"rule", "llm_codex", "llm_openai"}
@@ -83,6 +88,15 @@ class SourceProcessResult:
     processed_articles: list[ProcessedArticle]
     stage_trace: list[dict]
     compat_mode: bool = False
+
+
+@dataclass(slots=True)
+class ReusableSourceResult:
+    source_id: uuid.UUID
+    article_ids: list[uuid.UUID]
+    processed_articles: list[ProcessedArticle]
+    previous_run_id: uuid.UUID
+    previous_task_id: uuid.UUID
 
 
 class Orchestrator:
@@ -199,12 +213,18 @@ class Orchestrator:
                 raise last_exc
             return [], trace
 
-    async def _process_source_articles(self, raw_articles: list[RawArticle]) -> SourceProcessResult:
+    async def _process_source_articles(
+        self,
+        raw_articles: list[RawArticle],
+        *,
+        stage_concurrency: int = 1,
+    ) -> SourceProcessResult:
         pipeline = ProcessingPipeline(routing_profile=self.runtime_routing_profile.name)
         pipeline.set_routing_profile(self.runtime_routing_profile)
         pipeline.set_provider_overrides(
             {name: dict(cfg) if isinstance(cfg, dict) else {} for name, cfg in self.runtime_provider_overrides.items()}
         )
+        pipeline.set_stage_concurrency(stage_concurrency)
         filter_provider = pipeline.routing_profile.stages.filter.primary
         keywords_provider = pipeline.routing_profile.stages.keywords.primary
         if not raw_articles:
@@ -439,9 +459,18 @@ class Orchestrator:
                 source=source,
                 source_overrides=source_overrides,
                 default_source_max_items=default_source_max_items,
+                window_start=window_start,
+                window_end=window_end,
             )
             for source in subscribed_sources
         }
+        reusable_source_results = await self._load_reusable_source_results(
+            db=db,
+            monitor_id=monitor_id,
+            trigger_type=trigger_type,
+            source_by_id=source_by_id,
+            window_start=window_start,
+        )
         collect_jobs: dict[uuid.UUID, asyncio.Task[tuple[list[RawArticle], list[dict]]]] = {}
 
         for source in subscribed_sources:
@@ -450,6 +479,43 @@ class Orchestrator:
                 break
 
             task = task_rows[source.id]
+            reusable_result = reusable_source_results.get(source.id)
+            if reusable_result is not None:
+                task.status = "success"
+                task.started_at = datetime.now(timezone.utc)
+                task.finished_at = task.started_at
+                task.articles_count = len(reusable_result.article_ids)
+                task.stage_trace = [
+                    {
+                        "stage": "reuse",
+                        "provider": "previous_run_cache",
+                        "status": "success",
+                        "articles": len(reusable_result.article_ids),
+                        "reused_from_run_id": str(reusable_result.previous_run_id),
+                        "reused_from_task_id": str(reusable_result.previous_task_id),
+                    }
+                ]
+                persisted_article_ids.extend(reusable_result.article_ids)
+                processed_articles.extend(reusable_result.processed_articles)
+                db.add(task)
+                await append_task_event(
+                    db,
+                    run_id=pipeline_run_id,
+                    monitor_id=monitor_id,
+                    task_id=task.id,
+                    source_id=source.id,
+                    stage="reuse",
+                    event_type="source_reused",
+                    message=f"[{source.name}] reused processed results from previous failed run",
+                    payload={
+                        "articles": len(reusable_result.article_ids),
+                        "reused_from_run_id": str(reusable_result.previous_run_id),
+                        "reused_from_task_id": str(reusable_result.previous_task_id),
+                    },
+                )
+                await db.commit()
+                continue
+
             task.status = "running"
             task.started_at = datetime.now(timezone.utc)
             task.stage_trace = [
@@ -787,7 +853,15 @@ class Orchestrator:
 
         if not run_cancelled and process_inputs:
             process_jobs: dict[uuid.UUID, asyncio.Task[SourceProcessResult]] = {
-                source_id: asyncio.create_task(self._process_source_articles(filtered_raw))
+                source_id: asyncio.create_task(
+                    self._process_source_articles(
+                        filtered_raw,
+                        stage_concurrency=self._resolve_processing_stage_concurrency(
+                            report_type=report_type,
+                            article_count=len(filtered_raw),
+                        ),
+                    )
+                )
                 for source_id, (filtered_raw, _collect_trace, _filter_trace) in process_inputs.items()
             }
             pending_process_jobs = dict(process_jobs)
@@ -1361,6 +1435,8 @@ class Orchestrator:
         source: Source,
         source_overrides: dict[str, dict] | None = None,
         default_source_max_items: int | None = None,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> dict:
         config = dict(source.config or {})
         if source.collect_method == "rss" and isinstance(config.get("subreddits"), list):
@@ -1368,6 +1444,8 @@ class Orchestrator:
             if subreddits:
                 config["subreddits"] = subreddits
             config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
+        if source.collect_method == "rss" and bool(config.get("arxiv_api")):
+            Orchestrator._apply_arxiv_window(config=config, window_start=window_start, window_end=window_end)
         resolved_max_items = default_source_max_items if isinstance(default_source_max_items, int) and 1 <= default_source_max_items <= 200 else None
         if not isinstance(source_overrides, dict):
             if resolved_max_items is not None:
@@ -1422,6 +1500,20 @@ class Orchestrator:
             if keywords:
                 config["keywords"] = list(dict.fromkeys(keywords))[:20]
 
+            raw_expanded_keywords = override.get("expanded_keywords")
+            expanded_keywords: list[str] = []
+            if isinstance(raw_expanded_keywords, str):
+                expanded_keywords = [item.strip() for item in raw_expanded_keywords.split(",") if item.strip()]
+            elif isinstance(raw_expanded_keywords, list):
+                for item in raw_expanded_keywords:
+                    if not isinstance(item, str):
+                        continue
+                    value = item.strip()
+                    if value:
+                        expanded_keywords.append(value)
+            if expanded_keywords:
+                config["keywords"] = list(dict.fromkeys(expanded_keywords))[:20]
+
         if source.collect_method == "twitter_snaplytics":
             raw_usernames = override.get("usernames")
             usernames: list[str] = []
@@ -1446,6 +1538,13 @@ class Orchestrator:
         return config
 
     @staticmethod
+    def _apply_arxiv_window(*, config: dict, window_start: datetime | None, window_end: datetime | None) -> None:
+        if window_start is None or window_end is None:
+            return
+        config["submitted_date_from"] = window_start.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+        config["submitted_date_to"] = window_end.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+
+    @staticmethod
     def _apply_source_max_items(*, config: dict, source: Source, max_items: int) -> dict:
         if not isinstance(max_items, int) or not (1 <= max_items <= 200):
             return config
@@ -1458,6 +1557,14 @@ class Orchestrator:
         if method in {"openalex", "europe_pmc", "pubmed"} or (method == "rss" and bool(config.get("arxiv_api"))):
             config["max_results"] = max_items
         return config
+
+    @staticmethod
+    def _resolve_processing_stage_concurrency(*, report_type: str, article_count: int) -> int:
+        if str(report_type).strip().lower() != "paper":
+            return 1
+        if article_count <= 1:
+            return 1
+        return min(4, article_count)
 
     async def _filter_raw_articles_by_window(
         self,
@@ -2082,43 +2189,43 @@ class Orchestrator:
         context: RenderContext,
         monitor_id: uuid.UUID | None,
     ) -> tuple[list[Report], list[RenderedReport]]:
-        paper_renderer = PaperRenderer()
-        digest_report = await paper_renderer.render(processed_articles, context)
         monitor_name = await self._monitor_name(db, monitor_id)
         article_id_strings = [str(item) for item in article_ids]
         article_ids_by_identity = _paper_article_ids_by_identity(processed_articles, article_ids)
+        articles_by_identity = _paper_articles_by_identity(processed_articles)
+        review_route = self.runtime_routing_profile.stages.paper_review
+        note_route = self.runtime_routing_profile.stages.paper_note
+        if review_route is None or note_route is None:
+            raise RuntimeError("paper routing profile is missing paper_review or paper_note stage")
 
-        digest_row = Report(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            time_period=selected_time_period,
-            report_type="paper",
-            title=digest_report.title,
-            content=digest_report.content,
-            article_ids=article_id_strings,
-            metadata_=_report_metadata_with_monitor(
-                metadata=digest_report.metadata,
-                report_type="paper",
-                monitor_id=monitor_id,
-                monitor_name=monitor_name,
-            ),
-            published_to=[],
-            publish_trace=[],
-            report_date=report_date,
-            created_at=datetime.now(timezone.utc),
-        )
+        await _hydrate_paper_figures_from_arxiv(processed_articles)
+        review_payload_input = _build_paper_review_payload(processed_articles, context=context)
+        review_payload, _ = await self._run_paper_review_with_retry(review_route, review_payload_input)
+        digest_title = _paper_digest_title(context, fallback=review_payload.get("digest_title"))
+        digest_row_id = uuid.uuid4()
 
-        report_rows = [digest_row]
-        rendered_reports = [digest_report]
+        report_rows: list[Report] = []
+        rendered_reports: list[RenderedReport] = []
         note_links_by_identity: dict[str, str] = {}
+        note_candidates = review_payload.get("papers") if isinstance(review_payload.get("papers"), list) else []
 
-        for article in select_paper_note_candidates(processed_articles):
-            identity = build_paper_identity(article)
+        for candidate in note_candidates:
+            if not isinstance(candidate, dict) or not candidate.get("note_candidate"):
+                continue
+            identity = str(candidate.get("paper_identity") or "").strip()
+            if not identity:
+                continue
+            article = articles_by_identity.get(identity)
+            if article is None:
+                continue
+            note_payload_input = _build_paper_note_payload(article=article, review_paper=candidate)
+            note_payload, _ = await self._run_paper_note_with_retry(note_route, note_payload_input)
             note_report = build_paper_note_report(
                 article,
                 context=context,
-                parent_report_id=str(digest_row.id),
-                digest_title=digest_report.title,
+                parent_report_id=str(digest_row_id),
+                digest_title=digest_title,
+                note_payload=note_payload,
             )
             note_row = Report(
                 id=uuid.uuid4(),
@@ -2143,21 +2250,40 @@ class Orchestrator:
             report_rows.append(note_row)
             rendered_reports.append(note_report)
 
-        digest_metadata = dict(digest_row.metadata_ or {})
+        digest_report = build_paper_digest_report(
+            articles=processed_articles,
+            context=context,
+            detail_links_by_identity=note_links_by_identity,
+            review_payload=review_payload,
+        )
+        digest_metadata = dict(digest_report.metadata or {})
         digest_metadata["paper_note_links"] = [
             {**link, "report_id": note_links_by_identity[link["paper_identity"]]}
             for link in digest_metadata.get("paper_note_links", [])
             if isinstance(link, dict) and link.get("paper_identity") in note_links_by_identity
         ]
-        digest_row.metadata_ = digest_metadata
-        updated_digest = build_paper_digest_report(
-            articles=processed_articles,
-            context=context,
-            detail_links_by_identity=note_links_by_identity,
-        )
-        digest_row.content = updated_digest.content
-        digest_report.content = updated_digest.content
         digest_report.metadata = digest_metadata
+        digest_row = Report(
+            id=digest_row_id,
+            user_id=user_id,
+            time_period=selected_time_period,
+            report_type="paper",
+            title=digest_report.title,
+            content=digest_report.content,
+            article_ids=article_id_strings,
+            metadata_=_report_metadata_with_monitor(
+                metadata=digest_metadata,
+                report_type="paper",
+                monitor_id=monitor_id,
+                monitor_name=monitor_name,
+            ),
+            published_to=[],
+            publish_trace=[],
+            report_date=report_date,
+            created_at=datetime.now(timezone.utc),
+        )
+        report_rows.insert(0, digest_row)
+        rendered_reports.insert(0, digest_report)
 
         return report_rows, rendered_reports
 
@@ -2615,6 +2741,7 @@ class Orchestrator:
     def _normalize_monitor_ai_routing(monitor_ai_routing: dict | None) -> dict:
         if not isinstance(monitor_ai_routing, dict):
             return {}
+        monitor_ai_routing = backfill_monitor_ai_routing(monitor_ai_routing)
 
         normalized_stages: dict[str, dict] = {}
         raw_stages = monitor_ai_routing.get("stages")
@@ -2704,6 +2831,30 @@ class Orchestrator:
                     else base.stages.report.fallback
                 ),
             ),
+            paper_review=StageRoute(
+                primary=(
+                    base.stages.paper_review.primary
+                    if base.stages.paper_review is not None
+                    else base.stages.report.primary
+                ),
+                fallback=list(
+                    base.stages.paper_review.fallback
+                    if base.stages.paper_review is not None
+                    else base.stages.report.fallback
+                ),
+            ),
+            paper_note=StageRoute(
+                primary=(
+                    base.stages.paper_note.primary
+                    if base.stages.paper_note is not None
+                    else base.stages.report.primary
+                ),
+                fallback=list(
+                    base.stages.paper_note.fallback
+                    if base.stages.paper_note is not None
+                    else base.stages.report.fallback
+                ),
+            ),
         )
 
         for stage_name in ("filter", "keywords", "global_summary", "report"):
@@ -2715,6 +2866,19 @@ class Orchestrator:
             if primary not in allowed:
                 continue
             getattr(stages, stage_name).primary = primary
+
+        for stage_name in ("paper_review", "paper_note"):
+            stage_override = stages_override.get(stage_name, {})
+            primary = str(stage_override.get("primary") or "").strip()
+            if not primary:
+                continue
+            allowed = _AI_STAGE_ALLOWED_PROVIDERS.get(stage_name, set())
+            if primary not in allowed:
+                continue
+            stage_route = getattr(stages, stage_name)
+            if stage_route is None:
+                continue
+            stage_route.primary = primary
 
         return RoutingProfile(
             name=base.name,
@@ -2935,6 +3099,24 @@ class Orchestrator:
             provider_getter=get_provider,
         )
 
+    async def _run_paper_review_with_retry(self, route: StageRoute, payload: dict) -> tuple[dict, str]:
+        return await run_paper_review_with_retry(
+            route=route,
+            providers=self.runtime_routing_profile.providers,
+            provider_overrides=self.runtime_provider_overrides,
+            payload=payload,
+            provider_getter=get_provider,
+        )
+
+    async def _run_paper_note_with_retry(self, route: StageRoute, payload: dict) -> tuple[dict, str]:
+        return await run_paper_note_with_retry(
+            route=route,
+            providers=self.runtime_routing_profile.providers,
+            provider_overrides=self.runtime_provider_overrides,
+            payload=payload,
+            provider_getter=get_provider,
+        )
+
     def _provider_config(self, provider_name: str) -> dict:
         raw_config = self.runtime_routing_profile.providers.get(provider_name, {})
         merged: dict = dict(raw_config) if isinstance(raw_config, dict) else {}
@@ -2954,6 +3136,89 @@ class Orchestrator:
         except Exception:
             value = 0
         return max(value, 0)
+
+    async def _load_reusable_source_results(
+        self,
+        *,
+        db: AsyncSession,
+        monitor_id: uuid.UUID | None,
+        trigger_type: str,
+        source_by_id: dict[uuid.UUID, Source],
+        window_start: datetime,
+    ) -> dict[uuid.UUID, ReusableSourceResult]:
+        if monitor_id is None or trigger_type != "manual" or not source_by_id:
+            return {}
+
+        latest_failed_stmt = (
+            select(CollectTask)
+            .where(
+                CollectTask.monitor_id == monitor_id,
+                CollectTask.source_id.is_(None),
+                CollectTask.status == "failed",
+                CollectTask.created_at >= window_start,
+            )
+            .order_by(CollectTask.created_at.desc())
+            .limit(1)
+        )
+        latest_failed_task = (await db.execute(latest_failed_stmt)).scalar_one_or_none()
+        if latest_failed_task is None:
+            return {}
+
+        previous_run_id = latest_failed_task.run_id or latest_failed_task.id
+        reusable_tasks_stmt = (
+            select(CollectTask)
+            .where(
+                CollectTask.monitor_id == monitor_id,
+                CollectTask.run_id == previous_run_id,
+                CollectTask.source_id.in_(list(source_by_id.keys())),
+                CollectTask.status == "success",
+            )
+            .order_by(CollectTask.created_at.asc())
+        )
+        reusable_tasks = (await db.execute(reusable_tasks_stmt)).scalars().all()
+        if not reusable_tasks:
+            return {}
+
+        reusable_results: dict[uuid.UUID, ReusableSourceResult] = {}
+        for source_task in reusable_tasks:
+            source_id = source_task.source_id
+            if source_id is None:
+                continue
+            source = source_by_id.get(source_id)
+            if source is None:
+                continue
+            article_rows = await self._load_articles_for_source_task(db=db, source_task=source_task)
+            if int(source_task.articles_count or 0) > 0 and not article_rows:
+                continue
+            reusable_results[source_id] = ReusableSourceResult(
+                source_id=source_id,
+                article_ids=[article.id for article in article_rows],
+                processed_articles=_processed_articles_from_rows(source=source, article_rows=article_rows),
+                previous_run_id=previous_run_id,
+                previous_task_id=source_task.id,
+            )
+        return reusable_results
+
+    async def _load_articles_for_source_task(
+        self,
+        *,
+        db: AsyncSession,
+        source_task: CollectTask,
+    ) -> list[Article]:
+        if source_task.source_id is None:
+            return []
+        started_at = source_task.started_at or source_task.created_at
+        finished_at = source_task.finished_at or started_at
+        stmt = (
+            select(Article)
+            .where(
+                Article.source_id == source_task.source_id,
+                Article.updated_at >= started_at,
+                Article.updated_at <= finished_at,
+            )
+            .order_by(Article.updated_at.asc(), Article.id.asc())
+        )
+        return (await db.execute(stmt)).scalars().all()
 
     @staticmethod
     def _is_timeout_exception(exc: Exception) -> bool:
@@ -2980,6 +3245,54 @@ def _count_markdown_heading_level(content: str, level: int) -> int:
     return sum(1 for line in str(content or "").splitlines() if line.lstrip().startswith(prefix))
 
 
+def _processed_articles_from_rows(source: Source, article_rows: list[Article]) -> list[ProcessedArticle]:
+    processed: list[ProcessedArticle] = []
+    for row in article_rows:
+        metadata = dict(row.metadata_ or {})
+        metadata.setdefault("source_id", str(source.id))
+        metadata.setdefault("source_name", source.name)
+        metadata.setdefault("source_category", source.category)
+        raw = RawArticle(
+            external_id=str(row.external_id or row.id),
+            title=row.title,
+            url=row.url,
+            content=row.raw_content,
+            published_at=row.published_at,
+            metadata=metadata,
+        )
+        detail = str(metadata.get("detail") or row.raw_content or row.summary or "").strip()
+        evidence = str(metadata.get("evidence") or row.raw_content or row.summary or "").strip()
+        processed.append(
+            ProcessedArticle(
+                raw=raw,
+                event_title=row.title,
+                summary=str(row.summary or "").strip(),
+                keywords=[
+                    str(keyword).strip()
+                    for keyword in (row.keywords or [])
+                    if str(keyword).strip()
+                ],
+                score=float(row.ai_score or 1.0),
+                importance=str(metadata.get("importance") or "normal").strip() or "normal",
+                detail=detail,
+                category=str(metadata.get("category") or metadata.get("source_category") or "").strip() or None,
+                who=str(metadata.get("who") or "").strip(),
+                what=str(metadata.get("what") or "").strip(),
+                when=str(metadata.get("when") or "").strip(),
+                metrics=[
+                    str(metric).strip()
+                    for metric in (metadata.get("metrics") or [])
+                    if str(metric).strip()
+                ],
+                availability=str(metadata.get("availability") or "").strip(),
+                unknowns=str(metadata.get("unknowns") or "").strip(),
+                evidence=evidence,
+                detail_mode=str(metadata.get("detail_mode") or "full").strip() or "full",
+            )
+        )
+    return processed
+
+
 def _paper_article_ids_by_identity(
     processed_articles: list[ProcessedArticle],
     article_ids: list[uuid.UUID],
@@ -2989,6 +3302,158 @@ def _paper_article_ids_by_identity(
         identity = build_paper_identity(article)
         article_ids_by_identity.setdefault(identity, []).append(str(article_id))
     return article_ids_by_identity
+
+
+def _paper_articles_by_identity(processed_articles: list[ProcessedArticle]) -> dict[str, ProcessedArticle]:
+    articles_by_identity: dict[str, ProcessedArticle] = {}
+    for article in processed_articles:
+        identity = build_paper_identity(article)
+        if identity not in articles_by_identity:
+            articles_by_identity[identity] = article
+    return articles_by_identity
+
+
+def _paper_digest_title(context: RenderContext, fallback: object = None) -> str:
+    extra = context.extra if isinstance(context.extra, dict) else {}
+    explicit_title = str(extra.get("title") or "").strip()
+    if explicit_title:
+        return explicit_title
+    if context.date:
+        return f"{context.date} 论文推荐"
+    return "论文推荐"
+
+
+def _paper_review_affiliations(article: ProcessedArticle) -> list[str]:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    candidates = metadata.get("affiliations")
+    if isinstance(candidates, list):
+        return [str(item).strip() for item in candidates if str(item).strip()][:6]
+    if isinstance(candidates, str) and candidates.strip():
+        return [candidates.strip()]
+    authors = metadata.get("authors")
+    if isinstance(authors, list):
+        collected: list[str] = []
+        for author in authors:
+            if not isinstance(author, dict):
+                continue
+            for key in ("affiliations", "affiliation", "institution", "institutions", "organization", "org"):
+                raw_value = author.get(key)
+                values = raw_value if isinstance(raw_value, list) else [raw_value]
+                for value in values:
+                    text = str(value or "").strip()
+                    if not text or text in collected:
+                        continue
+                    collected.append(text)
+                    if len(collected) >= 6:
+                        return collected
+        return collected
+    return []
+
+
+def _paper_review_authors(article: ProcessedArticle) -> list[str]:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    authors = metadata.get("authors")
+    if isinstance(authors, list):
+        output: list[str] = []
+        for author in authors:
+            if isinstance(author, str) and author.strip():
+                candidate = author.strip()
+            elif isinstance(author, dict):
+                candidate = ""
+                for key in ("name", "fullname", "full_name", "display_name"):
+                    value = author.get(key)
+                    if isinstance(value, str) and value.strip():
+                        candidate = value.strip()
+                        break
+            else:
+                candidate = ""
+            if candidate and candidate not in output:
+                output.append(candidate)
+            if len(output) >= 8:
+                break
+        return output
+    if isinstance(authors, str) and authors.strip():
+        return [authors.strip()]
+    return []
+
+
+def _paper_review_links(article: ProcessedArticle) -> list[str]:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    links: list[str] = []
+    for key in ("paper_url", "arxiv_url", "pdf_url", "project_url", "code_url"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() not in links:
+            links.append(value.strip())
+    if article.raw.url and article.raw.url not in links:
+        links.append(article.raw.url)
+    return links[:6]
+
+
+def _paper_review_figure(article: ProcessedArticle) -> str:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    for key in ("figure_url", "figure", "image", "cover"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _build_paper_review_payload(
+    processed_articles: list[ProcessedArticle],
+    *,
+    context: RenderContext,
+) -> dict[str, object]:
+    papers: list[dict[str, object]] = []
+    for article in processed_articles:
+        papers.append(
+            {
+                "paper_identity": build_paper_identity(article),
+                "title": str(article.raw.title or "").strip(),
+                "summary": str(article.summary or "").strip(),
+                "detail": str(article.detail or article.evidence or article.summary or "").strip(),
+                "authors": _paper_review_authors(article),
+                "affiliations": _paper_review_affiliations(article),
+                "links": _paper_review_links(article),
+                "figure": _paper_review_figure(article),
+            }
+        )
+    return {
+        "title": _paper_digest_title(context),
+        "papers": papers,
+    }
+
+
+def _build_paper_note_payload(
+    *,
+    article: ProcessedArticle,
+    review_paper: dict,
+) -> dict[str, dict[str, object]]:
+    paper_identity = str(review_paper.get("paper_identity") or build_paper_identity(article)).strip()
+    title = str(review_paper.get("title") or article.raw.title or "").strip()
+    detail_parts = [
+        str(review_paper.get("one_line_judgment") or "").strip(),
+        str(review_paper.get("core_problem") or "").strip(),
+        str(review_paper.get("core_method") or "").strip(),
+        str(review_paper.get("key_result") or "").strip(),
+        str(review_paper.get("why_it_matters") or "").strip(),
+        str(article.detail or "").strip(),
+        str(article.evidence or "").strip(),
+    ]
+    detail = "\n".join(part for part in detail_parts if part)
+    return {
+        "paper": {
+            "paper_identity": paper_identity,
+            "paper_slug": str(review_paper.get("paper_slug") or "").strip(),
+            "title": title,
+            "summary": str(article.summary or "").strip(),
+            "detail": detail,
+            "authors": review_paper.get("authors") or _paper_review_authors(article),
+            "affiliations": review_paper.get("affiliations") or _paper_review_affiliations(article),
+            "links": review_paper.get("links") or _paper_review_links(article),
+            "recommendation": str(review_paper.get("recommendation") or "").strip(),
+            "reading_advice": str(review_paper.get("reading_advice") or "").strip(),
+        }
+    }
 
 
 def _report_metadata_with_monitor(
@@ -3012,6 +3477,78 @@ def _coerce_uuid(value: uuid.UUID | str) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+async def _hydrate_paper_figures_from_arxiv(processed_articles: list[ProcessedArticle]) -> None:
+    pending: list[tuple[ProcessedArticle, str]] = []
+    for article in processed_articles:
+        html_url = _paper_arxiv_html_url(article)
+        if not html_url:
+            continue
+        metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+        if _paper_review_figure(article):
+            continue
+        pending.append((article, html_url))
+
+    if not pending:
+        return
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        for article, html_url in pending:
+            html = await _safe_text_get(client, html_url)
+            figure_url, caption = _extract_first_figure_from_html(html, base_url=html_url)
+            if not figure_url:
+                continue
+            metadata = dict(article.raw.metadata or {})
+            metadata["figure_url"] = figure_url
+            if caption and not str(metadata.get("figure_caption") or "").strip():
+                metadata["figure_caption"] = caption
+            article.raw.metadata = metadata
+
+
+def _paper_arxiv_html_url(article: ProcessedArticle) -> str:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    for key in ("arxiv_html_url", "html_url"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    paper_id = str(metadata.get("paper_id") or metadata.get("arxiv_id") or "").strip()
+    if paper_id:
+        return f"https://arxiv.org/html/{paper_id}"
+
+    for candidate in (str(metadata.get("arxiv_url") or "").strip(), str(article.raw.url or "").strip()):
+        if "arxiv.org/abs/" in candidate:
+            return candidate.replace("/abs/", "/html/")
+    return ""
+
+
+def _extract_first_figure_from_html(html: str, *, base_url: str) -> tuple[str, str]:
+    if not html:
+        return "", ""
+    figure_match = re.search(r"<figure\b[^>]*>(.*?)</figure>", html, flags=re.IGNORECASE | re.DOTALL)
+    if not figure_match:
+        return "", ""
+    figure_block = figure_match.group(1)
+    image_match = re.search(r'<img\b[^>]*src=["\']([^"\']+)["\']', figure_block, flags=re.IGNORECASE)
+    if not image_match:
+        return "", ""
+    caption_match = re.search(r"<figcaption\b[^>]*>(.*?)</figcaption>", figure_block, flags=re.IGNORECASE | re.DOTALL)
+    caption = ""
+    if caption_match:
+        caption = re.sub(r"<[^>]+>", " ", caption_match.group(1))
+        caption = re.sub(r"\s+", " ", caption).strip()
+    normalized_base = base_url if base_url.endswith("/") else f"{base_url}/"
+    return urljoin(normalized_base, image_match.group(1).strip()), caption
+
+
+async def _safe_text_get(client: httpx.AsyncClient, url: str) -> str:
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        return str(response.text or "")
+    except Exception:
+        return ""
 
 
 def _item_source_categories(item: ProcessedArticle | ProcessedEvent) -> list[str]:
