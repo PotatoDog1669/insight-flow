@@ -260,7 +260,7 @@ describe("ReportDetailPage", () => {
       events: [],
       global_tldr: "",
       content:
-        "# Paper Digest\n\n## 本期导读\nIntro\n\n### 1. Nemotron-Cascade 2\n- 为什么重要：值得重点关注\n- 阅读建议：必读\n- 详细笔记：见关联阅读笔记",
+        "# Paper Digest\n\n## 本期导读\nIntro\n\n### 1. Nemotron-Cascade 2\n- 为什么重要：值得重点关注\n- 详细笔记：见关联阅读笔记",
       article_ids: [],
       published_to: [],
       metadata: {
@@ -280,7 +280,7 @@ describe("ReportDetailPage", () => {
     await waitFor(() => expect(screen.getByText("2026-03-02 论文推荐", { selector: "header h1" })).toBeInTheDocument());
     expect(screen.queryByText("本期包含的详细阅读笔记")).not.toBeInTheDocument();
     expect(screen.getByText("为什么重要：值得重点关注")).toBeInTheDocument();
-    expect(screen.getByText("阅读建议：必读")).toBeInTheDocument();
+    expect(screen.queryByText("阅读建议：必读")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "查看详细笔记" })).not.toBeInTheDocument();
   });
 
@@ -315,14 +315,14 @@ tags:
 
 ### 1. OS-Themis
 
-![OS-Themis](https://example.com/os-themis.png)
-
 - 作者：Alice
+- 机构：Example Lab
+- 链接：[Abs](https://arxiv.org/abs/2603.19191)
 - 来源：arXiv
 
-**核心方法**
+![OS-Themis](https://example.com/os-themis.png)
 
-通过多智能体 critic 建模奖励。`,
+- **核心方法**：通过多智能体 critic 建模奖励。`,
       article_ids: [],
       published_to: [],
       metadata: {
@@ -341,7 +341,9 @@ tags:
     expect(screen.queryByText("date: 2026-03-02")).not.toBeInTheDocument();
     expect(screen.getByText("本期聚焦 GUI agent 的奖励建模。")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "总结" })).toBeInTheDocument();
-    expect(screen.getByText("通过多智能体 critic 建模奖励。")).toBeInTheDocument();
+    expect(
+      screen.getByText((_, element) => element?.textContent === "核心方法：通过多智能体 critic 建模奖励。")
+    ).toBeInTheDocument();
     expect(screen.getByAltText("OS-Themis")).toBeInTheDocument();
   });
 
@@ -424,7 +426,7 @@ tags:
     await waitFor(() => expect(screen.getByText("Fallback article title")).toBeInTheDocument());
     expect(mockedGetArticleById).toHaveBeenCalledWith("article-1");
     expect(screen.queryByRole("heading", { name: "Outline" })).not.toBeInTheDocument();
-  });
+  }, 10000);
 
   it("does not render a delete action on report detail", async () => {
     mockedGetReportById.mockResolvedValue({

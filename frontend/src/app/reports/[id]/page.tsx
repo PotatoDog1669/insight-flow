@@ -276,7 +276,7 @@ export default function ReportDetailPage() {
             )}
           </header>
           {hasTemplateContent ? (
-            <section className="bg-background rounded-2xl border-none sm:border sm:border-border/40 sm:shadow-sm sm:p-8 md:p-10">
+            <section className="bg-card rounded-2xl border-none sm:border sm:border-border/50 shadow-sm sm:p-8 md:p-10">
               <ReportDocument
                 content={effectiveReportContent}
                 events={report.events}
@@ -374,7 +374,7 @@ export default function ReportDetailPage() {
             className="absolute inset-0 bg-background/80 backdrop-blur-sm"
             onClick={() => setPendingSyncDestinationId(null)}
           />
-          <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl border border-border/50 bg-background shadow-2xl">
+          <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl border border-border/50 bg-card shadow-2xl">
             <div className="border-b border-border/40 bg-card/90 px-6 py-5">
               <h2 className="text-xl font-semibold tracking-tight">确认同步</h2>
               <p className="mt-2 text-sm text-muted-foreground">
@@ -393,7 +393,7 @@ export default function ReportDetailPage() {
                   {pendingSyncDestination.type}
                 </div>
               </div>
-              <div className="rounded-2xl border border-border/50 bg-background p-4">
+              <div className="rounded-2xl border border-border/50 bg-card p-4">
                 <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   报告
                 </div>
