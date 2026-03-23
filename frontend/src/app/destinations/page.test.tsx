@@ -277,7 +277,7 @@ describe("DestinationsPage", () => {
     });
 
     expect(await screen.findByDisplayValue("/Users/leo/Documents/Obsidian Vault")).toBeInTheDocument();
-    expect(screen.queryByText("Detected current Obsidian vault.")).not.toBeInTheDocument();
+    expect(screen.getByText("Detected current Obsidian vault.")).toBeInTheDocument();
   });
 
   it("keeps vault auto-detection available in readonly file mode", async () => {
@@ -309,7 +309,7 @@ describe("DestinationsPage", () => {
     });
 
     expect(await screen.findByDisplayValue("/Users/leo/Documents/Obsidian Vault")).toBeInTheDocument();
-    expect(screen.queryByText("Detected current Obsidian vault.")).not.toBeInTheDocument();
+    expect(screen.getByText("Detected current Obsidian vault.")).toBeInTheDocument();
   });
 
   it("allows renaming a destination instance and saves the new name", async () => {

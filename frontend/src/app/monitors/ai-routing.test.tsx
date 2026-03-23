@@ -3,14 +3,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import MonitorsPage from "@/app/monitors/page";
 import {
   createMonitor,
-  getProviders,
   getDestinations,
-  getMonitorAIRoutingDefaults,
   getMonitorLogs,
   getMonitorRunEvents,
   getMonitorRuns,
   getMonitors,
+  getProviders,
   getSources,
+  updateMonitor,
 } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
@@ -18,10 +18,10 @@ vi.mock("@/lib/api", () => ({
   getSources: vi.fn(),
   getProviders: vi.fn(),
   getDestinations: vi.fn(),
-  getMonitorAIRoutingDefaults: vi.fn(),
   getMonitorLogs: vi.fn(),
   getMonitorRuns: vi.fn(),
   getMonitorRunEvents: vi.fn(),
+  getMonitorAIRoutingDefaults: vi.fn(),
   cancelMonitorRun: vi.fn(),
   createMonitor: vi.fn(),
   updateMonitor: vi.fn(),
@@ -33,13 +33,13 @@ const mockedGetMonitors = vi.mocked(getMonitors);
 const mockedGetSources = vi.mocked(getSources);
 const mockedGetProviders = vi.mocked(getProviders);
 const mockedGetDestinations = vi.mocked(getDestinations);
-const mockedGetMonitorAIRoutingDefaults = vi.mocked(getMonitorAIRoutingDefaults);
 const mockedGetMonitorLogs = vi.mocked(getMonitorLogs);
 const mockedGetMonitorRuns = vi.mocked(getMonitorRuns);
 const mockedGetMonitorRunEvents = vi.mocked(getMonitorRunEvents);
 const mockedCreateMonitor = vi.mocked(createMonitor);
+const mockedUpdateMonitor = vi.mocked(updateMonitor);
 
-describe("MonitorsPage AI routing", () => {
+describe("MonitorsPage AI provider flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetMonitors.mockResolvedValue([
@@ -50,8 +50,19 @@ describe("MonitorsPage AI routing", () => {
         report_type: "daily",
         source_ids: ["source-1"],
         destination_ids: ["notion"],
+        destination_instance_ids: ["dest-notion-1"],
         window_hours: 24,
         custom_schedule: null,
+        source_overrides: {},
+        ai_routing: {
+          stages: {
+            filter: { primary: "llm_openai" },
+            keywords: { primary: "llm_openai" },
+            global_summary: { primary: "llm_openai" },
+            report: { primary: "llm_openai" },
+          },
+          providers: {},
+        },
         enabled: true,
         status: "active",
         last_run: null,
@@ -76,7 +87,7 @@ describe("MonitorsPage AI routing", () => {
     ] as never);
     mockedGetDestinations.mockResolvedValue([
       {
-        id: "notion",
+        id: "dest-notion-1",
         name: "Notion",
         type: "notion",
         description: "Notion destination",
@@ -92,6 +103,7 @@ describe("MonitorsPage AI routing", () => {
         description: "Codex provider",
         enabled: false,
         config: {
+          auth_mode: "api_key",
           base_url: "https://api.openai.com/v1",
           model: "gpt-5-codex",
           timeout_sec: 120,
@@ -108,6 +120,7 @@ describe("MonitorsPage AI routing", () => {
         description: "OpenAI provider",
         enabled: true,
         config: {
+          auth_mode: "api_key",
           base_url: "https://api.openai.com/v1",
           model: "gpt-4o-mini",
           timeout_sec: 120,
@@ -118,15 +131,6 @@ describe("MonitorsPage AI routing", () => {
         },
       },
     ] as never);
-    mockedGetMonitorAIRoutingDefaults.mockResolvedValue({
-      profile_name: "stable_v1",
-      stages: {
-        filter: "llm_openai",
-        keywords: "llm_openai",
-        global_summary: "llm_openai",
-        report: "llm_openai",
-      },
-    } as never);
     mockedGetMonitorLogs.mockResolvedValue([] as never);
     mockedGetMonitorRuns.mockResolvedValue([] as never);
     mockedGetMonitorRunEvents.mockResolvedValue([] as never);
@@ -137,6 +141,33 @@ describe("MonitorsPage AI routing", () => {
       report_type: "daily",
       source_ids: ["source-1"],
       destination_ids: [],
+      destination_instance_ids: ["dest-notion-1"],
+      window_hours: 24,
+      custom_schedule: null,
+      source_overrides: {},
+      ai_routing: {
+        stages: {
+          filter: { primary: "llm_codex" },
+          keywords: { primary: "llm_codex" },
+          global_summary: { primary: "llm_codex" },
+          report: { primary: "llm_codex" },
+        },
+        providers: {},
+      },
+      enabled: true,
+      status: "active",
+      last_run: null,
+      created_at: "2026-03-02T10:00:00Z",
+      updated_at: "2026-03-02T10:00:00Z",
+    } as never);
+    mockedUpdateMonitor.mockResolvedValue({
+      id: "monitor-1",
+      name: "Daily AI Brief",
+      time_period: "daily",
+      report_type: "daily",
+      source_ids: ["source-1"],
+      destination_ids: ["notion"],
+      destination_instance_ids: ["dest-notion-1"],
       window_hours: 24,
       custom_schedule: null,
       source_overrides: {},
@@ -144,13 +175,10 @@ describe("MonitorsPage AI routing", () => {
         stages: {
           filter: { primary: "llm_openai" },
           keywords: { primary: "llm_openai" },
-          global_summary: { primary: "llm_codex" },
-          report: { primary: "llm_codex" },
+          global_summary: { primary: "llm_openai" },
+          report: { primary: "llm_openai" },
         },
-        providers: {
-          llm_openai: { model: "gpt-4o-mini" },
-          llm_codex: { model: "gpt-5-codex" },
-        },
+        providers: {},
       },
       enabled: true,
       status: "active",
@@ -160,40 +188,22 @@ describe("MonitorsPage AI routing", () => {
     } as never);
   });
 
-  it("shows llm_codex in routing selects and inherit defaults", async () => {
+  it("shows a single AI provider selector with supported options only", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
-    expect(await screen.findByRole("heading", { name: "创建任务" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "AI 路由配置（高级）" }));
 
-    const optionTexts = screen.getAllByRole("option").map((option) => option.textContent?.trim() ?? "");
-    expect(optionTexts).toContain("llm_codex");
-    expect(optionTexts).toContain("llm_openai");
-    expect(optionTexts).toContain("inherit (current: llm_openai)");
+    const providerSelect = screen.getByLabelText("AI 提供商");
+    const optionTexts = Array.from(providerSelect.querySelectorAll("option")).map((option) => option.textContent?.trim() ?? "");
+
+    expect(screen.getByText("监控任务全链路统一使用一个 AI 提供商，不再分别配置过滤、关键词、摘要和报告阶段。")).toBeInTheDocument();
+    expect(optionTexts).toEqual(["llm_codex", "llm_openai"]);
+    expect(screen.queryByLabelText("Filter stage provider")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Global summary stage provider")).not.toBeInTheDocument();
   });
 
-  it("keeps advanced ai routing collapsed by default in create and edit", async () => {
-    render(<MonitorsPage />);
-    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
-    const createToggle = await screen.findByRole("button", { name: "AI 路由配置（高级）" });
-    expect(createToggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByLabelText("Filter stage provider")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-
-    fireEvent.click(screen.getByText("Daily AI Brief"));
-    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
-
-    const editToggle = screen.getByRole("button", { name: "AI 路由配置（高级）" });
-    expect(editToggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByLabelText("Filter stage provider")).not.toBeInTheDocument();
-  });
-
-  it("warns when selected provider is not configured but still allows saving", async () => {
+  it("warns when the selected provider is disabled but still allows saving", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
@@ -202,19 +212,15 @@ describe("MonitorsPage AI routing", () => {
       target: { value: "Routing Warning Monitor" },
     });
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
-
-    fireEvent.click(screen.getByRole("button", { name: "AI 路由配置（高级）" }));
-    fireEvent.change(screen.getByLabelText("Global summary stage provider"), {
+    fireEvent.change(screen.getByLabelText("AI 提供商"), {
       target: { value: "llm_codex" },
     });
 
-    expect(
-      screen.getByText("以下 provider 尚未在模型配置中启用：llm_codex。你仍然可以保存任务，但运行时可能失败。")
-    ).toBeInTheDocument();
+    expect(screen.getByText("当前选择的 provider 尚未启用，任务可以保存，但运行时可能失败。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "创建" })).toBeEnabled();
   });
 
-  it("auto-expands advanced ai routing when editing a monitor with disabled providers", async () => {
+  it("loads the simplified ai provider from existing routing when editing", async () => {
     mockedGetMonitors.mockResolvedValueOnce([
       {
         id: "monitor-1",
@@ -223,13 +229,15 @@ describe("MonitorsPage AI routing", () => {
         report_type: "daily",
         source_ids: ["source-1"],
         destination_ids: ["notion"],
+        destination_instance_ids: ["dest-notion-1"],
         window_hours: 24,
         custom_schedule: null,
         source_overrides: {},
         ai_routing: {
           stages: {
-            report: { primary: "llm_codex" },
+            filter: { primary: "llm_codex" },
           },
+          providers: {},
         },
         enabled: true,
         status: "active",
@@ -245,12 +253,11 @@ describe("MonitorsPage AI routing", () => {
     fireEvent.click(screen.getByText("Daily AI Brief"));
     expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
 
-    const toggle = screen.getByRole("button", { name: "AI 路由配置（高级）" });
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText(/以下 provider 尚未在模型配置中启用/)).toBeInTheDocument();
+    expect(screen.getByLabelText("AI 提供商")).toHaveValue("llm_codex");
+    expect(screen.getByText("当前选择的 provider 尚未启用，任务可以保存，但运行时可能失败。")).toBeInTheDocument();
   });
 
-  it("submits llm_codex for global summary and report stages", async () => {
+  it("submits the selected provider across all AI routing stages on create", async () => {
     render(<MonitorsPage />);
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
@@ -259,27 +266,9 @@ describe("MonitorsPage AI routing", () => {
       target: { value: "Routing Monitor" },
     });
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
-    fireEvent.click(screen.getByRole("button", { name: "AI 路由配置（高级）" }));
-
-    fireEvent.change(screen.getByLabelText("Filter stage provider"), {
-      target: { value: "llm_openai" },
-    });
-    fireEvent.change(screen.getByLabelText("Keywords stage provider"), {
-      target: { value: "llm_openai" },
-    });
-    fireEvent.change(screen.getByLabelText("Global summary stage provider"), {
+    fireEvent.change(screen.getByLabelText("AI 提供商"), {
       target: { value: "llm_codex" },
     });
-    fireEvent.change(screen.getByLabelText("Report stage provider"), {
-      target: { value: "llm_codex" },
-    });
-    fireEvent.change(screen.getByLabelText("Model for llm_openai"), {
-      target: { value: "gpt-4o-mini" },
-    });
-    fireEvent.change(screen.getByLabelText("Model for llm_codex"), {
-      target: { value: "gpt-5-codex" },
-    });
-
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
     await waitFor(() => {
@@ -288,14 +277,64 @@ describe("MonitorsPage AI routing", () => {
           name: "Routing Monitor",
           ai_routing: {
             stages: {
-              filter: { primary: "llm_openai" },
-              keywords: { primary: "llm_openai" },
+              filter: { primary: "llm_codex" },
+              keywords: { primary: "llm_codex" },
               global_summary: { primary: "llm_codex" },
               report: { primary: "llm_codex" },
             },
-            providers: {
-              llm_openai: { model: "gpt-4o-mini" },
-              llm_codex: { model: "gpt-5-codex" },
+          },
+        })
+      );
+    });
+  });
+
+  it("submits the updated provider across all AI routing stages on edit", async () => {
+    mockedGetMonitors.mockResolvedValueOnce([
+      {
+        id: "monitor-1",
+        name: "Daily AI Brief",
+        time_period: "daily",
+        report_type: "daily",
+        source_ids: ["source-1"],
+        destination_ids: ["notion"],
+        destination_instance_ids: ["dest-notion-1"],
+        window_hours: 24,
+        custom_schedule: null,
+        source_overrides: {},
+        ai_routing: {
+          stages: {
+            filter: { primary: "llm_codex" },
+          },
+          providers: {},
+        },
+        enabled: true,
+        status: "active",
+        last_run: null,
+        created_at: "2026-03-02T10:00:00Z",
+        updated_at: "2026-03-02T10:00:00Z",
+      },
+    ] as never);
+
+    render(<MonitorsPage />);
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Daily AI Brief"));
+    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("AI 提供商"), {
+      target: { value: "llm_openai" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateMonitor).toHaveBeenCalledWith(
+        "monitor-1",
+        expect.objectContaining({
+          ai_routing: {
+            stages: {
+              filter: { primary: "llm_openai" },
+              keywords: { primary: "llm_openai" },
+              global_summary: { primary: "llm_openai" },
+              report: { primary: "llm_openai" },
             },
           },
         })
