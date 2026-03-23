@@ -37,7 +37,7 @@ The current project already covers the full workflow: on the source side it supp
 
 ## Demo
 
-insight-flow.mp4
+https://github.com/user-attachments/assets/c3c22e77-2280-4103-88f5-9bf852318c0c
 
 ## Requirements
 
