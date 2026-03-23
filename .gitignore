@@ -79,3 +79,5 @@ docs/plans/
 .skills-hub/
 .codex/
 .agent/
+*.backup
+*.bak

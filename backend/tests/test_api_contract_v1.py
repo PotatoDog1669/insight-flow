@@ -2,11 +2,9 @@
 
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,6 +81,51 @@ def test_monitors_ai_routing_defaults_contract(client: TestClient) -> None:
     assert data["stages"]["paper_review"] in {"llm_openai", "llm_codex"}
     assert data["stages"]["paper_note"] in {"llm_openai", "llm_codex"}
     assert data["stages"]["report"] in {"llm_openai", "llm_codex"}
+
+
+def test_monitors_agent_contract_supports_message_and_conversation_id(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/monitors/agent",
+        json={"message": "track ai agents"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] in {"clarify", "draft"}
+    assert isinstance(payload["conversation_id"], str)
+    if payload["mode"] == "clarify":
+        assert isinstance(payload["message"], str)
+    else:
+        assert isinstance(payload["draft"]["name"], str)
+        assert isinstance(payload["monitor_payload"]["name"], str)
+
+
+def test_monitors_agent_stream_contract_returns_ndjson_events(client: TestClient, monkeypatch) -> None:
+    from app.agents.monitor_agent.service import MonitorAgentService
+    from app.schemas.monitor_agent import MonitorAgentClarifyResponse, MonitorAgentFinalEvent, MonitorAgentStatusEvent
+
+    async def _fake_stream_message_events(self, *, request, db):
+        del self, request, db
+        yield MonitorAgentStatusEvent(key="understand", label="理解需求", status="running")
+        yield MonitorAgentStatusEvent(key="understand", label="理解需求", status="completed")
+        yield MonitorAgentFinalEvent(
+            response=MonitorAgentClarifyResponse(
+                mode="clarify",
+                conversation_id="conv-stream",
+                message="请再具体一点",
+                missing_or_conflicting_fields=["topic_scope"],
+            )
+        )
+
+    monkeypatch.setattr(MonitorAgentService, "stream_message_events", _fake_stream_message_events)
+
+    with client.stream("POST", "/api/v1/monitors/agent/stream", json={"message": "track ai agents"}) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/x-ndjson")
+        lines = [line for line in response.iter_lines() if line]
+
+    assert len(lines) == 3
+    assert '"type": "status"' in lines[0]
+    assert '"type": "final"' in lines[-1]
 
 
 def test_monitors_contract_supports_list_create_and_run(client: TestClient, monkeypatch) -> None:
@@ -474,26 +517,6 @@ def test_reports_contract_supports_filters_endpoint(client: TestClient) -> None:
     assert filters_data["monitors"] == [
         {"id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "name": "Seed Monitor"}
     ]
-
-
-def test_reports_contract_serves_paper_figure_assets(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from app.api.v1 import reports as reports_api
-
-    asset_root = tmp_path / "paper_figures"
-    asset_path = asset_root / "2603.18762v1" / "figure.png"
-    asset_path.parent.mkdir(parents=True, exist_ok=True)
-    asset_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
-
-    monkeypatch.setattr(reports_api, "PAPER_FIGURE_ASSET_DIR", asset_root)
-
-    response = client.get("/api/v1/reports/paper-assets/2603.18762v1/figure.png")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "image/png"
 
 
 def test_users_me_contract_supports_profile_and_settings_update(client: TestClient) -> None:

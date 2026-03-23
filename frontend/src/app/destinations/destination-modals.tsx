@@ -107,40 +107,46 @@ export function DeleteDestinationModal({ deleting, destination, onClose, onDelet
   }
 
   return (
-    <ModalFrame
-      title="删除落盘点"
-      description={`删除后，任务和同步弹窗里将不再显示“${destination.name}”。`}
-      onClose={onClose}
-    >
-      <div className="space-y-6">
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* backdrop */}
+      <div
+        className="absolute inset-0 bg-slate-900/20 backdrop-blur-[2px]"
+        onClick={onClose}
+      />
+      {/* dialog */}
+      <div className="relative w-[min(90vw,24rem)] rounded-[1.5rem] border border-slate-200/80 bg-white/98 px-7 py-6 shadow-[0_32px_80px_rgba(0,0,0,0.12)] backdrop-blur-xl">
+        <h2 className="mb-1.5 text-[1.05rem] font-semibold text-slate-800">删除落盘点</h2>
+        <p className="text-sm leading-6 text-slate-500">
+          删除后，任务和同步弹窗里将不再显示“<span className="font-medium text-slate-700">{destination.name}</span>”。
+        </p>
+        
+        <div className="mt-4 rounded-xl border border-red-100 bg-red-50/50 px-4 py-3 text-xs leading-5 text-red-600">
           请确认这个落盘点已经不再被使用。如果它还绑定在任务上，后续同步会失去这个目标。
         </div>
-        <div className="flex items-center justify-end gap-3">
-          <Button type="button" variant="ghost" className="rounded-2xl" onClick={onClose}>
-            取消
-          </Button>
-          <Button
+
+        <div className="mt-6 flex items-center justify-end gap-2.5">
+          <button
             type="button"
-            variant="outline"
-            className="rounded-2xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-600"
-            disabled={deleting}
+            onClick={onClose}
+            className="rounded-full border border-slate-200 bg-white px-5 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+          >
+            取消
+          </button>
+          <button
+            type="button"
             onClick={onDelete}
+            disabled={deleting}
+            className="flex items-center gap-2 rounded-full bg-red-500 px-5 py-2 text-sm font-medium text-white transition hover:bg-red-600 disabled:opacity-50"
           >
             {deleting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                删除中
-              </>
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <>
-                <Trash2 className="mr-2 h-4 w-4" />
-                确认删除
-              </>
+              <Trash2 className="h-4 w-4" />
             )}
-          </Button>
+            确认删除
+          </button>
         </div>
       </div>
-    </ModalFrame>
+    </div>
   );
 }

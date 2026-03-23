@@ -271,8 +271,8 @@ export default function DestinationsPage() {
           <div className="rounded-2xl border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground">
             已配置 <span className="font-semibold text-foreground">{destinations.length}</span> 个落盘点
           </div>
-          <Button type="button" className="rounded-2xl px-5" onClick={() => setIsCreateModalOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
+          <Button type="button" className="rounded-2xl px-5 group" onClick={() => setIsCreateModalOpen(true)}>
+            <Plus className="mr-2 h-4 w-4 transition-transform group-hover:rotate-90 duration-300" />
             新增落盘点
           </Button>
         </div>

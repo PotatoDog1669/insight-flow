@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ReportCard, type Report as ReportCardModel } from "@/components/ReportCard";
 import { deleteReport, getReportFilters, getReports, type Report as APIReport, type ReportFilters } from "@/lib/api";
 import { getReportDisplayTitle } from "@/lib/report-display";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 function toCardReport(report: APIReport): ReportCardModel {
   return {
@@ -32,6 +33,7 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingReportIds, setDeletingReportIds] = useState<Record<string, boolean>>({});
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -62,10 +64,14 @@ export default function LibraryPage() {
     return reports.filter((report) => monitorFilter === "all" || report.monitor_id === monitorFilter);
   }, [monitorFilter, reports]);
 
-  const handleDelete = async (reportId: string) => {
-    if (typeof window !== "undefined" && !window.confirm("确认删除这份报告吗？")) {
-      return;
-    }
+  const handleDelete = (reportId: string) => {
+    setConfirmDeleteId(reportId);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    const reportId = confirmDeleteId;
+    setConfirmDeleteId(null);
     setError(null);
     setDeletingReportIds((prev) => ({ ...prev, [reportId]: true }));
     try {
@@ -122,10 +128,9 @@ export default function LibraryPage() {
               key={report.id}
               report={report}
               index={i}
-              onDelete={(reportId) => {
-                void handleDelete(reportId);
-              }}
+              onDelete={handleDelete}
               deleting={Boolean(deletingReportIds[report.id])}
+              entrySource="library"
             />
           ))}
           {filteredReports.length === 0 && (
@@ -135,6 +140,15 @@ export default function LibraryPage() {
           )}
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="删除报告"
+        description="此操作无法撤销，确认删除这份报告吗？"
+        confirmLabel="删除"
+        onCancel={() => setConfirmDeleteId(null)}
+        onConfirm={() => { void handleConfirmDelete(); }}
+      />
     </div>
   );
 }

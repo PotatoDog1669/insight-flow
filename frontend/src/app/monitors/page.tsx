@@ -31,6 +31,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { RunEventPayload } from "@/components/monitor/RunEventPayload";
 import { cn } from "@/lib/utils";
 import type { Destination } from "@/lib/api";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 const AI_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_codex", "llm_openai"];
 const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
@@ -338,6 +339,7 @@ export default function MonitorsPage() {
   const [togglingMonitorIds, setTogglingMonitorIds] = useState<Record<string, boolean>>({});
   const [deletingMonitorIds, setDeletingMonitorIds] = useState<Record<string, boolean>>({});
   const [openingLogsMonitorId, setOpeningLogsMonitorId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const sourceMap = useMemo(() => {
     const map = new Map<string, Source>();
     sources.forEach((source) => map.set(source.id, source));
@@ -798,7 +800,14 @@ export default function MonitorsPage() {
     }
   };
 
-  const handleDelete = async (monitorId: string) => {
+  const handleDelete = (monitorId: string) => {
+    setConfirmDeleteId(monitorId);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    const monitorId = confirmDeleteId;
+    setConfirmDeleteId(null);
     setError(null);
     setDeletingMonitorIds((prev) => ({ ...prev, [monitorId]: true }));
     try {
@@ -829,9 +838,9 @@ export default function MonitorsPage() {
         </div>
         <button
           onClick={openCreateModal}
-          className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors bg-foreground text-background shadow hover:bg-foreground/90 h-9 px-4 py-2"
+          className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors bg-foreground text-background shadow hover:bg-foreground/90 h-9 px-4 py-2 group"
         >
-          <Plus className="w-4 h-4 mr-2" />
+          <Plus className="w-4 h-4 mr-2 transition-transform group-hover:rotate-90 duration-300" />
           创建任务
         </button>
       </header>
@@ -1759,6 +1768,15 @@ export default function MonitorsPage() {
         <Activity className="w-3.5 h-3.5" />
         Monitor runs create task records and feed the daily pipeline.
       </div>
+
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="删除任务"
+        description="此操作无法撤销，确认删除这个任务及其所有关联数据吗？"
+        confirmLabel="删除"
+        onCancel={() => setConfirmDeleteId(null)}
+        onConfirm={() => { void handleConfirmDelete(); }}
+      />
     </div>
   );
 }

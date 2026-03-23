@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { useState } from "react";
 
 const NAV_ITEMS = [
-    { href: "/", label: "报告", icon: Telescope },
+    { href: "/", label: "首页", icon: Telescope },
     { href: "/monitors", label: "任务", icon: Activity },
     { href: "/library", label: "归档", icon: Library },
     { href: "/sources", label: "信息源", icon: Globe },
@@ -45,14 +45,13 @@ export function Sidebar() {
 
             {/* Main Sidebar */}
             <aside className={cn(
-                "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-border/40 bg-background md:bg-card transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col",
+                "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-slate-200/95 bg-slate-100/95 md:bg-[linear-gradient(180deg,rgba(237,242,248,0.99)_0%,rgba(229,236,245,0.99)_100%)] transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col shadow-[inset_-1px_0_0_rgba(255,255,255,0.52)]",
                 isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             )}>
                 <div className="relative flex h-full flex-col px-4 pb-6 pt-16 md:pt-6">
 
                     {/* Brand Logo */}
                     <Link href="/" className="flex items-center gap-3 px-3 mb-8 transition-opacity hover:opacity-80" onClick={() => setIsMobileMenuOpen(false)}>
-                        <img src="/icon.svg" alt="Insight Flow Logo" className="w-8 h-8 rounded-lg shadow-sm" />
                         <span className="font-bold text-lg tracking-tight">Insight Flow</span>
                     </Link>
 
@@ -68,9 +67,9 @@ export function Sidebar() {
                                     href={item.href}
                                     onClick={() => setIsMobileMenuOpen(false)}
                                     className={cn(
-                                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all group relative",
+                                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all group",
                                         isActive
-                                            ? "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100 before:absolute before:inset-y-1.5 before:-left-3 before:w-1.5 before:rounded-r-full before:bg-slate-900 dark:before:bg-slate-300 shadow-sm"
+                                            ? "bg-secondary text-secondary-foreground"
                                             : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                                     )}
                                 >

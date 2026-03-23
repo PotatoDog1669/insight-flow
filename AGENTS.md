@@ -1,4 +1,4 @@
-# LexDeepResearch — Coding Standards
+# Coding Standards
 
 ## Docs & Planning Files
 

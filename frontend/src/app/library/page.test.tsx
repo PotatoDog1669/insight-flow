@@ -53,7 +53,6 @@ const mockedDeleteReport = vi.mocked(deleteReport);
 describe("LibraryPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     mockedGetReports.mockResolvedValue([
       {
         id: "report-1",
@@ -145,15 +144,16 @@ describe("LibraryPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete AI 早报 2026-03-02" }));
 
+    expect(await screen.findByRole("heading", { name: "删除报告" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalledWith("确认删除这份报告吗？");
       expect(mockedDeleteReport).toHaveBeenCalledWith("report-1");
     });
     expect(screen.queryByText("AI 早报 2026-03-02")).not.toBeInTheDocument();
   });
 
   it("does not delete when the archive confirmation is cancelled", async () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
     render(<LibraryPage />);
 
     await waitFor(() => {
@@ -162,8 +162,11 @@ describe("LibraryPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete AI 早报 2026-03-02" }));
 
+    expect(await screen.findByRole("heading", { name: "删除报告" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalledWith("确认删除这份报告吗？");
+      expect(screen.queryByRole("heading", { name: "删除报告" })).not.toBeInTheDocument();
     });
     expect(mockedDeleteReport).not.toHaveBeenCalled();
     expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();

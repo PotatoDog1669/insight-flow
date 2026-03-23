@@ -145,6 +145,11 @@ async def test_source(
             ) for a in sample
         ]
 
+        source.status = "healthy"
+        source.updated_at = datetime.now(timezone.utc)
+        db.add(source)
+        await db.commit()
+
         return SourceTestResponse(
             success=True,
             message=(
@@ -237,7 +242,7 @@ def _to_source_response(source: Source, latest_task: CollectTask | None) -> Sour
         config=source.config or {},
         target_url=_resolve_target_url(source.collect_method, source.config or {}),
         enabled=source.enabled,
-        status=_status_from_task(latest_task),  # type: ignore[arg-type]
+        status=getattr(source, "status", _status_from_task(latest_task)),  # type: ignore[arg-type]
         last_run=(
             latest_task.started_at
             if latest_task and latest_task.started_at

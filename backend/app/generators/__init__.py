@@ -1,0 +1,1 @@
+"""Monitor agent generator package."""

@@ -522,10 +522,12 @@ class Orchestrator:
                 continue
 
             task.status = "running"
+            source.status = "running"
             task.started_at = datetime.now(timezone.utc)
             task.stage_trace = [
                 {"stage": "collect", "provider": source.collect_method, "status": "running"},
             ]
+            db.add(source)
             db.add(task)
             await append_task_event(
                 db,
@@ -675,6 +677,7 @@ class Orchestrator:
                         "error": self._error_message(exc, limit=300),
                     },
                 ]
+                db.add(source)
                 db.add(task)
                 await append_task_event(
                     db,
@@ -831,6 +834,8 @@ class Orchestrator:
                         "error": self._error_message(exc, limit=300),
                     },
                 ]
+                source.status = "error"
+                db.add(source)
                 db.add(task)
                 await append_task_event(
                     db,
@@ -921,6 +926,8 @@ class Orchestrator:
                                 "error": self._error_message(exc, limit=300),
                             },
                         ]
+                        source.status = "error"
+                        db.add(source)
                         db.add(task)
                         if isinstance(exc, ProviderUnavailableError):
                             await self._append_provider_unavailable_event(
@@ -1143,6 +1150,7 @@ class Orchestrator:
                         processed_articles.extend(processed)
 
                     source.last_collected = datetime.now(timezone.utc)
+                    source.status = "healthy"
                     task.status = "success"
                     task.articles_count = len(article_ids)
                     task.finished_at = datetime.now(timezone.utc)

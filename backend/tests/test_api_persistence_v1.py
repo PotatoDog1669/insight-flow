@@ -371,6 +371,43 @@ def test_create_monitor_persists_arxiv_expansion_and_single_ai_provider(client: 
     assert monitor.ai_routing["stages"]["paper_note"]["primary"] == "llm_codex"
 
 
+def test_monitor_agent_draft_can_be_saved_as_monitor(client: TestClient, db_session_factory) -> None:
+    agent_response = client.post(
+        "/api/v1/monitors/agent",
+        json={
+            "message": "关注 agent 前沿内容",
+        },
+    )
+    assert agent_response.status_code == 200
+    draft_payload = agent_response.json()
+    assert draft_payload["mode"] == "draft"
+    assert draft_payload["monitor_payload"]["ai_provider"] == "llm_openai"
+    assert draft_payload["monitor_payload"]["source_ids"] == ["11111111-1111-1111-1111-111111111111"]
+    assert draft_payload["monitor_payload"]["name"] == draft_payload["draft"]["name"]
+
+    create_response = client.post("/api/v1/monitors", json=draft_payload["monitor_payload"])
+    assert create_response.status_code == 201
+    created_monitor = create_response.json()
+    assert created_monitor["name"] == draft_payload["draft"]["name"]
+    assert created_monitor["ai_provider"] == "llm_openai"
+    assert created_monitor["source_ids"] == ["11111111-1111-1111-1111-111111111111"]
+
+    session_factory, _ = db_session_factory
+
+    async def _fetch_monitor() -> Monitor | None:
+        async with session_factory() as session:
+            result = await session.execute(select(Monitor).where(Monitor.id == uuid.UUID(created_monitor["id"])))
+            return result.scalars().one_or_none()
+
+    monitor = asyncio.run(_fetch_monitor())
+    assert monitor is not None
+    assert monitor.name == draft_payload["draft"]["name"]
+    assert monitor.source_ids == ["11111111-1111-1111-1111-111111111111"]
+    assert monitor.custom_schedule == "0 9 * * *"
+    assert monitor.ai_routing["stages"]["filter"]["primary"] == "llm_openai"
+    assert monitor.ai_routing["stages"]["report"]["primary"] == "llm_openai"
+
+
 def test_update_monitor_with_null_ai_routing_clears_override(client: TestClient, db_session_factory) -> None:
     create_response = client.post(
         "/api/v1/monitors",

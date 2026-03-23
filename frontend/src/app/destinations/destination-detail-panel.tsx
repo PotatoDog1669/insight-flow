@@ -69,8 +69,8 @@ export function DestinationDetailPanel({
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
               新建一个实例后，就可以分别配置不同的 Notion 数据库、Obsidian 文件夹或 RSS 线路。
             </p>
-            <Button type="button" className="mt-6 rounded-2xl" onClick={onCreate}>
-              <Plus className="mr-2 h-4 w-4" />
+            <Button type="button" className="mt-6 rounded-2xl group" onClick={onCreate}>
+              <Plus className="mr-2 h-4 w-4 transition-transform group-hover:rotate-90 duration-300" />
               新增落盘点
             </Button>
           </div>

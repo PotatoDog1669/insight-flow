@@ -386,6 +386,13 @@ async def _get_with_retry(
         try:
             kwargs = {"timeout": timeout_seconds} if timeout_seconds is not None else {}
             response = await client.get(url, **kwargs)
+            # Handle 429 Too Many Requests
+            if response.status_code == 429 and attempt < attempts - 1:
+                # ArXiv specifically requires 5+ seconds backoff
+                wait_time = 5.0 + (attempt * 2.0)
+                await asyncio.sleep(wait_time)
+                continue
+
             # Return 403 without raising so caller can check for Cloudflare
             if response.status_code == 403:
                 return response

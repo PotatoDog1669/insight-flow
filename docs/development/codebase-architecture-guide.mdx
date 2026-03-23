@@ -23,11 +23,10 @@ title: 代码架构导读
 
 ## 1. 项目整体结构
 
-仓库可以先粗分成 4 个区域：
+仓库可以先粗分成 3 个区域：
 
 - `backend/`: FastAPI 后端、调度器、采集器、AI 加工流水线、报告生成与目标投递
 - `frontend/`: Next.js 管理界面，负责 monitor / source / report / provider / destination 管理
-- `agents/`: 浏览器与研究代理相关能力
 - `docs/`: 产品文档、开发文档，以及每次较大改动的设计/实现记录
 
 从运行职责看，系统核心是一个“配置驱动的异步流水线”：

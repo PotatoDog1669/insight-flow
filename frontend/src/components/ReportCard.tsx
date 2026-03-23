@@ -28,6 +28,7 @@ interface ReportCardProps {
     index: number;
     onDelete?: (reportId: string) => void;
     deleting?: boolean;
+    entrySource?: "home" | "library";
 }
 
 const reportTypeConfig = {
@@ -37,8 +38,9 @@ const reportTypeConfig = {
     paper: { label: "论文", color: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
 };
 
-export function ReportCard({ report, index, onDelete, deleting = false }: ReportCardProps) {
+export function ReportCard({ report, index, onDelete, deleting = false, entrySource }: ReportCardProps) {
     const rConfig = reportTypeConfig[report.report_type];
+    const detailHref = entrySource ? `/reports/${report.id}?from=${entrySource}` : `/reports/${report.id}`;
 
     return (
         <motion.div
@@ -63,7 +65,7 @@ export function ReportCard({ report, index, onDelete, deleting = false }: Report
                     <Trash2 className="w-3.5 h-3.5" />
                 </button>
             ) : null}
-            <Link href={`/reports/${report.id}`} className="block h-full">
+            <Link href={detailHref} className="block h-full">
                 <Card className="group h-full flex flex-col md:flex-row relative overflow-hidden border-border/50 hover:border-foreground/20 hover:shadow-2xl hover:shadow-blue-500/5 transition-all duration-500 transform-gpu hover:-translate-y-1.5 bg-card/60 backdrop-blur-md">
                     <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-background/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
                     <div className="absolute top-0 left-0 w-full md:w-[2px] md:h-full h-[2px] bg-gradient-to-r md:bg-gradient-to-b from-blue-500/0 via-blue-500/60 to-blue-500/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />

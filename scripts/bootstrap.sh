@@ -6,6 +6,14 @@ BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 VENV_PY="$ROOT_DIR/.venv/bin/python"
 
+resolve_python_bin() {
+  if command -v python3.12 >/dev/null 2>&1; then
+    command -v python3.12
+    return 0
+  fi
+  command -v python3
+}
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "[bootstrap] missing command: $1"
@@ -51,7 +59,11 @@ PY
 }
 
 echo "[bootstrap] checking prerequisites..."
-require_cmd python3
+PYTHON_BIN="$(resolve_python_bin)"
+if [ -z "$PYTHON_BIN" ]; then
+  echo "[bootstrap] missing command: python3.12 or python3"
+  exit 1
+fi
 require_cmd npm
 require_cmd docker
 
@@ -61,8 +73,8 @@ if [ ! -f "$ROOT_DIR/.env" ] && [ -f "$ROOT_DIR/.env.example" ]; then
 fi
 
 if [ ! -x "$VENV_PY" ]; then
-  echo "[bootstrap] creating .venv..."
-  python3 -m venv "$ROOT_DIR/.venv"
+  echo "[bootstrap] creating .venv with $PYTHON_BIN..."
+  "$PYTHON_BIN" -m venv "$ROOT_DIR/.venv"
 fi
 
 if [ ! -x "$ROOT_DIR/.venv/bin/pip" ] && [ ! -x "$ROOT_DIR/.venv/bin/pip3" ]; then

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { ArrowLeft, Calendar, Layers, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -70,6 +70,7 @@ function getDestinationStatus(report: APIReport, destinationId: Destination["id"
 
 export default function ReportDetailPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params.id as string;
 
   const [report, setReport] = useState<APIReport | null>(null);
@@ -188,6 +189,13 @@ export default function ReportDetailPage() {
     () => destinations.filter((item) => item.enabled),
     [destinations],
   );
+  const backLink = useMemo(() => {
+    const source = searchParams.get("from");
+    if (source === "library") {
+      return { href: "/library", label: "返回归档" };
+    }
+    return { href: "/", label: "返回首页" };
+  }, [searchParams]);
 
   const handleNavigate = (sectionId: string) => {
     const target = document.getElementById(sectionId);
@@ -236,11 +244,11 @@ export default function ReportDetailPage() {
   return (
     <div className="max-w-[1400px] w-full mx-auto py-8 sm:py-12 pb-24 px-4 lg:px-6">
       <Link
-        href="/"
+        href={backLink.href}
         className="inline-flex items-center space-x-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-10 group"
       >
         <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-        <span>返回发现页</span>
+        <span>{backLink.label}</span>
       </Link>
 
       <div className={`relative flex flex-col gap-10 items-start ${hasTemplateContent ? 'lg:pr-[210px]' : ''}`}>

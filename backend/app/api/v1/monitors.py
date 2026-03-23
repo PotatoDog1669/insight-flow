@@ -1,7 +1,9 @@
 """监控任务（Monitors）API"""
 
+import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
@@ -9,12 +11,14 @@ from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.reddit_config import normalize_reddit_subreddits
 from app.config import settings
+from app.agents.monitor_agent.service import MonitorAgentService
 from app.models.database import async_session, get_db
 from app.models.monitor import Monitor
 from app.models.source import Source
@@ -34,6 +38,9 @@ from app.schemas.monitor import MonitorRunRequest
 from app.schemas.monitor import MonitorResponse
 from app.schemas.monitor import MonitorRunResponse
 from app.schemas.monitor import MonitorUpdate
+from app.schemas.monitor_agent import MonitorAgentClarifyResponse
+from app.schemas.monitor_agent import MonitorAgentDraftResponse
+from app.schemas.monitor_agent import MonitorAgentRequest
 from app.utils.monitor_ai_routing import backfill_monitor_ai_routing
 from app.utils.monitor_ai_routing import infer_monitor_ai_provider
 from app.utils.monitor_overrides import expand_arxiv_intent_keywords
@@ -112,6 +119,34 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
     await db.refresh(monitor)
     await upsert_monitor_schedule(monitor.id)
     return _to_monitor_response(monitor, source_lookup=source_lookup)
+
+
+@router.post(
+    "/agent",
+    response_model=MonitorAgentClarifyResponse | MonitorAgentDraftResponse,
+)
+async def create_monitor_from_agent(
+    payload: MonitorAgentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """会话式 monitor 草案生成入口（P0）"""
+    service = MonitorAgentService()
+    return await service.handle_message(request=payload, db=db)
+
+
+@router.post("/agent/stream")
+async def stream_monitor_from_agent(
+    payload: MonitorAgentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """会话式 monitor 草案生成流式入口。"""
+    service = MonitorAgentService()
+
+    async def _event_stream() -> AsyncIterator[bytes]:
+        async for event in service.stream_message_events(request=payload, db=db):
+            yield json.dumps(event.model_dump(mode="json"), ensure_ascii=False).encode("utf-8") + b"\n"
+
+    return StreamingResponse(_event_stream(), media_type="application/x-ndjson")
 
 
 @router.get("/ai-routing/defaults", response_model=MonitorAIRoutingDefaultsResponse)

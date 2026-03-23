@@ -22,6 +22,7 @@ type DestinationFormSectionsProps = {
   setEditConfig: Dispatch<SetStateAction<Record<string, string>>>;
   testError: string | null;
   testResult: DestinationTestResponse | null;
+  vaultDetectMessage: string | null;
 };
 
 export function DestinationFormSections(props: DestinationFormSectionsProps) {
@@ -131,6 +132,7 @@ function ObsidianDestinationForm({
   setEditConfig,
   testError,
   testResult,
+  vaultDetectMessage,
 }: DestinationFormSectionsProps) {
   const mode = getObsidianMode(editConfig);
 
@@ -249,6 +251,11 @@ function ObsidianDestinationForm({
                     className={getInputClassName(isEditing)}
                   />
                   <p className="text-xs leading-5 text-muted-foreground">指向 Obsidian vault 根目录。</p>
+                  {vaultDetectMessage && (
+                    <p className="text-xs leading-5 text-emerald-600 animate-in fade-in slide-in-from-top-1 duration-300">
+                      {vaultDetectMessage}
+                    </p>
+                  )}
                 </div>
               </div>
 

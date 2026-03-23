@@ -5,10 +5,12 @@ import ReportDetailPage from "@/app/reports/[id]/page";
 import { getArticleById, getDestinations, getReportById, publishReportToDestination } from "@/lib/api";
 
 const pushMock = vi.fn();
+let searchParams = new URLSearchParams();
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "report-1" }),
   useRouter: () => ({ push: pushMock }),
+  useSearchParams: () => searchParams,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -27,6 +29,7 @@ describe("ReportDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pushMock.mockReset();
+    searchParams = new URLSearchParams();
     mockedGetDestinations.mockResolvedValue([
       {
         id: "dest-notion-1",
@@ -53,6 +56,61 @@ describe("ReportDetailPage", () => {
         enabled: false,
       },
     ] as never);
+  });
+
+  function mockBaseReport() {
+    mockedGetReportById.mockResolvedValue({
+      id: "report-1",
+      user_id: null,
+      time_period: "daily",
+      report_type: "daily",
+      title: "AI Daily",
+      report_date: "2026-03-02",
+      tldr: [],
+      article_count: 0,
+      topics: [],
+      events: [],
+      global_tldr: "",
+      content: "# AI Daily\n\n## 全局总结与锐评\nA",
+      article_ids: [],
+      published_to: [],
+      published_destination_instance_ids: [],
+      publish_trace: [],
+      metadata: {},
+      monitor_id: "monitor-1",
+      monitor_name: "Agent Watch",
+      created_at: "2026-03-02T00:00:00Z",
+    } as never);
+  }
+
+  it("renders a library back link when opened from the archive page", async () => {
+    searchParams = new URLSearchParams("from=library");
+    mockBaseReport();
+
+    render(<ReportDetailPage />);
+
+    const backLink = await screen.findByRole("link", { name: "返回归档" });
+    expect(backLink).toHaveAttribute("href", "/library");
+  });
+
+  it("renders a home back link when opened from the homepage", async () => {
+    searchParams = new URLSearchParams("from=home");
+    mockBaseReport();
+
+    render(<ReportDetailPage />);
+
+    const backLink = await screen.findByRole("link", { name: "返回首页" });
+    expect(backLink).toHaveAttribute("href", "/");
+  });
+
+  it("falls back to the homepage back link when the source is unknown", async () => {
+    searchParams = new URLSearchParams("from=unknown");
+    mockBaseReport();
+
+    render(<ReportDetailPage />);
+
+    const backLink = await screen.findByRole("link", { name: "返回首页" });
+    expect(backLink).toHaveAttribute("href", "/");
   });
 
   it("renders document from report.content and outline", async () => {
