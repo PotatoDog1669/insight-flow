@@ -27,7 +27,7 @@ export function DestinationListPanel({
   onSelect,
 }: DestinationListPanelProps) {
   return (
-    <Card className="overflow-hidden border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(255,255,255,0.96))]">
+    <Card className="overflow-hidden border-border/60 bg-card shadow-sm">
       <CardHeader className="border-b border-border/60 bg-slate-50/80">
         <div className="flex items-start justify-between gap-4">
           <div>

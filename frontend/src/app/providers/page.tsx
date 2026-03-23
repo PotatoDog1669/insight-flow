@@ -140,17 +140,15 @@ export default function ProvidersPage() {
             {error && <div className="py-4 text-sm text-red-500">{error}</div>}
 
             {!loading && (
-                <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+                <div className={cn("grid grid-cols-1 gap-8 lg:grid-cols-2", editingId ? "items-start" : "items-stretch")}>
                     {providers.map((provider) => (
                         <Card
                             key={provider.id}
                             className={cn(
                                 "relative flex flex-col overflow-hidden border-border/40 transition-all duration-300",
-                                provider.enabled ? "border-green-500/30 shadow-sm" : "shadow-sm hover:border-border/80 hover:shadow-md",
+                                provider.enabled ? "border-green-500/40 border-[1.5px] shadow-sm" : "shadow-sm hover:border-border/80 hover:shadow-md",
                             )}
                         >
-                            {provider.enabled && <div className="absolute left-0 top-0 h-1 w-full bg-gradient-to-r from-green-400 to-emerald-500" />}
-
                             <CardHeader className="pb-4">
                                 <div className="flex items-start justify-between">
                                     <div className="flex items-center gap-3">

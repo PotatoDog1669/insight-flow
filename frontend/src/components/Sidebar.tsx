@@ -45,7 +45,7 @@ export function Sidebar() {
 
             {/* Main Sidebar */}
             <aside className={cn(
-                "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-border/40 bg-background md:bg-transparent transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col",
+                "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-border/40 bg-background md:bg-card transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col",
                 isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             )}>
                 <div className="relative flex h-full flex-col px-4 pb-6 pt-16 md:pt-6">
@@ -68,9 +68,9 @@ export function Sidebar() {
                                     href={item.href}
                                     onClick={() => setIsMobileMenuOpen(false)}
                                     className={cn(
-                                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all group",
+                                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all group relative",
                                         isActive
-                                            ? "bg-secondary text-secondary-foreground"
+                                            ? "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100 before:absolute before:inset-y-1.5 before:-left-3 before:w-1.5 before:rounded-r-full before:bg-slate-900 dark:before:bg-slate-300 shadow-sm"
                                             : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                                     )}
                                 >

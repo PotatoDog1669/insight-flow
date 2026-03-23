@@ -14,69 +14,55 @@ export interface ToastProps {
 
 type ToastInput = Omit<ToastProps, "id">;
 
-class ToastManager {
-  private toasts: ToastProps[] = [];
-  private listeners: Set<(toasts: ToastProps[]) => void> = new Set();
-  
-  public subscribe = (listener: (toasts: ToastProps[]) => void) => {
-    this.listeners.add(listener);
-    // Initial sync
-    listener([...this.toasts]);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  };
-
-  private broadcast = () => {
-    this.listeners.forEach((listener) => listener([...this.toasts]));
-  };
-
-  public toast = (input: ToastInput) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    const duration = input.duration ?? 5000;
-    
-    const newToast = { ...input, id, type: input.type || "info", duration };
-    this.toasts = [...this.toasts, newToast];
-    this.broadcast();
-
-    if (duration > 0) {
-      setTimeout(() => {
-        this.dismiss(id);
-      }, duration);
-    }
-    
-    return id;
-  };
-
-  public dismiss = (id: string) => {
-    this.toasts = this.toasts.filter((t) => t.id !== id);
-    this.broadcast();
-  };
-
-  public clear = () => {
-    this.toasts = [];
-    this.broadcast();
-  };
-}
-
-export const toastManager = new ToastManager();
+const TOAST_EVENT_NAME = "insight_flow_toast_event";
+const TOAST_DISMISS_EVENT_NAME = "insight_flow_toast_dismiss_event";
 
 export const toast = (input: ToastInput | string) => {
-  if (typeof input === "string") {
-    return toastManager.toast({ description: input, type: "info" });
+  if (typeof window === "undefined") return "0";
+  const id = Math.random().toString(36).substring(2, 9);
+  const duration = typeof input === "object" ? (input.duration ?? 5000) : 5000;
+  
+  const payload: ToastProps = typeof input === "string" 
+    ? { id, description: input, type: "info", duration }
+    : { ...input, id, type: input.type || "info", duration };
+
+  window.dispatchEvent(new CustomEvent(TOAST_EVENT_NAME, { detail: payload }));
+  
+  if (payload.duration! > 0) {
+    setTimeout(() => {
+      dismissToast(id);
+    }, payload.duration);
   }
-  return toastManager.toast(input);
+  return id;
+};
+
+export const dismissToast = (id: string) => {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(TOAST_DISMISS_EVENT_NAME, { detail: id }));
+  }
 };
 
 export const useToast = () => {
   const [toasts, setToasts] = useState<ToastProps[]>([]);
 
   useEffect(() => {
-    return toastManager.subscribe(setToasts);
-  }, []);
+    const handleAdd = (e: Event) => {
+      const customEvent = e as CustomEvent<ToastProps>;
+      setToasts((prev) => [...prev, customEvent.detail]);
+    };
+    
+    const handleDismiss = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      setToasts((prev) => prev.filter((t) => t.id !== customEvent.detail));
+    };
 
-  const dismissToast = useCallback((id: string) => {
-    toastManager.dismiss(id);
+    window.addEventListener(TOAST_EVENT_NAME, handleAdd);
+    window.addEventListener(TOAST_DISMISS_EVENT_NAME, handleDismiss);
+    
+    return () => {
+      window.removeEventListener(TOAST_EVENT_NAME, handleAdd);
+      window.removeEventListener(TOAST_DISMISS_EVENT_NAME, handleDismiss);
+    };
   }, []);
 
   return { toasts, toast, dismiss: dismissToast };

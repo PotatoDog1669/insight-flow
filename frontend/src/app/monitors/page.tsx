@@ -859,7 +859,7 @@ export default function MonitorsPage() {
               )}
             >
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg font-semibold leading-snug">{monitor.name}</CardTitle>
+                <CardTitle className="text-lg font-semibold leading-snug truncate" title={monitor.name}>{monitor.name}</CardTitle>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant="secondary" className="capitalize bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-none">
                     {monitor.report_type === "daily" ? "日报" : monitor.report_type === "weekly" ? "周报" : monitor.report_type === "research" ? "研究" : monitor.report_type === "paper" ? "论文" : monitor.report_type}
@@ -883,7 +883,7 @@ export default function MonitorsPage() {
                   <Clock className="w-4 h-4" />
                   <span>{monitor.last_run ? new Date(monitor.last_run).toLocaleString() : "从未运行"}</span>
                 </div>
-                <div className="text-xs text-muted-foreground/80">
+                <div className="text-xs text-muted-foreground/80 line-clamp-2" title={monitor.source_ids.map((sourceId) => sourceMap.get(sourceId)?.name ?? sourceId).join(", ")}>
                   {monitor.source_ids.map((sourceId) => sourceMap.get(sourceId)?.name ?? sourceId).join(", ")}
                 </div>
               </CardContent>

@@ -45,7 +45,7 @@ export function DestinationDetailHeader({
   testingId,
 }: DestinationDetailHeaderProps) {
   return (
-    <CardHeader className="border-b border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(186,230,253,0.28),transparent_42%),linear-gradient(180deg,rgba(248,250,252,0.95),rgba(255,255,255,0.94))]">
+    <CardHeader className="border-b border-border/60 bg-card">
       <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">连接详情</p>
       <div className="mt-4 grid gap-6 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
         <div className="flex items-start gap-5">
