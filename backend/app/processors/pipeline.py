@@ -1,4 +1,5 @@
 """信息加工流水线编排"""
+import ast
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -39,6 +40,24 @@ class ProcessedArticle:
     unknowns: str = ""
     evidence: str = ""
     detail_mode: str = "full"
+
+
+def _normalize_text_output(raw: object, *, max_len: int) -> str:
+    if isinstance(raw, list):
+        items = [str(item).strip() for item in raw if str(item).strip()]
+        return "\n".join(items)[:max_len]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                items = [str(item).strip() for item in parsed if str(item).strip()]
+                return "\n".join(items)[:max_len]
+        return text[:max_len]
+    return str(raw or "").strip()[:max_len]
 
 
 class ProcessingPipeline:
@@ -288,13 +307,13 @@ class ProcessingPipeline:
             if not summary:
                 raise ValueError("Missing summary from keywords stage output")
             importance = str(output.get("importance") or "normal").strip().lower()
-            detail = str(output.get("detail") or "").strip()
+            detail = _normalize_text_output(output.get("detail"), max_len=1400)
             category = output.get("category")
             normalized_category = str(category).strip() if category else None
-            event_title = str(output.get("event_title") or "").strip()
-            who = str(output.get("who") or "").strip()
-            what = str(output.get("what") or "").strip()
-            when = str(output.get("when") or "").strip()
+            event_title = _normalize_text_output(output.get("event_title"), max_len=96)
+            who = _normalize_text_output(output.get("who"), max_len=120)
+            what = _normalize_text_output(output.get("what"), max_len=180)
+            when = _normalize_text_output(output.get("when"), max_len=120)
 
             raw_metrics = output.get("metrics")
             metrics: list[str] = []
@@ -319,9 +338,9 @@ class ProcessingPipeline:
                 what,
                 when,
                 metrics,
-                str(output.get("availability") or "").strip(),
-                str(output.get("unknowns") or "").strip(),
-                str(output.get("evidence") or "").strip(),
+                _normalize_text_output(output.get("availability"), max_len=240),
+                _normalize_text_output(output.get("unknowns"), max_len=240),
+                _normalize_text_output(output.get("evidence"), max_len=360),
             )
 
         results = await self._run_with_stage_concurrency(articles, _extract_article)

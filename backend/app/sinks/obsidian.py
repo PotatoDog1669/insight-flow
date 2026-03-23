@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -57,9 +58,30 @@ class ObsidianSink(BaseSink):
                 error="Missing Obsidian file config: vault_path is required for file mode",
             )
 
+        base_dir = target_dir
+        if report.level == "paper":
+            metadata = report.metadata or {}
+            paper_mode = metadata.get("paper_mode")
+            if paper_mode == "digest":
+                report_date = str(metadata.get("report_date") or "").strip()
+                target_dir = base_dir / "DailyPapers"
+                filename = f"{report_date}-论文推荐.md" if report_date else _build_filename(report.title)
+            elif paper_mode == "note":
+                paper_slug = (
+                    str(metadata.get("paper_slug") or "").strip()
+                    or report.title.replace("/", "-").strip()
+                    or "paper-note"
+                )
+                target_dir = base_dir / "DailyPapers" / "Papers"
+                filename = f"{paper_slug}.md"
+            else:
+                target_dir = base_dir
+                filename = _build_filename(report.title)
+        else:
+            target_dir = base_dir
         target_dir.mkdir(parents=True, exist_ok=True)
         output = target_dir / filename
-        output.write_text(report.content, encoding="utf-8")
+        output.write_text(_rewrite_obsidian_file_links(report), encoding="utf-8")
         return PublishResult(success=True, sink_name=self.name, url=str(output))
 
     async def _publish_via_rest(
@@ -116,3 +138,49 @@ def _resolve_local_target_dir(*, vault_path: str, target_folder: str) -> Path | 
     if target_folder:
         target_dir = target_dir / Path(target_folder)
     return target_dir
+
+
+def _rewrite_obsidian_file_links(report: Report) -> str:
+    if report.level != "paper":
+        return report.content
+
+    metadata = report.metadata or {}
+    paper_mode = str(metadata.get("paper_mode") or "").strip()
+    content = report.content
+
+    if paper_mode == "digest":
+        for raw_link in metadata.get("paper_note_links") or []:
+            if not isinstance(raw_link, dict):
+                continue
+            report_id = str(raw_link.get("report_id") or "").strip()
+            paper_slug = str(raw_link.get("paper_slug") or "").strip()
+            if not report_id or not paper_slug:
+                continue
+            content = content.replace(
+                f"[查看详细笔记](/reports/{report_id})",
+                f"[[DailyPapers/Papers/{paper_slug}|查看详细笔记]]",
+            )
+        return content
+
+    if paper_mode == "note":
+        parent_link = metadata.get("paper_parent_link")
+        if not isinstance(parent_link, dict):
+            return content
+        report_id = str(parent_link.get("report_id") or "").strip()
+        title = str(parent_link.get("title") or "").strip()
+        if not report_id or not title:
+            return content
+        digest_stem = _obsidian_paper_digest_stem(title)
+        pattern = re.escape(f"[{title}](/reports/{report_id})")
+        return re.sub(pattern, f"[[DailyPapers/{digest_stem}|{title}]]", content)
+
+    return content
+
+
+def _obsidian_paper_digest_stem(title: str) -> str:
+    normalized = title.strip()
+    if normalized.endswith(" 论文推荐"):
+        report_date = normalized.removesuffix(" 论文推荐").strip()
+        if report_date:
+            return f"{report_date}-论文推荐"
+    return _build_filename(normalized).removesuffix(".md")

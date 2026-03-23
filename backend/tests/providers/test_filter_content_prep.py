@@ -54,6 +54,9 @@ Qwen-Agent is a framework for developing LLM applications with tool use.
 """,
         metadata={
             "source_name": "GitHub Trending Daily",
+            "source_category": "social",
+            "author_username": "OpenAIDevs",
+            "author_name": "OpenAI Devs",
             "description": "Agent framework for building LLM applications.",
             "language": "Python",
             "stars_today": 1280,
@@ -66,7 +69,9 @@ Qwen-Agent is a framework for developing LLM applications with tool use.
 
     assert len(output["articles"]) == 1
     assert '"source_name": "GitHub Trending Daily"' in captured["prompt"]
+    assert '"source_category": "social"' in captured["prompt"]
+    assert '"author_username": "OpenAIDevs"' in captured["prompt"]
+    assert '"author_name": "OpenAI Devs"' in captured["prompt"]
     assert '"description": "Agent framework for building LLM applications."' in captured["prompt"]
     assert '"stars_today": 1280' in captured["prompt"]
     assert "img.shields.io" not in captured["prompt"]
-

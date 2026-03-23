@@ -25,17 +25,19 @@ vi.mock("@/components/ReportCard", () => ({
   }: {
     report: { id: string; title: string; monitor_name?: string };
     onDelete?: (id: string) => void;
-  }) => (
-    <div>
-      <span>{report.title}</span>
-      {report.monitor_name ? <span>{report.monitor_name}</span> : null}
-      {onDelete ? (
-        <button type="button" onClick={() => onDelete(report.id)}>
-          Delete {report.title}
-        </button>
-      ) : null}
-    </div>
-  ),
+  }) => {
+    return (
+      <div>
+        <span>{report.title}</span>
+        {report.monitor_name ? <span>{report.monitor_name}</span> : null}
+        {onDelete ? (
+          <button type="button" onClick={() => onDelete(report.id)}>
+            Delete {report.title}
+          </button>
+        ) : null}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -51,7 +53,6 @@ const mockedDeleteReport = vi.mocked(deleteReport);
 describe("LibraryPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     mockedGetReports.mockResolvedValue([
       {
         id: "report-1",
@@ -110,7 +111,7 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Report")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
       expect(screen.getByText("Infra Report")).toBeInTheDocument();
     });
 
@@ -118,7 +119,7 @@ describe("LibraryPage", () => {
       target: { value: "monitor-1" },
     });
 
-    expect(screen.getByText("Agent Report")).toBeInTheDocument();
+    expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     expect(screen.queryByText("Infra Report")).not.toBeInTheDocument();
   });
 
@@ -138,32 +139,119 @@ describe("LibraryPage", () => {
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Report")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Agent Report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete AI 早报 2026-03-02" }));
+
+    expect(await screen.findByRole("heading", { name: "删除报告" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalledWith("确认删除这份报告吗？");
       expect(mockedDeleteReport).toHaveBeenCalledWith("report-1");
     });
-    expect(screen.queryByText("Agent Report")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI 早报 2026-03-02")).not.toBeInTheDocument();
   });
 
   it("does not delete when the archive confirmation is cancelled", async () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
     render(<LibraryPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Agent Report")).toBeInTheDocument();
+      expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Agent Report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete AI 早报 2026-03-02" }));
+
+    expect(await screen.findByRole("heading", { name: "删除报告" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
 
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalledWith("确认删除这份报告吗？");
+      expect(screen.queryByRole("heading", { name: "删除报告" })).not.toBeInTheDocument();
     });
     expect(mockedDeleteReport).not.toHaveBeenCalled();
-    expect(screen.getByText("Agent Report")).toBeInTheDocument();
+    expect(screen.getByText("AI 早报 2026-03-02")).toBeInTheDocument();
+  });
+
+  it("renders paper reports in the archive list", async () => {
+    mockedGetReports.mockResolvedValue([
+      {
+        id: "report-paper",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Report",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: {},
+        monitor_id: "monitor-3",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+    ] as never);
+
+    render(<LibraryPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2026-03-02 论文推荐")).toBeInTheDocument();
+    });
+  });
+
+  it("does not render paper note reports in the archive list", async () => {
+    mockedGetReports.mockResolvedValue([
+      {
+        id: "report-paper-digest",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Digest",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: { paper_mode: "digest" },
+        monitor_id: "monitor-3",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+      {
+        id: "report-paper-note",
+        user_id: null,
+        time_period: "daily",
+        report_type: "paper",
+        title: "Paper Note Report",
+        report_date: "2026-03-02",
+        tldr: [],
+        article_count: 1,
+        topics: [],
+        events: [],
+        global_tldr: "",
+        content: "",
+        article_ids: [],
+        published_to: [],
+        metadata: { paper_mode: "note" },
+        monitor_id: "monitor-3",
+        monitor_name: "Paper Watch",
+        created_at: "2026-03-02T00:00:00Z",
+      },
+    ] as never);
+
+    render(<LibraryPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2026-03-02 论文推荐")).toBeInTheDocument();
+      expect(screen.queryByText("Paper Note Report")).not.toBeInTheDocument();
+    });
   });
 });

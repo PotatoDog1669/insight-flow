@@ -18,7 +18,7 @@ class Report(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, comment="归属用户")
     time_period: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / custom")
-    report_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / research")
+    report_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="daily / weekly / research / paper")
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="渲染后的 Markdown / HTML")
     article_ids: Mapped[list] = mapped_column(JSON, default=list, comment="关联文章 ID")

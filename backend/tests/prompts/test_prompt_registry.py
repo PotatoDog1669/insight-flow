@@ -50,6 +50,13 @@ def test_filter_prompts_allow_snapshot_sources_with_clear_technical_signal() -> 
     assert "daily snapshot" in llm_text
 
 
-@pytest.mark.parametrize("name", ["filter", "keywords", "report", "global_summary"])
+def test_filter_prompts_allow_high_signal_official_social_posts() -> None:
+    llm_text = load_prompt(scope="llm", name="filter")
+
+    assert "official social accounts" in llm_text
+    assert "actionable technical guidance" in llm_text
+
+
+@pytest.mark.parametrize("name", ["filter", "keywords", "report", "global_summary", "paper_review", "paper_note"])
 def test_agent_and_llm_processing_prompts_share_same_template(name: str) -> None:
     assert load_prompt(scope="agent", name=name) == load_prompt(scope="llm", name=name)

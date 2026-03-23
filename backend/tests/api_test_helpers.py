@@ -37,6 +37,7 @@ def monitor_create_payload(
     destination_instance_ids: list[str] | None = None,
     enabled: bool | None = None,
     source_overrides: dict[str, Any] | None = None,
+    ai_provider: str | None = None,
     ai_routing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -52,6 +53,8 @@ def monitor_create_payload(
         payload["enabled"] = enabled
     if source_overrides is not None:
         payload["source_overrides"] = source_overrides
+    if ai_provider is not None:
+        payload["ai_provider"] = ai_provider
     if ai_routing is not None:
         payload["ai_routing"] = ai_routing
     return payload

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import MonitorsPage from "@/app/monitors/page";
+import { Toaster } from "@/components/ui/toaster";
 import {
   cancelMonitorRun,
   createMonitor,
@@ -46,14 +47,6 @@ const mockedUpdateMonitor = vi.mocked(updateMonitor);
 const mockedRunMonitor = vi.mocked(runMonitor);
 const mockedDeleteMonitor = vi.mocked(deleteMonitor);
 
-const expandAiRoutingSection = async () => {
-  const toggle = screen.getByRole("button", { name: "AI 路由配置（高级）" });
-  if (toggle.getAttribute("aria-expanded") !== "true") {
-    fireEvent.click(toggle);
-  }
-  await screen.findByLabelText("Filter stage provider");
-};
-
 describe("MonitorsPage", () => {
   beforeEach(() => {
     mockedGetMonitors.mockResolvedValue([
@@ -67,6 +60,8 @@ describe("MonitorsPage", () => {
         destination_instance_ids: ["dest-notion-1"],
         window_hours: 24,
         custom_schedule: null,
+        source_overrides: {},
+        ai_routing: { stages: { filter: { primary: "llm_openai" }, keywords: { primary: "llm_openai" }, global_summary: { primary: "llm_openai" }, report: { primary: "llm_openai" } }, providers: {} },
         enabled: true,
         status: "active",
         last_run: null,
@@ -191,6 +186,7 @@ describe("MonitorsPage", () => {
         description: "Codex provider",
         enabled: false,
         config: {
+          auth_mode: "api_key",
           base_url: "https://api.openai.com/v1",
           model: "gpt-5-codex",
           timeout_sec: 120,
@@ -207,6 +203,7 @@ describe("MonitorsPage", () => {
         description: "OpenAI provider",
         enabled: true,
         config: {
+          auth_mode: "api_key",
           base_url: "https://api.openai.com/v1",
           model: "gpt-4o-mini",
           timeout_sec: 120,
@@ -279,6 +276,7 @@ describe("MonitorsPage", () => {
       window_hours: 24,
       custom_schedule: null,
       source_overrides: {},
+      ai_routing: { stages: {}, providers: {} },
       enabled: true,
       status: "active",
       last_run: null,
@@ -296,6 +294,7 @@ describe("MonitorsPage", () => {
       window_hours: 24,
       custom_schedule: null,
       source_overrides: {},
+      ai_routing: { stages: {}, providers: {} },
       enabled: true,
       status: "active",
       last_run: null,
@@ -321,7 +320,12 @@ describe("MonitorsPage", () => {
   });
 
   it("opens edit modal from monitor card and saves updates", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
 
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
@@ -370,7 +374,12 @@ describe("MonitorsPage", () => {
       },
     ]);
 
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Daily AI Brief"));
@@ -392,7 +401,12 @@ describe("MonitorsPage", () => {
   });
 
   it("groups sources by category in both create and edit modals", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
 
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
@@ -419,7 +433,12 @@ describe("MonitorsPage", () => {
   });
 
   it("does not preselect any source when creating monitor", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
 
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
@@ -457,7 +476,12 @@ describe("MonitorsPage", () => {
       },
     ]);
 
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -481,7 +505,12 @@ describe("MonitorsPage", () => {
   }, 30000);
 
   it("sends source max_items override when creating monitor", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -507,8 +536,30 @@ describe("MonitorsPage", () => {
     });
   });
 
-  it("sends monitor ai_routing when advanced routing is configured", async () => {
-    render(<MonitorsPage />);
+  it("shows a single ai provider selector and hides legacy stage controls", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    expect(screen.getByLabelText("AI 提供商")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Filter stage provider")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Keywords stage provider")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Global summary stage provider")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Report stage provider")).not.toBeInTheDocument();
+  });
+
+  it("submits a single ai provider when creating a monitor", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -516,65 +567,29 @@ describe("MonitorsPage", () => {
       target: { value: "Routing Monitor" },
     });
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
-    await expandAiRoutingSection();
-
-    fireEvent.change(screen.getByLabelText("Filter stage provider"), {
-      target: { value: "llm_openai" },
-    });
-    fireEvent.change(screen.getByLabelText("Keywords stage provider"), {
-      target: { value: "llm_openai" },
-    });
-    fireEvent.change(screen.getByLabelText("Global summary stage provider"), {
+    fireEvent.change(screen.getByLabelText("AI 提供商"), {
       target: { value: "llm_codex" },
     });
-    fireEvent.change(screen.getByLabelText("Report stage provider"), {
-      target: { value: "llm_codex" },
-    });
-
-    fireEvent.change(screen.getByLabelText("Model for llm_openai"), {
-      target: { value: "gpt-4o-mini" },
-    });
-    fireEvent.change(screen.getByLabelText("Model for llm_codex"), {
-      target: { value: "gpt-5-codex" },
-    });
-
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
     await waitFor(() => {
       expect(mockedCreateMonitor).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Routing Monitor",
-          ai_routing: {
+          ai_routing: expect.objectContaining({
             stages: {
-              filter: { primary: "llm_openai" },
-              keywords: { primary: "llm_openai" },
+              filter: { primary: "llm_codex" },
+              keywords: { primary: "llm_codex" },
               global_summary: { primary: "llm_codex" },
               report: { primary: "llm_codex" },
-            },
-            providers: {
-              llm_codex: { model: "gpt-5-codex" },
-              llm_openai: { model: "gpt-4o-mini" },
-            },
-          },
+            }
+          })
         })
       );
     });
   });
 
-  it("shows inherit option with current default provider", async () => {
-    render(<MonitorsPage />);
-    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
-    await expandAiRoutingSection();
-
-    const llmInheritOptions = screen.getAllByRole("option", {
-      name: "inherit (current: llm_openai)",
-    });
-    expect(llmInheritOptions.length).toBeGreaterThan(0);
-  });
-
-  it("sends ai_routing null on edit when advanced routing is cleared", async () => {
+  it("loads ai_provider when editing and submits the simplified field", async () => {
     mockedGetMonitors.mockResolvedValueOnce([
       {
         id: "monitor-1",
@@ -589,7 +604,7 @@ describe("MonitorsPage", () => {
         source_overrides: {},
         ai_routing: {
           stages: {
-            filter: { primary: "llm_openai" },
+            filter: { primary: "llm_codex" },
           },
         },
         enabled: true,
@@ -600,15 +615,19 @@ describe("MonitorsPage", () => {
       },
     ]);
 
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Daily AI Brief"));
     expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
-    await expandAiRoutingSection();
-
-    fireEvent.change(screen.getByLabelText("Filter stage provider"), {
-      target: { value: "" },
+    expect(screen.getByLabelText("AI 提供商")).toHaveValue("llm_codex");
+    fireEvent.change(screen.getByLabelText("AI 提供商"), {
+      target: { value: "llm_openai" },
     });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
@@ -616,28 +635,86 @@ describe("MonitorsPage", () => {
       expect(mockedUpdateMonitor).toHaveBeenCalledWith(
         "monitor-1",
         expect.objectContaining({
-          ai_routing: null,
+          ai_routing: expect.objectContaining({
+            stages: {
+              filter: { primary: "llm_openai" },
+              keywords: { primary: "llm_openai" },
+              global_summary: { primary: "llm_openai" },
+              report: { primary: "llm_openai" },
+            }
+          })
         })
       );
     });
   });
 
-  it("exposes only supported provider options", async () => {
-    render(<MonitorsPage />);
+  it("exposes only supported ai provider options", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
-    await expandAiRoutingSection();
-
-    const optionTexts = screen.getAllByRole("option").map((option) => option.textContent?.trim() ?? "");
+    const providerSelect = screen.getByLabelText("AI 提供商");
+    const optionTexts = Array.from(providerSelect.querySelectorAll("option")).map((option) => option.textContent?.trim() ?? "");
     expect(optionTexts).toContain("llm_codex");
     expect(optionTexts).toContain("llm_openai");
-    expect(optionTexts).toContain("rule");
     expect(optionTexts).not.toContain("legacy_agent");
   });
 
+  it("shows saved arxiv expansion preview under the keyword input", async () => {
+    mockedGetMonitors.mockResolvedValueOnce([
+      {
+        id: "monitor-1",
+        name: "Daily AI Brief",
+        time_period: "daily",
+        report_type: "paper",
+        source_ids: ["source-5"],
+        destination_ids: ["notion"],
+        destination_instance_ids: ["dest-notion-1"],
+        window_hours: 24,
+        custom_schedule: null,
+        source_overrides: {
+          "source-5": {
+            keywords: ["webagent"],
+            expanded_keywords: ["webagent", "web agents", "browser agent"],
+            max_results: 40,
+          },
+        },
+        ai_routing: { stages: { filter: { primary: "llm_codex" } }, providers: {} },
+        enabled: true,
+        status: "active",
+        last_run: null,
+        created_at: "2026-03-02T10:00:00Z",
+        updated_at: "2026-03-02T10:00:00Z",
+      },
+    ]);
+
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Daily AI Brief"));
+    expect(await screen.findByRole("heading", { name: "编辑任务" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("webagent")).toBeInTheDocument();
+    expect(screen.getByText("扩展检索词")).toBeInTheDocument();
+    expect(screen.getByText("webagent, web agents, browser agent")).toBeInTheDocument();
+  });
+
   it("sends arxiv keywords and max_results override when creating monitor", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -669,7 +746,12 @@ describe("MonitorsPage", () => {
   });
 
   it("sends academic api keywords and max_results override when creating monitor", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -700,8 +782,60 @@ describe("MonitorsPage", () => {
     });
   });
 
+  it("preserves raw keyword text while editing and normalizes only on submit", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Academic Phrase Monitor" },
+    });
+
+    fireEvent.click(screen.getByLabelText("OpenAlex"));
+    const keywordsInput = screen.getByLabelText("Keywords for OpenAlex") as HTMLInputElement;
+
+    fireEvent.change(keywordsInput, {
+      target: { value: "web " },
+    });
+    expect(keywordsInput.value).toBe("web ");
+
+    fireEvent.change(keywordsInput, {
+      target: { value: "web agent," },
+    });
+    expect(keywordsInput.value).toBe("web agent,");
+
+    fireEvent.change(keywordsInput, {
+      target: { value: "web agent, multi-modal" },
+    });
+
+    expect(keywordsInput.value).toBe("web agent, multi-modal");
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(mockedCreateMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Academic Phrase Monitor",
+          source_overrides: {
+            "source-6": { keywords: ["web agent", "multi-modal"] },
+          },
+        })
+      );
+    });
+  });
+
   it("sends selected reddit subreddits override when creating monitor", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -729,7 +863,12 @@ describe("MonitorsPage", () => {
   });
 
   it("shows human-friendly time window presets in the create form", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -741,7 +880,12 @@ describe("MonitorsPage", () => {
   });
 
   it("submits preset and custom time windows as window_hours", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -793,8 +937,13 @@ describe("MonitorsPage", () => {
     });
   });
 
-  it("allows overriding the recommended report template for a daily monitor", async () => {
-    render(<MonitorsPage />);
+  it("allows overriding the recommended report template for a custom monitor", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -802,6 +951,9 @@ describe("MonitorsPage", () => {
       target: { value: "Flexible Template Monitor" },
     });
     fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "custom" },
+    });
 
     const reportTypeSelect = screen.getByLabelText("报告模板");
     expect(reportTypeSelect).not.toBeDisabled();
@@ -815,38 +967,56 @@ describe("MonitorsPage", () => {
       expect(mockedCreateMonitor).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Flexible Template Monitor",
-          time_period: "daily",
+          time_period: "custom",
           report_type: "research",
         })
       );
     });
   });
 
-  it("keeps the recommended template in sync until the user overrides it", async () => {
-    render(<MonitorsPage />);
+  it("keeps the recommended template in sync until the user switches to custom and overrides it", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
 
     const reportTypeSelect = screen.getByLabelText("报告模板") as HTMLSelectElement;
     expect(reportTypeSelect.value).toBe("daily");
+    expect(reportTypeSelect).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText("更新频率"), {
       target: { value: "weekly" },
     });
     expect(reportTypeSelect.value).toBe("weekly");
+    expect(reportTypeSelect).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "custom" },
+    });
+    expect(reportTypeSelect).not.toBeDisabled();
+    expect(reportTypeSelect.value).toBe("research");
 
     fireEvent.change(reportTypeSelect, {
-      target: { value: "research" },
+      target: { value: "paper" },
     });
     fireEvent.change(screen.getByLabelText("更新频率"), {
       target: { value: "daily" },
     });
-    expect(reportTypeSelect.value).toBe("research");
+    expect(reportTypeSelect.value).toBe("daily");
   });
 
   it("shows structured schedule controls instead of raw cron input", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -870,7 +1040,12 @@ describe("MonitorsPage", () => {
   });
 
   it("submits structured weekly cron and custom interval schedules", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
@@ -930,18 +1105,52 @@ describe("MonitorsPage", () => {
     });
   });
 
+  it("offers paper as a custom report template", async () => {
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
+    expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+    fireEvent.change(screen.getByPlaceholderText("例如：每日 AI 简报"), {
+      target: { value: "Paper Monitor" },
+    });
+    fireEvent.click(screen.getByLabelText("OpenAI Blog"));
+
+    fireEvent.change(screen.getByLabelText("更新频率"), {
+      target: { value: "custom" },
+    });
+
+    expect(screen.getByRole("option", { name: "论文" })).toBeInTheDocument();
+  });
+
   it("does not show deprecated test action", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
   });
 
   it("allows terminating a running run from logs history", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "日志" }));
     expect(await screen.findByRole("heading", { name: "Run History: Daily AI Brief" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("run-1 0 articles"));
+    expect(await screen.findByText("id: event-1")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Terminate Run" }));
 
@@ -951,15 +1160,21 @@ describe("MonitorsPage", () => {
   });
 
   it("shows pending state when manual run is starting", async () => {
-    let resolveRun: ((value: { task_id: string; run_id: string; status: "running"; monitor_id: string }) => void) | null = null;
+    type PendingRunResponse = { task_id: string; run_id: string; status: "running"; monitor_id: string };
+    let resolveRun: ((value: PendingRunResponse) => void) | null = null;
     mockedRunMonitor.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
+        new Promise<PendingRunResponse>((resolve) => {
           resolveRun = resolve;
         })
     );
 
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     const runButton = screen.getByRole("button", { name: "运行" });
@@ -968,11 +1183,13 @@ describe("MonitorsPage", () => {
     expect(mockedRunMonitor).toHaveBeenCalledWith("monitor-1");
     expect(runButton).toBeDisabled();
 
-    resolveRun?.({
-      task_id: "task-1",
-      run_id: "run-1",
-      status: "running",
-      monitor_id: "monitor-1",
+    await act(async () => {
+      resolveRun?.({
+        task_id: "task-1",
+        run_id: "run-1",
+        status: "running",
+        monitor_id: "monitor-1",
+      });
     });
 
     await waitFor(() => {
@@ -981,13 +1198,18 @@ describe("MonitorsPage", () => {
   });
 
   it("shows visible success hint after manual run starts", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
 
     expect(await screen.findByText(/Run started\./)).toBeInTheDocument();
-    expect(screen.getByText(/run-1/)).toBeInTheDocument();
+    expect(screen.getAllByText(/run-1/).length).toBeGreaterThan(0);
   });
 
   it("shows run feedback without auto-opening logs and keeps actions usable during refresh", async () => {
@@ -1018,13 +1240,18 @@ describe("MonitorsPage", () => {
           })
       );
 
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
 
-    expect(await screen.findByText(/Run started\./)).toBeInTheDocument();
-    expect(screen.getByText(/Open Logs to follow progress\./)).toBeInTheDocument();
+    expect((await screen.findAllByText(/Run started\./)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Open Logs to follow progress\./).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "运行" })).toBeEnabled();
     });
@@ -1054,7 +1281,12 @@ describe("MonitorsPage", () => {
   });
 
   it("uses a wider logs modal layout", async () => {
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "日志" }));
@@ -1068,7 +1300,12 @@ describe("MonitorsPage", () => {
   it("shows visible error when opening logs fails", async () => {
     mockedGetMonitorLogs.mockRejectedValueOnce(new Error("Logs fetch failed"));
 
-    render(<MonitorsPage />);
+    render(
+      <>
+        <MonitorsPage />
+        <Toaster />
+      </>
+    );
     expect(await screen.findByText("Daily AI Brief")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "日志" }));

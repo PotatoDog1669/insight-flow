@@ -11,9 +11,11 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import async_session
+from app.models.task import CollectTask
 from app.models.monitor import Monitor
 from app.scheduler.monitor_runner import run_monitor_once
 
@@ -143,6 +145,26 @@ def _schedule_monitor_job(monitor: Monitor) -> None:
     )
 
 
+async def _latest_scheduled_monitor_run_at(*, db: AsyncSession, monitor_id: uuid.UUID) -> datetime | None:
+    result = await db.execute(
+        select(CollectTask.started_at, CollectTask.created_at)
+        .where(
+            CollectTask.monitor_id == monitor_id,
+            CollectTask.source_id.is_(None),
+            CollectTask.trigger_type == "scheduled",
+        )
+        .order_by(CollectTask.started_at.desc().nullslast(), CollectTask.created_at.desc())
+        .limit(1)
+    )
+    row = result.first()
+    if row is None:
+        return None
+    latest_run = row.started_at or row.created_at
+    if latest_run is not None and latest_run.tzinfo is None:
+        return latest_run.replace(tzinfo=timezone.utc)
+    return latest_run
+
+
 async def run_scheduled_monitor(monitor_id: str) -> None:
     try:
         monitor_uuid = uuid.UUID(str(monitor_id))
@@ -163,11 +185,9 @@ async def run_scheduled_monitor(monitor_id: str) -> None:
         interval_schedule = _parse_interval_schedule(monitor.custom_schedule)
         if interval_schedule is not None:
             interval_days, _, _ = interval_schedule
-            last_run = monitor.last_run
-            if last_run is not None:
-                if last_run.tzinfo is None:
-                    last_run = last_run.replace(tzinfo=timezone.utc)
-                next_due_at = last_run + timedelta(days=interval_days)
+            latest_scheduled_run = await _latest_scheduled_monitor_run_at(db=db, monitor_id=monitor_uuid)
+            if latest_scheduled_run is not None:
+                next_due_at = latest_scheduled_run + timedelta(days=interval_days)
                 if datetime.now(timezone.utc) < next_due_at:
                     logger.info(
                         "scheduled_monitor_interval_skip",

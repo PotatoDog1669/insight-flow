@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { ArrowLeft, Calendar, Layers, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +9,8 @@ import { ArticleCard, type Article as ArticleCardModel } from "@/components/Arti
 import { ReportDocument } from "@/components/report/ReportDocument";
 import { ReportOutline } from "@/components/report/ReportOutline";
 import { useActiveHeading } from "@/hooks/use-active-heading";
-import { canonicalizeReportContent, extractOutline, parseReportContent } from "@/lib/report-content-parser";
+import { canonicalizeReportContent, extractOutline, normalizePaperDigestContent, parseReportContent } from "@/lib/report-content-parser";
+import { getReportDisplayTitle } from "@/lib/report-display";
 import {
   getArticleById,
   getDestinations,
@@ -24,6 +25,7 @@ const REPORT_TYPE_LABELS: Record<APIReport["report_type"], string> = {
   daily: "日报",
   weekly: "周报",
   research: "研究",
+  paper: "论文",
 };
 
 function toArticleCard(article: APIArticle): ArticleCardModel {
@@ -46,7 +48,8 @@ function getDestinationStatus(report: APIReport, destinationId: Destination["id"
   label: string;
   detail: string;
 } {
-  if (report.published_destination_instance_ids.includes(destinationId)) {
+  const publishedDestinationIds = report.published_destination_instance_ids ?? [];
+  if (publishedDestinationIds.includes(destinationId)) {
     return { state: "success", label: "已同步", detail: "该目标已经拥有当前报告内容。" };
   }
 
@@ -67,6 +70,7 @@ function getDestinationStatus(report: APIReport, destinationId: Destination["id"
 
 export default function ReportDetailPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params.id as string;
 
   const [report, setReport] = useState<APIReport | null>(null);
@@ -90,8 +94,16 @@ export default function ReportDetailPage() {
         if (cancelled) return;
         setReport(reportData);
         setDestinations((destinationData || []).filter((item) => item.enabled));
+        const normalizedPaperContent =
+          reportData.report_type === "paper"
+            ? normalizePaperDigestContent(
+                reportData.content ?? "",
+                (reportData.metadata ?? {}) as Record<string, unknown>,
+                reportData.report_date
+              )
+            : reportData.content ?? "";
         const effectiveContent = canonicalizeReportContent(
-          reportData.content ?? "",
+          normalizedPaperContent,
           reportData.events ?? [],
           reportData.global_tldr ?? ""
         );
@@ -141,19 +153,27 @@ export default function ReportDetailPage() {
 
   const effectiveReportContent = useMemo(() => {
     if (!report) return "";
-    return canonicalizeReportContent(report.content ?? "", report.events, report.global_tldr ?? "");
+    const normalizedPaperContent =
+      report.report_type === "paper"
+        ? normalizePaperDigestContent(
+            report.content ?? "",
+            (report.metadata ?? {}) as Record<string, unknown>,
+            report.report_date
+          )
+        : report.content ?? "";
+    return canonicalizeReportContent(normalizedPaperContent, report.events, report.global_tldr ?? "");
   }, [report]);
   const parsedReport = useMemo(() => parseReportContent(effectiveReportContent), [effectiveReportContent]);
   const hasTemplateContent = Boolean(effectiveReportContent.trim() && parsedReport.sections.length > 0);
+  const shouldShowCoverSummary = Boolean(
+    report?.tldr.length && (!hasTemplateContent || report.report_type === "research")
+  );
 
   const outlineItems = useMemo(() => extractOutline(parsedReport.sections), [parsedReport.sections]);
   const activeHeadingId = useActiveHeading(outlineItems.map((item) => item.id));
   const displayTitle = useMemo(() => {
     if (!report) return "";
-    if (report.report_type === "daily" && report.report_date) {
-      return `AI 早报 ${report.report_date}`;
-    }
-    return report.title;
+    return getReportDisplayTitle(report);
   }, [report]);
 
   const sourceCount = useMemo(() => {
@@ -169,6 +189,13 @@ export default function ReportDetailPage() {
     () => destinations.filter((item) => item.enabled),
     [destinations],
   );
+  const backLink = useMemo(() => {
+    const source = searchParams.get("from");
+    if (source === "library") {
+      return { href: "/library", label: "返回归档" };
+    }
+    return { href: "/", label: "返回首页" };
+  }, [searchParams]);
 
   const handleNavigate = (sectionId: string) => {
     const target = document.getElementById(sectionId);
@@ -217,11 +244,11 @@ export default function ReportDetailPage() {
   return (
     <div className="max-w-[1400px] w-full mx-auto py-8 sm:py-12 pb-24 px-4 lg:px-6">
       <Link
-        href="/"
+        href={backLink.href}
         className="inline-flex items-center space-x-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-10 group"
       >
         <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-        <span>返回发现页</span>
+        <span>{backLink.label}</span>
       </Link>
 
       <div className={`relative flex flex-col gap-10 items-start ${hasTemplateContent ? 'lg:pr-[210px]' : ''}`}>
@@ -250,20 +277,20 @@ export default function ReportDetailPage() {
               {displayTitle}
             </h1>
 
-            {report.tldr.length > 0 && !hasTemplateContent && (
+            {shouldShowCoverSummary && (
               <div className="text-xl sm:text-2xl font-medium text-foreground/70 max-w-3xl leading-relaxed border-l-4 border-blue-500/30 pl-5 py-1">
                 {report.tldr[0]}
               </div>
             )}
           </header>
-
           {hasTemplateContent ? (
-            <section className="bg-background rounded-2xl border-none sm:border sm:border-border/40 sm:shadow-sm sm:p-8 md:p-10">
+            <section className="bg-card rounded-2xl border-none sm:border sm:border-border/50 shadow-sm sm:p-8 md:p-10">
               <ReportDocument
                 content={effectiveReportContent}
                 events={report.events}
                 globalTldr={report.global_tldr}
                 topics={report.topics}
+                suppressFirstHeading={report.report_type === "paper"}
               />
             </section>
           ) : (
@@ -355,7 +382,7 @@ export default function ReportDetailPage() {
             className="absolute inset-0 bg-background/80 backdrop-blur-sm"
             onClick={() => setPendingSyncDestinationId(null)}
           />
-          <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl border border-border/50 bg-background shadow-2xl">
+          <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl border border-border/50 bg-card shadow-2xl">
             <div className="border-b border-border/40 bg-card/90 px-6 py-5">
               <h2 className="text-xl font-semibold tracking-tight">确认同步</h2>
               <p className="mt-2 text-sm text-muted-foreground">
@@ -374,7 +401,7 @@ export default function ReportDetailPage() {
                   {pendingSyncDestination.type}
                 </div>
               </div>
-              <div className="rounded-2xl border border-border/50 bg-background p-4">
+              <div className="rounded-2xl border border-border/50 bg-card p-4">
                 <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   报告
                 </div>

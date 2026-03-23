@@ -1,0 +1,134 @@
+# {{ title | default("论文阅读笔记") }}
+
+## 元信息
+
+| 项目 | 内容 |
+|------|------|
+| 标题 | {{ title | default("N/A") }} |
+| 作者 | {{ authors | default("N/A") }} |
+| 机构 | {{ affiliations | default("N/A") }} |
+{% if links | default([]) -%}
+| 链接 | {% for link in links | default([]) -%}[链接 {{ loop.index }}]({{ link }}){% if not loop.last %} / {% endif %}{% endfor -%} |
+{% endif -%}
+{% if back_link | default("", true) | trim -%}
+| 推荐页 | {{ back_link | trim }} |
+{% endif -%}
+
+---
+
+## 一句话总结
+
+{% if summary | default("", true) | trim -%}
+> {{ summary | trim }}
+{% endif -%}
+
+---
+
+## 核心贡献
+
+{% for item in core_contributions | default(contributions, true) | default([]) -%}
+{{ loop.index }}. {{ item }}
+{% endfor -%}
+
+---
+
+## 问题背景
+
+{% if problem_background | default([]) -%}
+{% for item in problem_background | default([]) -%}
+- {{ item }}
+{% endfor -%}
+{% elif problem_statement | default("", true) | trim -%}
+### 要解决的问题
+
+{{ problem_statement | trim }}
+
+{% endif -%}
+{% if prior_limitations | default("", true) | trim -%}
+### 现有方法的局限
+
+{{ prior_limitations | trim }}
+
+{% endif -%}
+{% if motivation | default("", true) | trim -%}
+### 本文的动机
+
+{{ motivation | trim }}
+
+{% endif -%}
+
+---
+
+## 方法详解
+
+{% if method_breakdown | default(method_details, true) | default([]) -%}
+### 整体框架
+
+{% for item in method_breakdown | default(method_details, true) | default([]) -%}
+- {{ item }}
+{% endfor -%}
+{% endif -%}
+
+---
+
+## 图示解读
+
+{% for item in figure_notes | default([]) -%}
+{{ item }}
+
+{% endfor -%}
+
+---
+
+## 实验
+
+{% if experiments | default([]) -%}
+### 主要结果
+
+{% for item in experiments | default([]) -%}
+- {{ item }}
+{% endfor -%}
+{% endif -%}
+
+---
+
+## 批判性思考
+
+{% if strengths | default([]) -%}
+### 优点
+
+{% for item in strengths | default([]) -%}
+1. {{ item }}
+{% endfor -%}
+{% endif -%}
+{% if limitations | default([]) -%}
+### 局限性
+
+{% for item in limitations | default([]) -%}
+1. {{ item }}
+{% endfor -%}
+{% endif -%}
+
+---
+
+## 相关工作
+
+{% for item in related_reading | default([]) -%}
+- {{ item }}
+{% endfor -%}
+
+---
+
+## 后续阅读
+
+{% for item in next_steps | default([]) -%}
+- [ ] {{ item }}
+{% endfor -%}
+
+---
+
+## 回到推荐页
+
+{% if back_link | default("", true) | trim -%}
+{{ back_link | trim }}
+{% endif -%}

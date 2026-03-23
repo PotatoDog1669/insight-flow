@@ -3,13 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { ReportCard, type Report as ReportCardModel } from "@/components/ReportCard";
 import { deleteReport, getReportFilters, getReports, type Report as APIReport, type ReportFilters } from "@/lib/api";
+import { getReportDisplayTitle } from "@/lib/report-display";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 function toCardReport(report: APIReport): ReportCardModel {
   return {
     id: report.id,
     time_period: report.time_period,
     report_type: report.report_type,
-    title: report.title,
+    title: getReportDisplayTitle(report),
     report_date: report.report_date,
     tldr: report.tldr,
     article_count: report.article_count,
@@ -31,17 +33,23 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingReportIds, setDeletingReportIds] = useState<Record<string, boolean>>({});
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const [data, filters] = await Promise.all([
+        const [rawReports, filters] = await Promise.all([
           getReports({ limit: 100, page: 1 }),
           getReportFilters(),
         ]);
-        setReports(data.map(toCardReport));
+        const filteredReports = rawReports.filter((report) => {
+          if (report.report_type !== "paper") return true;
+          const rawMeta = (report.metadata ?? {}) as Record<string, unknown>;
+          return rawMeta.paper_mode !== "note";
+        });
+        setReports(filteredReports.map(toCardReport));
         setReportFilters(filters);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -56,10 +64,14 @@ export default function LibraryPage() {
     return reports.filter((report) => monitorFilter === "all" || report.monitor_id === monitorFilter);
   }, [monitorFilter, reports]);
 
-  const handleDelete = async (reportId: string) => {
-    if (typeof window !== "undefined" && !window.confirm("确认删除这份报告吗？")) {
-      return;
-    }
+  const handleDelete = (reportId: string) => {
+    setConfirmDeleteId(reportId);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    const reportId = confirmDeleteId;
+    setConfirmDeleteId(null);
     setError(null);
     setDeletingReportIds((prev) => ({ ...prev, [reportId]: true }));
     try {
@@ -116,10 +128,9 @@ export default function LibraryPage() {
               key={report.id}
               report={report}
               index={i}
-              onDelete={(reportId) => {
-                void handleDelete(reportId);
-              }}
+              onDelete={handleDelete}
               deleting={Boolean(deletingReportIds[report.id])}
+              entrySource="library"
             />
           ))}
           {filteredReports.length === 0 && (
@@ -129,6 +140,15 @@ export default function LibraryPage() {
           )}
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="删除报告"
+        description="此操作无法撤销，确认删除这份报告吗？"
+        confirmLabel="删除"
+        onCancel={() => setConfirmDeleteId(null)}
+        onConfirm={() => { void handleConfirmDelete(); }}
+      />
     </div>
   );
 }

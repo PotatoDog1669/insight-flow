@@ -26,7 +26,7 @@ export interface OutlineItem {
 const HEADING_RE = /^(#{1,2})\s+(.+)$/;
 const EVENT_INDEX_RE = /\s#(\d{1,3})\s*$/;
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
-const SUMMARY_HINTS = ["全局总结与锐评", "摘要", "执行摘要"];
+const SUMMARY_HINTS = ["全局总结与锐评", "摘要", "执行摘要", "本期导读", "总结"];
 const OVERVIEW_HINT = "概览";
 const CANONICAL_OVERVIEW_HEADING_RE = /^##\s*概览\s*$/m;
 const CANONICAL_EVENT_HEADING_RE = /^##\s+.+\s#\d{1,3}\s*$/m;
@@ -228,4 +228,39 @@ function buildCanonicalContent(events: ReportEvent[], summary: string = ""): str
 export function canonicalizeReportContent(content: string, events: ReportEvent[], summary: string = ""): string {
   if (!shouldCanonicalize(content, events)) return content;
   return buildCanonicalContent(events, summary);
+}
+
+export function normalizePaperDigestContent(
+  content: string,
+  metadata: Record<string, unknown>,
+  reportDate?: string
+): string {
+  const paperMode = typeof metadata.paper_mode === "string" ? metadata.paper_mode : "";
+  if (paperMode !== "digest") return content;
+
+  const lines = String(content ?? "").replace(/\r\n/g, "\n").split("\n");
+  const normalizedTitle = reportDate ? `${reportDate} 论文推荐` : "";
+  let titleNormalized = false;
+
+  return lines
+    .flatMap((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("- 详细笔记：")) {
+        return [];
+      }
+      if (!titleNormalized && /^#\s+/.test(trimmed)) {
+        titleNormalized = true;
+        if (normalizedTitle) {
+          return [`# ${normalizedTitle}`];
+        }
+      }
+      if (trimmed === "## 今日锐评" || trimmed === "## 本期导读") {
+        return ["## 总结"];
+      }
+      if (trimmed === "**锐评**") {
+        return ["**阅读建议**"];
+      }
+      return [line];
+    })
+    .join("\n");
 }

@@ -1,9 +1,11 @@
 """报告 API"""
 
+import re
 import uuid
 from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +15,7 @@ from app.destinations.instances import (
 )
 from app.models.database import get_db
 from app.models.report import Report
+from app.papers.pdf_figures import DEFAULT_PAPER_FIGURE_ASSET_DIR
 from app.renderers.base import Report as RenderedReport
 from app.scheduler.orchestrator import Orchestrator
 from app.schemas.report import (
@@ -27,6 +30,11 @@ from app.schemas.report import (
 from app.sinks.registry import get_sink
 
 router = APIRouter()
+PAPER_FIGURE_ASSET_DIR = DEFAULT_PAPER_FIGURE_ASSET_DIR
+_PAPER_DIGEST_SUMMARY_RE = re.compile(
+    r"^##\s*(?:本期导读|今日锐评|总结)\s*(?:\n+)(.+?)(?=\n##\s|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 @router.get("", response_model=list[ReportResponse])
@@ -47,6 +55,15 @@ async def list_reports(
     stmt = stmt.order_by(Report.report_date.desc(), Report.created_at.desc())
     result = await db.execute(stmt)
     reports = result.scalars().all()
+    reports = [
+        report
+        for report in reports
+        if not (
+            report.report_type == "paper"
+            and isinstance(report.metadata_, dict)
+            and str(report.metadata_.get("paper_mode") or "").strip().lower() == "note"
+        )
+    ]
     monitor_uuid = _parse_optional_uuid(monitor_id)
     if monitor_uuid is not None:
         reports = [report for report in reports if _report_monitor_id(report) == monitor_uuid]
@@ -79,6 +96,18 @@ async def get_report_filters(db: AsyncSession = Depends(get_db)):
             for monitor_uuid, monitor_name in sorted(monitors.items(), key=lambda item: item[1])
         ],
     )
+
+
+@router.get("/paper-assets/{asset_path:path}")
+async def get_paper_figure_asset(asset_path: str):
+    """Serve extracted paper figure assets."""
+    root = PAPER_FIGURE_ASSET_DIR.resolve()
+    candidate = (root / asset_path).resolve()
+    if root not in candidate.parents and candidate != root:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    return FileResponse(path=candidate)
 
 
 @router.get("/{report_id}", response_model=ReportResponse)
@@ -237,6 +266,11 @@ def _to_report_response(report: Report, *, include_full_content: bool = True) ->
     tldr = metadata.get("tldr", [])
     if not isinstance(tldr, list):
         tldr = []
+    tldr = [str(item).strip() for item in tldr if str(item).strip()]
+    if not tldr:
+        fallback_tldr = _fallback_report_tldr(report=report, metadata=metadata)
+        if fallback_tldr:
+            tldr = [fallback_tldr]
     events: list[ReportEvent] = []
     global_tldr = ""
     response_metadata: dict = {}
@@ -263,7 +297,7 @@ def _to_report_response(report: Report, *, include_full_content: bool = True) ->
         time_period=report.time_period,  # type: ignore[arg-type]
         report_type=report.report_type,  # type: ignore[arg-type]
         title=report.title,
-        tldr=[str(item) for item in tldr],
+        tldr=tldr,
         article_count=len(report.article_ids or []),
         topics=topics,
         events=events,
@@ -308,3 +342,25 @@ def _resolve_publish_targets(payload: ReportPublishRequest) -> list[str]:
         normalized.append(value)
         seen.add(value)
     return normalized
+
+
+def _fallback_report_tldr(*, report: Report, metadata: dict) -> str:
+    global_tldr = str(metadata.get("global_tldr") or "").strip()
+    if global_tldr:
+        return global_tldr
+    if report.report_type != "paper":
+        return ""
+    if str(metadata.get("paper_mode") or "").strip().lower() != "digest":
+        return ""
+    return _extract_paper_digest_summary(report.content or "")
+
+
+def _extract_paper_digest_summary(content: str) -> str:
+    text = str(content or "").replace("\r\n", "\n")
+    match = _PAPER_DIGEST_SUMMARY_RE.search(text)
+    if not match:
+        return ""
+    summary = match.group(1).strip()
+    summary = re.sub(r"\n{2,}", "\n", summary)
+    summary = re.sub(r"\s+", " ", summary)
+    return summary.strip()

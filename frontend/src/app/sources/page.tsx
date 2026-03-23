@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { SourceStatusPanel } from "@/components/SourceStatusPanel";
 import { createSource, getSources, type Source } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
+import { AnimatePresence, motion } from "framer-motion";
 import { Plus, X, Globe, Rss, Github, BookOpen, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -120,7 +122,9 @@ export default function SourcesPage() {
       setCategory("blog");
       setUrl("");
       await loadSources();
+      toast({ type: "success", description: "信息源添加成功" });
     } catch (err) {
+      toast({ type: "error", description: "创建信息源失败: " + (err instanceof Error ? err.message : "Unknown error") });
       setError(err instanceof Error ? err.message : "Create source failed");
     } finally {
       setSubmitting(false);
@@ -158,11 +162,22 @@ export default function SourcesPage() {
         />
       )}
 
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={() => setIsModalOpen(false)} />
-          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-lg overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
-            <div className="bg-card/95 backdrop-blur-sm border-b border-border/40 px-6 py-4 flex items-center justify-between">
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-md" 
+              onClick={() => setIsModalOpen(false)} 
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              className="relative bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden z-50"
+            >
+              <div className="bg-card/50 px-6 py-4 flex items-center justify-between border-b border-border/30">
               <h2 className="text-xl font-semibold tracking-tight">添加信息源</h2>
               <button onClick={() => setIsModalOpen(false)} className="p-2 -mr-2 text-muted-foreground hover:bg-muted rounded-md transition-colors">
                 <X className="w-5 h-5" />
@@ -241,9 +256,10 @@ export default function SourcesPage() {
                 {submitting ? "正在创建..." : "创建信息源"}
               </button>
             </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
     </div>
   );
 }

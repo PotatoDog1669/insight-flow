@@ -78,7 +78,54 @@ def test_monitors_ai_routing_defaults_contract(client: TestClient) -> None:
     assert data["profile_name"]
     assert data["stages"]["filter"] in {"rule", "llm_openai", "llm_codex"}
     assert data["stages"]["keywords"] in {"rule", "llm_openai", "llm_codex"}
+    assert data["stages"]["paper_review"] in {"llm_openai", "llm_codex"}
+    assert data["stages"]["paper_note"] in {"llm_openai", "llm_codex"}
     assert data["stages"]["report"] in {"llm_openai", "llm_codex"}
+
+
+def test_monitors_agent_contract_supports_message_and_conversation_id(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/monitors/agent",
+        json={"message": "track ai agents"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] in {"clarify", "draft"}
+    assert isinstance(payload["conversation_id"], str)
+    if payload["mode"] == "clarify":
+        assert isinstance(payload["message"], str)
+    else:
+        assert isinstance(payload["draft"]["name"], str)
+        assert isinstance(payload["monitor_payload"]["name"], str)
+
+
+def test_monitors_agent_stream_contract_returns_ndjson_events(client: TestClient, monkeypatch) -> None:
+    from app.agents.monitor_agent.service import MonitorAgentService
+    from app.schemas.monitor_agent import MonitorAgentClarifyResponse, MonitorAgentFinalEvent, MonitorAgentStatusEvent
+
+    async def _fake_stream_message_events(self, *, request, db):
+        del self, request, db
+        yield MonitorAgentStatusEvent(key="understand", label="理解需求", status="running")
+        yield MonitorAgentStatusEvent(key="understand", label="理解需求", status="completed")
+        yield MonitorAgentFinalEvent(
+            response=MonitorAgentClarifyResponse(
+                mode="clarify",
+                conversation_id="conv-stream",
+                message="请再具体一点",
+                missing_or_conflicting_fields=["topic_scope"],
+            )
+        )
+
+    monkeypatch.setattr(MonitorAgentService, "stream_message_events", _fake_stream_message_events)
+
+    with client.stream("POST", "/api/v1/monitors/agent/stream", json={"message": "track ai agents"}) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/x-ndjson")
+        lines = [line for line in response.iter_lines() if line]
+
+    assert len(lines) == 3
+    assert '"type": "status"' in lines[0]
+    assert '"type": "final"' in lines[-1]
 
 
 def test_monitors_contract_supports_list_create_and_run(client: TestClient, monkeypatch) -> None:
@@ -111,6 +158,7 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert "report_type" in listed[0]
     assert "source_ids" in listed[0]
     assert "ai_routing" in listed[0]
+    assert "ai_provider" in listed[0]
 
     create_response = client.post(
         "/api/v1/monitors",
@@ -261,6 +309,61 @@ def test_monitors_contract_supports_list_create_and_run(client: TestClient, monk
     assert "process" in stages
     assert "persist" in stages
     assert "publish" in stages
+
+
+def test_monitors_contract_expands_arxiv_keywords_and_accepts_single_ai_provider(client: TestClient) -> None:
+    source_create_response = client.post(
+        "/api/v1/sources",
+        json={
+            "name": "arXiv",
+            "category": "academic",
+            "collect_method": "rss",
+            "config": {
+                "arxiv_api": True,
+                "feed_url": "https://export.arxiv.org/api/query",
+                "categories": ["cs.AI"],
+            },
+            "enabled": True,
+        },
+    )
+    assert source_create_response.status_code == 201
+    arxiv_source = source_create_response.json()
+
+    create_response = client.post(
+        "/api/v1/monitors",
+        json=monitor_create_payload(
+            "Daily Paper Intent",
+            [arxiv_source["id"]],
+            report_type="paper",
+            source_overrides={
+                arxiv_source["id"]: {
+                    "keywords": ["webagent"],
+                    "max_results": 40,
+                }
+            },
+            ai_provider="llm_codex",
+        ),
+    )
+    assert create_response.status_code == 201
+
+    created = create_response.json()
+    arxiv_override = created["source_overrides"][arxiv_source["id"]]
+    assert created["ai_provider"] == "llm_codex"
+    assert arxiv_override["keywords"] == ["webagent"]
+    assert arxiv_override["expanded_keywords"] == [
+        "webagent",
+        "web agents",
+        "web navigation",
+        "browser agent",
+        "gui agent",
+        "computer use",
+    ]
+    assert created["ai_routing"]["stages"]["filter"]["primary"] == "llm_codex"
+    assert created["ai_routing"]["stages"]["keywords"]["primary"] == "llm_codex"
+    assert created["ai_routing"]["stages"]["global_summary"]["primary"] == "llm_codex"
+    assert created["ai_routing"]["stages"]["report"]["primary"] == "llm_codex"
+    assert created["ai_routing"]["stages"]["paper_review"]["primary"] == "llm_codex"
+    assert created["ai_routing"]["stages"]["paper_note"]["primary"] == "llm_codex"
 
 
 def test_reports_contract_supports_manual_publish(client: TestClient, monkeypatch) -> None:
@@ -423,6 +526,7 @@ def test_users_me_contract_supports_profile_and_settings_update(client: TestClie
     assert "id" in profile
     assert "email" in profile
     assert "plan" in profile
+    assert profile["email"] == "admin@example.com"
 
     update_response = client.patch(
         "/api/v1/users/me/settings",

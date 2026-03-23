@@ -13,6 +13,11 @@ import httpx
 
 from app.config import settings
 
+_LOCAL_CODEX_BLOCKED_ENV_VARS = {
+    "CODEX_API_KEY",
+    "OPENAI_API_KEY",
+}
+
 
 def build_codex_headers(config: dict | None = None) -> dict[str, str]:
     cfg = dict(config or {})
@@ -155,6 +160,7 @@ async def _run_local_codex_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=_build_local_codex_env(),
         )
     except FileNotFoundError as exc:
         raise ValueError("Local Codex CLI is not installed") from exc
@@ -174,6 +180,14 @@ async def _run_local_codex_command(
         stdout_bytes.decode("utf-8", errors="replace"),
         stderr_bytes.decode("utf-8", errors="replace"),
     )
+
+
+def _build_local_codex_env() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _LOCAL_CODEX_BLOCKED_ENV_VARS
+    }
 
 
 def _format_local_codex_exec_error(stdout_text: str, stderr_text: str) -> str:

@@ -63,6 +63,12 @@ routing:
         keywords:
           primary: llm_openai
           fallback: [rule]
+        paper_review:
+          primary: llm_openai
+          fallback: [llm_codex]
+        paper_note:
+          primary: llm_openai
+          fallback: [llm_codex]
         report:
           primary: llm_openai
         publish:

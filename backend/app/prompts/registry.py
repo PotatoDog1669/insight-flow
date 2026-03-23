@@ -10,7 +10,7 @@ from app.config import PROJECT_ROOT
 
 PROMPT_ROOT = PROJECT_ROOT / "backend" / "app" / "prompts"
 VALID_SCOPES = {"agent", "llm"}
-SHARED_LLM_PROMPTS = {"filter", "keywords", "report", "global_summary"}
+SHARED_LLM_PROMPTS = {"filter", "keywords", "report", "global_summary", "paper_review", "paper_note"}
 
 
 def _resolve_scope(scope: str, name: str) -> str:

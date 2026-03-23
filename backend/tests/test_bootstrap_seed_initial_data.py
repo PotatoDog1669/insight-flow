@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.bootstrap import DEFAULT_USER_ID, _source_uuid, seed_initial_data
-from app.models import Source
+from app.models import Source, User
 from app.models.database import Base
 from app.models.subscription import UserSubscription
 
@@ -445,6 +445,47 @@ async def test_seed_initial_data_migrates_existing_deepseek_category_to_blog(
             deepseek = await session.get(Source, _source_uuid("deepseek"))
             assert deepseek is not None
             assert deepseek.category == "blog"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_seed_initial_data_migrates_existing_default_user_email(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "seed-user-email.db"
+    presets_path = tmp_path / "source_presets.yaml"
+    profiles_dir = tmp_path / "site_profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    _write_presets(presets_path)
+
+    monkeypatch.setattr("app.bootstrap.PRESETS_PATH", presets_path)
+    monkeypatch.setattr("app.bootstrap.SITE_PROFILE_DIR", profiles_dir)
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as session:
+            session.add(
+                User(
+                    id=DEFAULT_USER_ID,
+                    email="admin@lexmount.com",
+                    name="Lex Researcher",
+                    settings={"default_time_period": "daily", "default_report_type": "daily", "default_sink": "notion"},
+                )
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            await seed_initial_data(session)
+
+        async with session_factory() as session:
+            user = await session.get(User, DEFAULT_USER_ID)
+            assert user is not None
+            assert user.email == "admin@example.com"
     finally:
         await engine.dispose()
 

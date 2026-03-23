@@ -21,6 +21,7 @@ class Source(Base):
     collect_method: Mapped[str] = mapped_column(String(32), nullable=False, comment="获取方式: api / rss / scraper / deepbrowse")
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, comment="采集配置")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="healthy", server_default="healthy", comment="状态: healthy / error / running")
     last_collected: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -8,6 +8,12 @@ def test_load_stable_profile_has_stage_and_fallbacks() -> None:
     assert profile.stages.filter.primary == "llm_openai"
     assert profile.stages.global_summary is not None
     assert profile.stages.global_summary.primary
+    assert profile.stages.paper_review is not None
+    assert profile.stages.paper_review.primary == "llm_openai"
+    assert profile.stages.paper_review.fallback == ["llm_codex"]
+    assert profile.stages.paper_note is not None
+    assert profile.stages.paper_note.primary == "llm_openai"
+    assert profile.stages.paper_note.fallback == ["llm_codex"]
     assert "rule" in profile.stages.filter.fallback
     assert "database" in profile.stages.publish.targets
 
@@ -19,5 +25,7 @@ def test_load_missing_profile_falls_back_to_stable_shape() -> None:
     assert profile.stages.filter.primary in {"rule", "llm_openai"}
     assert profile.stages.keywords.primary == "llm_openai"
     assert profile.stages.global_summary is not None
+    assert profile.stages.paper_review is not None
+    assert profile.stages.paper_note is not None
     assert profile.stages.report.primary == "llm_openai"
     assert profile.stages.publish.targets == ["database"]

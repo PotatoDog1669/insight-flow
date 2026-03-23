@@ -397,6 +397,54 @@ async def test_pipeline_downgrades_weak_social_input_to_compact_detail(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_pipeline_normalizes_list_like_keywords_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _KeepAllFilterProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            return {"articles": payload.get("articles", [])}
+
+    class _ListKeywordsProvider:
+        async def run(self, payload: dict, config: dict | None = None) -> dict:
+            return {
+                "event_title": "结构化论文摘要",
+                "keywords": ["paper", "world model"],
+                "summary": "这是一篇结构化论文。",
+                "importance": "high",
+                "category": "技术与洞察",
+                "detail": ["方法分为编码器与时序建模两部分。", "作者强调多视角一致性。"],
+                "who": "Example Lab",
+                "what": "提出新的世界模型方法",
+                "when": "2026-03-20",
+                "metrics": ["10.3%"],
+                "availability": ["论文已发布", "代码未公开"],
+                "unknowns": ["未披露完整训练成本", "缺少消融细节"],
+                "evidence": ["实验显示性能提升", "摘要提到真实世界泛化更稳定"],
+            }
+
+    def fake_get_provider(stage: str, name: str):  # noqa: ANN201
+        if stage == "filter":
+            return _KeepAllFilterProvider()
+        if stage == "keywords":
+            return _ListKeywordsProvider()
+        raise KeyError(name)
+
+    monkeypatch.setattr("app.processors.pipeline.get_provider", fake_get_provider)
+
+    pipeline = ProcessingPipeline(score_threshold=0.1, routing_profile="stable_v1")
+    processed = await pipeline.process(
+        [RawArticle(external_id="paper-1", title="Structured Paper", url="https://example.com/paper", content="abstract")]
+    )
+
+    assert len(processed) == 1
+    item = processed[0]
+    assert item.detail == "方法分为编码器与时序建模两部分。\n作者强调多视角一致性。"
+    assert item.availability == "论文已发布\n代码未公开"
+    assert item.unknowns == "未披露完整训练成本\n缺少消融细节"
+    assert item.evidence == "实验显示性能提升\n摘要提到真实世界泛化更稳定"
+    assert "['" not in item.detail
+    assert "['" not in item.evidence
+
+
+@pytest.mark.asyncio
 async def test_pipeline_records_candidate_cluster_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     class _KeepAllFilterProvider:
         async def run(self, payload: dict, config: dict | None = None) -> dict:

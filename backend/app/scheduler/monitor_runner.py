@@ -109,6 +109,7 @@ async def execute_monitor_pipeline(
             report_type=monitor.report_type,
             window_hours=window_hours,
             monitor_ai_routing=monitor.ai_routing or {},
+            paper_time_period=monitor.time_period if monitor.report_type == "paper" else None,
         )
         pipeline_status = str(result.get("status", "success"))
         if pipeline_status == "partial_success":
@@ -308,6 +309,20 @@ def _normalize_source_overrides(payload: dict | None) -> dict[str, dict]:
         if keywords:
             deduped = list(dict.fromkeys(keywords))
             cleaned["keywords"] = deduped[:20]
+
+        raw_expanded_keywords = raw_config.get("expanded_keywords")
+        expanded_keywords: list[str] = []
+        if isinstance(raw_expanded_keywords, str):
+            expanded_keywords = [item.strip() for item in raw_expanded_keywords.split(",") if item.strip()]
+        elif isinstance(raw_expanded_keywords, list):
+            for item in raw_expanded_keywords:
+                if not isinstance(item, str):
+                    continue
+                value = item.strip()
+                if value:
+                    expanded_keywords.append(value)
+        if expanded_keywords:
+            cleaned["expanded_keywords"] = list(dict.fromkeys(expanded_keywords))[:20]
 
         usernames: list[str] = []
         raw_usernames = raw_config.get("usernames")

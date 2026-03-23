@@ -5,6 +5,21 @@
 // Use same-origin API by default so browser clients work in remote/devbox access too.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
+function getAPIBase(): string {
+    if (API_BASE) {
+        return API_BASE;
+    }
+    if (typeof window === "undefined") {
+        return "";
+    }
+
+    const { hostname } = window.location;
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return "http://127.0.0.1:8000";
+    }
+    return "";
+}
+
 export interface Source {
     id: string;
     name: string;
@@ -42,9 +57,10 @@ export interface Monitor {
     id: string;
     name: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type: "daily" | "weekly" | "research";
+    report_type: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
+    ai_provider?: Exclude<MonitorAIProviderName, "rule">;
+    source_overrides?: Record<string, MonitorSourceOverride>;
     ai_routing?: MonitorAIRouting;
     destination_ids: string[];
     destination_instance_ids: string[];
@@ -78,6 +94,16 @@ export interface MonitorAIRouting {
 export interface MonitorAIRoutingDefaults {
     profile_name: string;
     stages: Record<MonitorAIStageName, string>;
+}
+
+export interface MonitorSourceOverride {
+    max_items?: number;
+    limit?: number;
+    max_results?: number;
+    keywords?: string[];
+    expanded_keywords?: string[];
+    usernames?: string[];
+    subreddits?: string[];
 }
 
 export interface Destination {
@@ -145,9 +171,10 @@ export interface ProviderTestResponse {
 export interface MonitorCreate {
     name: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
+    ai_provider?: Exclude<MonitorAIProviderName, "rule">;
+    source_overrides?: Record<string, MonitorSourceOverride>;
     ai_routing?: MonitorAIRouting;
     destination_ids?: string[];
     destination_instance_ids?: string[];
@@ -156,12 +183,91 @@ export interface MonitorCreate {
     enabled: boolean;
 }
 
+export interface DraftItem {
+    key: string;
+    type: string;
+    label: string;
+    status: "ready" | "suggested" | "unavailable" | "unsupported";
+    reason?: string;
+    source_id?: string | null;
+    time_period?: "daily" | "weekly" | "custom" | null;
+    custom_schedule?: string | null;
+}
+
+export interface DraftSection {
+    kind: "source_list" | "schedule" | "unsupported";
+    title: string;
+    summary?: string | null;
+    items: DraftItem[];
+}
+
+export interface MonitorDraft {
+    name: string;
+    summary?: string | null;
+    sections: DraftSection[];
+    editable: true;
+}
+
+export interface MonitorAgentRequest {
+    message: string;
+    conversation_id?: string;
+}
+
+export interface MonitorAgentClarifyResponse {
+    mode: "clarify";
+    conversation_id: string;
+    message: string;
+    missing_or_conflicting_fields: string[];
+}
+
+export interface MonitorAgentDraftResponse {
+    mode: "draft";
+    conversation_id: string;
+    message?: string | null;
+    draft: MonitorDraft;
+    monitor_payload: MonitorCreate;
+    inferred_fields: string[];
+}
+
+export type MonitorAgentResponse =
+    | MonitorAgentClarifyResponse
+    | MonitorAgentDraftResponse;
+
+export interface MonitorAgentStatusStreamEvent {
+    type: "status";
+    key: string;
+    label: string;
+    status: "running" | "completed";
+}
+
+export interface MonitorAgentMessageDeltaStreamEvent {
+    type: "message_delta";
+    delta: string;
+}
+
+export interface MonitorAgentFinalStreamEvent {
+    type: "final";
+    response: MonitorAgentResponse;
+}
+
+export type MonitorAgentStreamEvent =
+    | MonitorAgentStatusStreamEvent
+    | MonitorAgentMessageDeltaStreamEvent
+    | MonitorAgentFinalStreamEvent;
+
+export interface MonitorAgentStreamHandlers {
+    onStatus?: (event: MonitorAgentStatusStreamEvent) => void;
+    onMessageDelta?: (event: MonitorAgentMessageDeltaStreamEvent) => void;
+    onFinal?: (event: MonitorAgentFinalStreamEvent) => void;
+}
+
 export interface MonitorUpdate {
     name?: string;
     time_period?: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     source_ids?: string[];
-    source_overrides?: Record<string, { max_items?: number; limit?: number; max_results?: number; keywords?: string[]; usernames?: string[]; subreddits?: string[] }>;
+    ai_provider?: Exclude<MonitorAIProviderName, "rule">;
+    source_overrides?: Record<string, MonitorSourceOverride>;
     ai_routing?: MonitorAIRouting | null;
     destination_ids?: string[];
     destination_instance_ids?: string[];
@@ -258,7 +364,7 @@ export interface Report {
     monitor_id: string | null;
     monitor_name: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type: "daily" | "weekly" | "research";
+    report_type: "daily" | "weekly" | "research" | "paper";
     title: string;
     report_date: string;
     tldr: string[];
@@ -294,7 +400,7 @@ export interface UserMe {
 
 export interface UserSettings {
     default_time_period: "daily" | "weekly" | "custom";
-    default_report_type: "daily" | "weekly" | "research";
+    default_report_type: "daily" | "weekly" | "research" | "paper";
     default_sink: string;
 }
 
@@ -314,7 +420,7 @@ export interface CollectTask {
 
 export interface ReportListParams {
     time_period?: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     monitor_id?: string;
     limit?: number;
     page?: number;
@@ -345,7 +451,7 @@ export class APIError extends Error {
 }
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${getAPIBase()}${path}`, {
         headers: { "Content-Type": "application/json" },
         ...options,
     });
@@ -505,6 +611,97 @@ export async function updateMonitor(id: string, data: MonitorUpdate): Promise<Mo
 export const deleteMonitor = (monitorId: string) =>
     fetchAPI<void>(`/api/v1/monitors/${monitorId}`, { method: "DELETE" });
 
+export const sendMonitorAgentMessage = (body: MonitorAgentRequest) =>
+    fetchAPI<MonitorAgentResponse>("/api/v1/monitors/agent", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+
+export async function streamMonitorAgentMessage(
+    body: MonitorAgentRequest,
+    handlers: MonitorAgentStreamHandlers = {}
+): Promise<MonitorAgentResponse> {
+    const res = await fetch(`${getAPIBase()}/api/v1/monitors/agent/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+        const text = await res.text();
+        let payload: unknown = undefined;
+        const contentType = res.headers.get("Content-Type") || "";
+        if (text.trim() && contentType.includes("application/json")) {
+            try {
+                payload = JSON.parse(text) as unknown;
+            } catch {
+                payload = undefined;
+            }
+        }
+        const detail = typeof payload === "object" && payload !== null && "detail" in payload
+            ? (payload as { detail: unknown }).detail
+            : payload;
+        throw new APIError(_extractAPIErrorMessage(detail, res.status), res.status, detail);
+    }
+
+    if (!res.body) {
+        const response = await sendMonitorAgentMessage(body);
+        handlers.onFinal?.({ type: "final", response });
+        return response;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResponse: MonitorAgentResponse | null = null;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+            const normalized = line.trim();
+            if (!normalized) {
+                continue;
+            }
+            const event = JSON.parse(normalized) as MonitorAgentStreamEvent;
+            if (event.type === "status") {
+                handlers.onStatus?.(event);
+                continue;
+            }
+            if (event.type === "message_delta") {
+                handlers.onMessageDelta?.(event);
+                continue;
+            }
+            finalResponse = event.response;
+            handlers.onFinal?.(event);
+        }
+    }
+
+    const trailing = buffer.trim();
+    if (trailing) {
+        const event = JSON.parse(trailing) as MonitorAgentStreamEvent;
+        if (event.type === "status") {
+            handlers.onStatus?.(event);
+        } else if (event.type === "message_delta") {
+            handlers.onMessageDelta?.(event);
+        } else {
+            finalResponse = event.response;
+            handlers.onFinal?.(event);
+        }
+    }
+
+    if (finalResponse === null) {
+        throw new Error("Monitor agent stream ended without a final event");
+    }
+    return finalResponse;
+}
+
 // ---- Reports ----
 export const getReports = (params?: ReportListParams) => {
     const query = toQueryString(params);
@@ -535,7 +732,7 @@ export const createCustomReport = (body: {
     title: string;
     prompt: string;
     time_period?: "daily" | "weekly" | "custom";
-    report_type?: "daily" | "weekly" | "research";
+    report_type?: "daily" | "weekly" | "research" | "paper";
     category?: string;
     report_date?: string;
 }) =>
@@ -549,7 +746,7 @@ export const getMe = () => fetchAPI<UserMe>("/api/v1/users/me");
 
 export const updateMySettings = (body: {
     default_time_period?: "daily" | "weekly" | "custom";
-    default_report_type?: "daily" | "weekly" | "research";
+    default_report_type?: "daily" | "weekly" | "research" | "paper";
     default_sink?: string;
 }) =>
     fetchAPI<UserSettings>("/api/v1/users/me/settings", {

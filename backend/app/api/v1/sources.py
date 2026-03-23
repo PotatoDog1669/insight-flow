@@ -145,6 +145,11 @@ async def test_source(
             ) for a in sample
         ]
 
+        source.status = "healthy"
+        source.updated_at = datetime.now(timezone.utc)
+        db.add(source)
+        await db.commit()
+
         return SourceTestResponse(
             success=True,
             message=(
@@ -229,6 +234,7 @@ async def _latest_tasks_by_source(
 
 
 def _to_source_response(source: Source, latest_task: CollectTask | None) -> SourceResponse:
+    source_status = source.status if source.status in {"healthy", "error", "running"} else _status_from_task(latest_task)
     return SourceResponse(
         id=source.id,
         name=source.name,
@@ -237,7 +243,7 @@ def _to_source_response(source: Source, latest_task: CollectTask | None) -> Sour
         config=source.config or {},
         target_url=_resolve_target_url(source.collect_method, source.config or {}),
         enabled=source.enabled,
-        status=_status_from_task(latest_task),  # type: ignore[arg-type]
+        status=source_status,
         last_run=(
             latest_task.started_at
             if latest_task and latest_task.started_at
@@ -303,11 +309,15 @@ def _resolve_target_url(collect_method: str, config: dict[str, Any]) -> str | No
 
 def _resolve_source_test_config(source: Source) -> dict[str, Any]:
     config = dict(source.config or {})
-    if source.collect_method == "rss" and isinstance(config.get("subreddits"), list):
-        subreddits = normalize_reddit_subreddits(config.get("subreddits"))
-        if subreddits:
-            config["subreddits"] = subreddits
-        config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
+    if source.collect_method == "rss":
+        # Source tests are connectivity checks; fetching every article detail makes them slow
+        # enough to trip frontend proxy timeouts on large feeds.
+        config["fetch_detail"] = False
+        if isinstance(config.get("subreddits"), list):
+            subreddits = normalize_reddit_subreddits(config.get("subreddits"))
+            if subreddits:
+                config["subreddits"] = subreddits
+            config["feed_url"] = build_reddit_feed_url(subreddits or config.get("subreddits"))
     return config
 
 

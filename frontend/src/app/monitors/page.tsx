@@ -1,5 +1,8 @@
 "use client";
 
+import { toast } from "@/hooks/use-toast";
+import { AnimatePresence, motion } from "framer-motion";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Play, Plus, Trash2, Activity, Clock, Server, ChevronDown, ChevronRight, History, Calendar, Loader2 } from "lucide-react";
 import {
@@ -7,7 +10,6 @@ import {
   createMonitor,
   deleteMonitor,
   getProviders,
-  getMonitorAIRoutingDefaults,
   getMonitors,
   getSources,
   runMonitor,
@@ -21,10 +23,7 @@ import {
   type CollectTask,
   type MonitorRunSummary,
   type TaskEvent,
-  type MonitorAIRouting,
-  type MonitorAIRoutingDefaults,
   type MonitorAIProviderName,
-  type MonitorAIStageName,
   type Provider,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -32,15 +31,13 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { RunEventPayload } from "@/components/monitor/RunEventPayload";
 import { cn } from "@/lib/utils";
 import type { Destination } from "@/lib/api";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
-const STAGE_PROVIDER_OPTIONS: Record<MonitorAIStageName, MonitorAIProviderName[]> = {
-  filter: ["rule", "llm_codex", "llm_openai"],
-  keywords: ["rule", "llm_codex", "llm_openai"],
-  global_summary: ["llm_codex", "llm_openai"],
-  report: ["llm_codex", "llm_openai"],
-};
-
-const MODEL_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_codex", "llm_openai"];
+const AI_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_codex", "llm_openai"];
+const isSelectableAIProvider = (
+  value: MonitorAIProviderName | undefined,
+): value is Exclude<MonitorAIProviderName, "rule"> =>
+  value === "llm_codex" || value === "llm_openai";
 const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
 const isActiveRunStatus = (status: string) =>
   ACTIVE_RUN_STATUSES.includes(status as (typeof ACTIVE_RUN_STATUSES)[number]);
@@ -53,7 +50,7 @@ const WINDOW_PRESET_OPTIONS = [
 
 type WindowPresetValue = (typeof WINDOW_PRESET_OPTIONS)[number]["value"];
 type CustomWindowUnit = "hours" | "days";
-type ReportType = "daily" | "weekly" | "research";
+type ReportType = "daily" | "weekly" | "research" | "paper";
 type ScheduleWeekday = "0" | "1" | "2" | "3" | "4" | "5" | "6";
 
 const DEFAULT_DAILY_SCHEDULE_TIME = "06:30";
@@ -80,6 +77,10 @@ type ParsedScheduleFormState = {
 };
 
 const padTwoDigits = (value: number) => String(value).padStart(2, "0");
+const formatLogEventId = (value: string | null | undefined) => {
+  const text = String(value ?? "").trim();
+  return text ? `id: ${text}` : "";
+};
 
 const defaultScheduleStateForTimePeriod = (timePeriod: "daily" | "weekly" | "custom"): ParsedScheduleFormState => ({
   scheduleTime: timePeriod === "weekly" ? DEFAULT_WEEKLY_SCHEDULE_TIME : DEFAULT_DAILY_SCHEDULE_TIME,
@@ -281,9 +282,16 @@ type SourceOverrideFormState = {
   limit?: number;
   max_results?: number;
   keywords?: string[];
+  expanded_keywords?: string[];
   usernames?: string[];
   subreddits?: string[];
 };
+
+const normalizeKeywordDraft = (value: string): string[] =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 
 const recommendedReportTypeForTimePeriod = (timePeriod: "daily" | "weekly" | "custom"): ReportType => {
   if (timePeriod === "daily") return "daily";
@@ -316,11 +324,10 @@ export default function MonitorsPage() {
   const [customWindowUnit, setCustomWindowUnit] = useState<CustomWindowUnit>("hours");
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
   const [sourceOverrides, setSourceOverrides] = useState<Record<string, SourceOverrideFormState>>({});
+  const [sourceKeywordDrafts, setSourceKeywordDrafts] = useState<Record<string, string>>({});
   const [expandedSourceCategories, setExpandedSourceCategories] = useState<Record<string, boolean>>({});
   const [selectedDestinationInstances, setSelectedDestinationInstances] = useState<string[]>([]);
-  const [aiRouting, setAiRouting] = useState<MonitorAIRouting>({ stages: {}, providers: {} });
-  const [aiRoutingDefaults, setAiRoutingDefaults] = useState<MonitorAIRoutingDefaults | null>(null);
-  const [isAiRoutingExpanded, setIsAiRoutingExpanded] = useState(false);
+  const [aiProvider, setAiProvider] = useState<Exclude<MonitorAIProviderName, "rule">>("llm_openai");
   const [submitting, setSubmitting] = useState(false);
 
   // Logs modal state
@@ -336,8 +343,7 @@ export default function MonitorsPage() {
   const [togglingMonitorIds, setTogglingMonitorIds] = useState<Record<string, boolean>>({});
   const [deletingMonitorIds, setDeletingMonitorIds] = useState<Record<string, boolean>>({});
   const [openingLogsMonitorId, setOpeningLogsMonitorId] = useState<string | null>(null);
-  const [actionNotice, setActionNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
-
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const sourceMap = useMemo(() => {
     const map = new Map<string, Source>();
     sources.forEach((source) => map.set(source.id, source));
@@ -347,7 +353,9 @@ export default function MonitorsPage() {
   const providerMap = useMemo(() => {
     const map = new Map<Exclude<MonitorAIProviderName, "rule">, Provider>();
     providers.forEach((provider) => {
-      map.set(provider.id, provider);
+      if ((provider.id as string) !== "rule") {
+        map.set(provider.id as Exclude<MonitorAIProviderName, "rule">, provider);
+      }
     });
     return map;
   }, [providers]);
@@ -430,12 +438,11 @@ export default function MonitorsPage() {
       setError(null);
     }
     try {
-      const [monitorData, sourceData, providerData, destData, defaultRoutingData] = await Promise.all([
+      const [monitorData, sourceData, providerData, destData] = await Promise.all([
         getMonitors(),
         getSources(),
         getProviders().catch(() => []),
         getDestinations(),
-        getMonitorAIRoutingDefaults().catch(() => null),
       ]);
       setMonitors(monitorData);
       setSources(sourceData);
@@ -443,7 +450,6 @@ export default function MonitorsPage() {
 
       // We expect the mock API to return the new Notion & Obsidian objects
       setDestinations(destData || []);
-      setAiRoutingDefaults(defaultRoutingData);
     } catch (err) {
       if (!silent) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -458,111 +464,19 @@ export default function MonitorsPage() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  useEffect(() => {
-    if (!actionNotice) return;
-    const timer = window.setTimeout(() => {
-      setActionNotice(null);
-    }, 5000);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [actionNotice]);
-
   useEffect(() => {
     if (!reportTypeTouched) {
       setReportType(recommendedReportTypeForTimePeriod(timePeriod));
     }
   }, [reportTypeTouched, timePeriod]);
 
-  const normalizeAiRoutingForForm = useCallback((raw: MonitorAIRouting | undefined): MonitorAIRouting => {
-    const stages: Partial<Record<MonitorAIStageName, { primary: MonitorAIProviderName }>> = {};
-    const providers: Partial<Record<MonitorAIProviderName, { model?: string; timeout_sec?: number; max_retry?: number }>> = {};
+  const resolveDefaultAiProvider = useCallback((): Exclude<MonitorAIProviderName, "rule"> => {
+    const enabledProvider = AI_PROVIDER_OPTIONS.find((providerId) => providerMap.get(providerId)?.enabled);
+    return enabledProvider ?? "llm_openai";
+  }, [providerMap]);
 
-    const stagePayload = raw?.stages ?? {};
-    for (const stage of Object.keys(STAGE_PROVIDER_OPTIONS) as MonitorAIStageName[]) {
-      const value = stagePayload[stage]?.primary;
-      if (value && STAGE_PROVIDER_OPTIONS[stage].includes(value)) {
-        stages[stage] = { primary: value };
-      }
-    }
-
-    const providerPayload = raw?.providers ?? {};
-    for (const providerName of Object.keys(providerPayload) as MonitorAIProviderName[]) {
-      const config = providerPayload[providerName];
-      if (!config) continue;
-      const cleaned: { model?: string; timeout_sec?: number; max_retry?: number } = {};
-      const model = typeof config.model === "string" ? config.model.trim() : "";
-      if (model) cleaned.model = model;
-      if (typeof config.timeout_sec === "number" && Number.isFinite(config.timeout_sec) && config.timeout_sec >= 1) {
-        cleaned.timeout_sec = Math.floor(config.timeout_sec);
-      }
-      if (typeof config.max_retry === "number" && Number.isFinite(config.max_retry) && config.max_retry >= 0) {
-        cleaned.max_retry = Math.floor(config.max_retry);
-      }
-      if (Object.keys(cleaned).length > 0) {
-        providers[providerName] = cleaned;
-      }
-    }
-
-    return { stages, providers };
-  }, []);
-
-  const cleanAiRoutingForSubmit = useCallback((raw: MonitorAIRouting): MonitorAIRouting | undefined => {
-    const normalized = normalizeAiRoutingForForm(raw);
-    const stageEntries = Object.entries(normalized.stages ?? {}).filter(([, value]) => Boolean(value?.primary));
-    const providerEntries = Object.entries(normalized.providers ?? {}).filter(([, value]) => {
-      if (!value) return false;
-      return Boolean((value.model && value.model.trim()) || typeof value.timeout_sec === "number" || typeof value.max_retry === "number");
-    });
-
-    if (stageEntries.length === 0 && providerEntries.length === 0) {
-      return undefined;
-    }
-    return {
-      stages: Object.fromEntries(stageEntries),
-      providers: Object.fromEntries(providerEntries),
-    };
-  }, [normalizeAiRoutingForForm]);
-
-  const selectedAiProviders = useMemo(() => {
-    const stageValues = aiRouting.stages ?? {};
-    const providers = new Set<Exclude<MonitorAIProviderName, "rule">>();
-    for (const stageName of Object.keys(stageValues) as MonitorAIStageName[]) {
-      const provider = stageValues[stageName]?.primary;
-      if (provider && provider !== "rule") {
-        providers.add(provider);
-      }
-    }
-    for (const providerName of Object.keys(aiRouting.providers ?? {}) as MonitorAIProviderName[]) {
-      if (providerName !== "rule") {
-        providers.add(providerName);
-      }
-    }
-    return Array.from(providers);
-  }, [aiRouting]);
-
-  const unconfiguredAiProviders = useMemo(() => {
-    return selectedAiProviders.filter((providerId) => {
-      const provider = providerMap.get(providerId);
-      return provider ? !provider.enabled : false;
-    });
-  }, [providerMap, selectedAiProviders]);
-
-  useEffect(() => {
-    if (!isModalOpen) return;
-    if (unconfiguredAiProviders.length === 0) return;
-    setIsAiRoutingExpanded(true);
-  }, [isModalOpen, unconfiguredAiProviders]);
-
-  const aiRoutingInheritLabel = useCallback((stage: MonitorAIStageName) => {
-    const current = aiRoutingDefaults?.stages?.[stage];
-    const normalized = typeof current === "string" ? current.trim() : "";
-    if (normalized && STAGE_PROVIDER_OPTIONS[stage].includes(normalized as MonitorAIProviderName)) {
-      return `inherit (current: ${normalized})`;
-    }
-    return "inherit default";
-  }, [aiRoutingDefaults]);
+  const selectedProviderConfig = providerMap.get(aiProvider);
+  const selectedProviderUnavailable = Boolean(selectedProviderConfig && !selectedProviderConfig.enabled);
 
   const resetForm = () => {
     setName("");
@@ -573,12 +487,12 @@ export default function MonitorsPage() {
     applyWindowHoursToForm(24);
     setSelectedSources([]);
     setSourceOverrides({});
+    setSourceKeywordDrafts({});
     setExpandedSourceCategories(
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
     setSelectedDestinationInstances([]);
-    setAiRouting({ stages: {}, providers: {} });
-    setIsAiRoutingExpanded(false);
+    setAiProvider(resolveDefaultAiProvider());
   };
 
   const openCreateModal = () => {
@@ -597,11 +511,15 @@ export default function MonitorsPage() {
     applyWindowHoursToForm(monitor.window_hours || 24);
     setSelectedSources(monitor.source_ids);
     setSourceOverrides(monitor.source_overrides ?? {});
+    setSourceKeywordDrafts({});
     setExpandedSourceCategories(
       Object.fromEntries(sourceGroups.map(([category]) => [category, true])) as Record<string, boolean>
     );
     setSelectedDestinationInstances(resolveMonitorDestinationSelections(monitor, destinations));
-    setAiRouting(normalizeAiRoutingForForm(monitor.ai_routing));
+    const primaryAi = monitor.ai_routing?.stages?.filter?.primary;
+    setAiProvider(
+      isSelectableAIProvider(primaryAi) ? primaryAi : resolveDefaultAiProvider()
+    );
     setIsModalOpen(true);
   };
 
@@ -645,10 +563,7 @@ export default function MonitorsPage() {
       void logs;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch logs");
-      setActionNotice({
-        type: "error",
-        message: "Failed to open logs. Please try again.",
-      });
+      toast({ type: "error", description: "Failed to open logs. Please try again." });
     } finally {
       setLoadingLogs(false);
     }
@@ -657,7 +572,6 @@ export default function MonitorsPage() {
   const handleOpenLogs = async (monitor: Monitor) => {
     setOpeningLogsMonitorId(monitor.id);
     setError(null);
-    setActionNotice(null);
     try {
       await openLogsModal(monitor);
     } finally {
@@ -719,67 +633,15 @@ export default function MonitorsPage() {
     }
   };
 
-  const handleAiStageProviderChange = (stage: MonitorAIStageName, nextValue: string) => {
-    setAiRouting((prev) => {
-      const nextStages = { ...(prev.stages ?? {}) };
-      const provider = nextValue as MonitorAIProviderName;
-      if (!nextValue) {
-        delete nextStages[stage];
-      } else if (STAGE_PROVIDER_OPTIONS[stage].includes(provider)) {
-        nextStages[stage] = { primary: provider };
-      }
-      return { ...prev, stages: nextStages };
-    });
-  };
-
-  const handleAiProviderConfigChange = (
-    provider: Exclude<MonitorAIProviderName, "rule">,
-    key: "model" | "timeout_sec" | "max_retry",
-    rawValue: string
-  ) => {
-    setAiRouting((prev) => {
-      const nextProviders = { ...(prev.providers ?? {}) };
-      const current = { ...(nextProviders[provider] ?? {}) };
-
-      if (key === "model") {
-        const normalized = rawValue.trim();
-        if (normalized) {
-          current.model = normalized;
-        } else {
-          delete current.model;
-        }
-      } else {
-        const text = rawValue.trim();
-        if (!text) {
-          delete current[key];
-        } else {
-          const parsed = Number(text);
-          if (!Number.isFinite(parsed)) {
-            return prev;
-          }
-          const bounded = key === "timeout_sec" ? Math.max(1, Math.floor(parsed)) : Math.max(0, Math.floor(parsed));
-          current[key] = bounded;
-        }
-      }
-
-      if (Object.keys(current).length === 0) {
-        delete nextProviders[provider];
-      } else {
-        nextProviders[provider] = current;
-      }
-      return { ...prev, providers: nextProviders };
-    });
-  };
-
   const handleSubmit = async () => {
     const effectiveReportType = reportType;
     if (!name || selectedSources.length === 0 || !effectiveReportType) return;
     setSubmitting(true);
     setError(null);
     const cleanedSourceOverrides = Object.fromEntries(
-      Object.entries(sourceOverrides)
-        .filter(([sourceId]) => selectedSources.includes(sourceId))
-        .map(([sourceId, override]) => {
+      selectedSources
+        .map((sourceId) => {
+          const override = sourceOverrides[sourceId];
           const cleaned: SourceOverrideFormState = {};
 
           const maxItems = override?.max_items;
@@ -797,11 +659,16 @@ export default function MonitorsPage() {
             cleaned.max_results = Math.max(1, Math.min(200, Math.floor(maxResults)));
           }
 
-          const keywords = Array.isArray(override?.keywords)
-            ? override.keywords
-              .map((item) => String(item).trim())
-              .filter((item) => item.length > 0)
-            : [];
+          const rawKeywordDraft = Object.prototype.hasOwnProperty.call(sourceKeywordDrafts, sourceId)
+            ? sourceKeywordDrafts[sourceId] ?? ""
+            : null;
+          const keywords = rawKeywordDraft !== null
+            ? normalizeKeywordDraft(rawKeywordDraft)
+            : Array.isArray(override?.keywords)
+              ? override.keywords
+                .map((item) => String(item).trim())
+                .filter((item) => item.length > 0)
+              : [];
           if (keywords.length > 0) {
             cleaned.keywords = Array.from(new Set(keywords)).slice(0, 20);
           }
@@ -828,18 +695,24 @@ export default function MonitorsPage() {
             cleaned.subreddits = subreddits;
           }
 
-          return [sourceId, cleaned];
+          return [sourceId, cleaned] as const;
         })
         .filter(([, override]) => Object.keys(override).length > 0)
     ) as Record<string, SourceOverrideFormState>;
-    const cleanedAiRouting = cleanAiRoutingForSubmit(aiRouting);
     const payload = {
       name,
       time_period: timePeriod,
       report_type: effectiveReportType,
       source_ids: selectedSources,
       source_overrides: cleanedSourceOverrides,
-      ai_routing: cleanedAiRouting,
+      ai_routing: {
+        stages: {
+          filter: { primary: aiProvider },
+          keywords: { primary: aiProvider },
+          global_summary: { primary: aiProvider },
+          report: { primary: aiProvider },
+        }
+      },
       destination_instance_ids: selectedDestinationInstances,
       window_hours: resolvedWindowHours,
       custom_schedule: effectiveCustomSchedule,
@@ -849,7 +722,6 @@ export default function MonitorsPage() {
         const target = monitors.find((item) => item.id === editingMonitorId);
         await updateMonitor(editingMonitorId, {
           ...payload,
-          ai_routing: cleanedAiRouting ?? null,
           enabled: target?.enabled ?? true,
         });
       } else {
@@ -869,7 +741,6 @@ export default function MonitorsPage() {
 
   const handleRunNow = async (monitor: Monitor) => {
     setError(null);
-    setActionNotice(null);
     setStartingRunIds((prev) => ({ ...prev, [monitor.id]: true }));
     try {
       const runResponse = await runMonitor(monitor.id);
@@ -878,18 +749,12 @@ export default function MonitorsPage() {
         delete next[monitor.id];
         return next;
       });
-      setActionNotice({
-        type: "success",
-        message: `Run started. Open Logs to follow progress. Run ID: ${runResponse.run_id}`,
-      });
+      toast({ type: "success", description: `Run started. Open Logs to follow progress. Run ID: ${runResponse.run_id}` });
       void loadData({ silent: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Run failed";
       setError(message);
-      setActionNotice({
-        type: "error",
-        message: "Failed to start run.",
-      });
+      toast({ type: "error", description: "Failed to start run." });
       setStartingRunIds((prev) => {
         const next = { ...prev };
         delete next[monitor.id];
@@ -916,22 +781,18 @@ export default function MonitorsPage() {
 
   const handleToggle = async (monitor: Monitor) => {
     setError(null);
-    setActionNotice(null);
     setTogglingMonitorIds((prev) => ({ ...prev, [monitor.id]: true }));
     try {
       await updateMonitor(monitor.id, { enabled: !monitor.enabled });
       await loadData();
-      setActionNotice({
+      toast({
         type: "success",
-        message: monitor.enabled ? "Monitor paused." : "Monitor resumed.",
+        description: monitor.enabled ? "Monitor paused." : "Monitor resumed.",
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Update failed";
       setError(message);
-      setActionNotice({
-        type: "error",
-        message: "Failed to update monitor status.",
-      });
+      toast({ type: "error", description: "Failed to update monitor status." });
     } finally {
       setTogglingMonitorIds((prev) => {
         const next = { ...prev };
@@ -941,24 +802,24 @@ export default function MonitorsPage() {
     }
   };
 
-  const handleDelete = async (monitorId: string) => {
+  const handleDelete = (monitorId: string) => {
+    setConfirmDeleteId(monitorId);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    const monitorId = confirmDeleteId;
+    setConfirmDeleteId(null);
     setError(null);
-    setActionNotice(null);
     setDeletingMonitorIds((prev) => ({ ...prev, [monitorId]: true }));
     try {
       await deleteMonitor(monitorId);
       await loadData();
-      setActionNotice({
-        type: "success",
-        message: "Monitor deleted.",
-      });
+      toast({ type: "success", description: "Monitor deleted." });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Delete failed";
       setError(message);
-      setActionNotice({
-        type: "error",
-        message: "Failed to delete monitor.",
-      });
+      toast({ type: "error", description: "Failed to delete monitor." });
     } finally {
       setDeletingMonitorIds((prev) => {
         const next = { ...prev };
@@ -979,27 +840,15 @@ export default function MonitorsPage() {
         </div>
         <button
           onClick={openCreateModal}
-          className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors bg-foreground text-background shadow hover:bg-foreground/90 h-9 px-4 py-2"
+          className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors bg-foreground text-background shadow hover:bg-foreground/90 h-9 px-4 py-2 group"
         >
-          <Plus className="w-4 h-4 mr-2" />
+          <Plus className="w-4 h-4 mr-2 transition-transform group-hover:rotate-90 duration-300" />
           创建任务
         </button>
       </header>
 
       {loading && <div className="py-10 text-sm text-muted-foreground">Loading monitors...</div>}
       {error && <div className="py-4 text-sm text-red-500">{error}</div>}
-      {actionNotice && (
-        <div
-          className={cn(
-            "py-3 px-4 text-sm rounded-md border",
-            actionNotice.type === "success"
-              ? "text-green-700 bg-green-50 border-green-200 dark:text-green-300 dark:bg-green-900/20 dark:border-green-900/40"
-              : "text-red-700 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-900/20 dark:border-red-900/40"
-          )}
-        >
-          {actionNotice.message}
-        </div>
-      )}
 
       {!loading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1021,10 +870,10 @@ export default function MonitorsPage() {
               )}
             >
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg font-semibold leading-snug">{monitor.name}</CardTitle>
+                <CardTitle className="text-lg font-semibold leading-snug truncate" title={monitor.name}>{monitor.name}</CardTitle>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant="secondary" className="capitalize bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-none">
-                    {monitor.report_type === "daily" ? "日报" : monitor.report_type === "weekly" ? "周报" : monitor.report_type === "research" ? "研究" : monitor.report_type}
+                    {monitor.report_type === "daily" ? "日报" : monitor.report_type === "weekly" ? "周报" : monitor.report_type === "research" ? "研究" : monitor.report_type === "paper" ? "论文" : monitor.report_type}
                   </Badge>
                   <Badge variant="secondary" className={monitor.enabled ? "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}>
                     {monitor.enabled ? "运行中" : "已暂停"}
@@ -1045,7 +894,7 @@ export default function MonitorsPage() {
                   <Clock className="w-4 h-4" />
                   <span>{monitor.last_run ? new Date(monitor.last_run).toLocaleString() : "从未运行"}</span>
                 </div>
-                <div className="text-xs text-muted-foreground/80">
+                <div className="text-xs text-muted-foreground/80 line-clamp-2" title={monitor.source_ids.map((sourceId) => sourceMap.get(sourceId)?.name ?? sourceId).join(", ")}>
                   {monitor.source_ids.map((sourceId) => sourceMap.get(sourceId)?.name ?? sourceId).join(", ")}
                 </div>
               </CardContent>
@@ -1140,10 +989,21 @@ export default function MonitorsPage() {
         </div>
       )}
 
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeModal} />
-          <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-xl z-50 flex flex-col max-h-[85vh]">
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-md" 
+              onClick={closeModal} 
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              className="relative bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl w-full max-w-xl z-50 flex flex-col max-h-[85vh]"
+            >
             <div className="px-6 py-4 border-b border-border/40 shrink-0">
               <h2 className="text-xl font-semibold tracking-tight">{editingMonitorId ? "编辑任务" : "创建任务"}</h2>
             </div>
@@ -1194,8 +1054,9 @@ export default function MonitorsPage() {
                   <label htmlFor="monitor-report-type" className="text-sm font-medium">报告模板</label>
                   <select
                     id="monitor-report-type"
+                    value={timePeriod === "daily" ? "daily" : timePeriod === "weekly" ? "weekly" : reportType}
+                    disabled={timePeriod !== "custom"}
                     aria-label="报告模板"
-                    value={reportType}
                     onChange={(e) => {
                       const nextReportType = e.target.value as ReportType;
                       setReportType(nextReportType);
@@ -1206,6 +1067,7 @@ export default function MonitorsPage() {
                     <option value="daily">日报</option>
                     <option value="weekly">周报</option>
                     <option value="research">研究</option>
+                    <option value="paper">论文</option>
                   </select>
                   <p className="text-[11px] text-muted-foreground">
                     {`推荐模板：${recommendedReportTypeForTimePeriod(timePeriod) === "daily" ? "日报" : recommendedReportTypeForTimePeriod(timePeriod) === "weekly" ? "周报" : "研究"}，也可以按需自行调整。`}
@@ -1400,9 +1262,20 @@ export default function MonitorsPage() {
                               ? sourceOverrides[source.id]?.max_items
                               : sourceOverrides[source.id]?.limit;
                           const maxResultsValue = sourceOverrides[source.id]?.max_results;
-                          const keywordsValue = Array.isArray(sourceOverrides[source.id]?.keywords)
-                            ? sourceOverrides[source.id]?.keywords?.join(", ")
-                            : "";
+                          const savedKeywords = Array.isArray(sourceOverrides[source.id]?.keywords)
+                            ? sourceOverrides[source.id]!.keywords!.map((item) => String(item).trim()).filter((item) => item.length > 0)
+                            : [];
+                          const keywordsValue = Object.prototype.hasOwnProperty.call(sourceKeywordDrafts, source.id)
+                            ? sourceKeywordDrafts[source.id] ?? ""
+                            : Array.isArray(sourceOverrides[source.id]?.keywords)
+                              ? sourceOverrides[source.id]?.keywords?.join(", ") ?? ""
+                              : "";
+                          const expandedKeywords = Array.isArray(sourceOverrides[source.id]?.expanded_keywords)
+                            ? sourceOverrides[source.id]!.expanded_keywords!.map((item) => String(item).trim()).filter((item) => item.length > 0)
+                            : [];
+                          const isKeywordPreviewFresh = !Object.prototype.hasOwnProperty.call(sourceKeywordDrafts, source.id)
+                            || JSON.stringify(normalizeKeywordDraft(keywordsValue)) === JSON.stringify(savedKeywords);
+                          const visibleExpandedKeywords = isKeywordPreviewFresh ? expandedKeywords : [];
                           return (
                             <div key={source.id} className="px-2 py-1 rounded hover:bg-muted/40">
                               <label className="flex items-center gap-2 text-sm">
@@ -1414,6 +1287,11 @@ export default function MonitorsPage() {
                                       setSelectedSources((prev) => [...prev, source.id]);
                                     } else {
                                       setSelectedSources((prev) => prev.filter((id) => id !== source.id));
+                                      setSourceKeywordDrafts((prev) => {
+                                        const next = { ...prev };
+                                        delete next[source.id];
+                                        return next;
+                                      });
                                       setSourceOverrides((prev) => {
                                         const next = { ...prev };
                                         delete next[source.id];
@@ -1476,30 +1354,9 @@ export default function MonitorsPage() {
                                       type="text"
                                       value={keywordsValue}
                                       onChange={(e) => {
-                                        const normalized = e.target.value
-                                          .split(",")
-                                          .map((item) => item.trim())
-                                          .filter((item) => item.length > 0);
-                                        if (normalized.length === 0) {
-                                          setSourceOverrides((prev) => {
-                                            const current = { ...(prev[source.id] || {}) };
-                                            delete current.keywords;
-                                            const next = { ...prev };
-                                            if (Object.keys(current).length === 0) {
-                                              delete next[source.id];
-                                            } else {
-                                              next[source.id] = current;
-                                            }
-                                            return next;
-                                          });
-                                          return;
-                                        }
-                                        setSourceOverrides((prev) => ({
+                                        setSourceKeywordDrafts((prev) => ({
                                           ...prev,
-                                          [source.id]: {
-                                            ...(prev[source.id] || {}),
-                                            keywords: Array.from(new Set(normalized)).slice(0, 20),
-                                          },
+                                          [source.id]: e.target.value,
                                         }));
                                       }}
                                       aria-label={`Keywords for ${source.name}`}
@@ -1507,6 +1364,14 @@ export default function MonitorsPage() {
                                       className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-xs"
                                     />
                                   </div>
+                                  {isArxivApi && visibleExpandedKeywords.length > 0 && (
+                                    <div className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2">
+                                      <div className="text-[11px] font-medium text-muted-foreground">扩展检索词</div>
+                                      <div className="mt-1 text-xs text-foreground/80">
+                                        {visibleExpandedKeywords.join(", ")}
+                                      </div>
+                                    </div>
+                                  )}
                                   <div className="flex items-center gap-2">
                                     <span className="text-xs text-muted-foreground">Max results</span>
                                     <input
@@ -1633,141 +1498,36 @@ export default function MonitorsPage() {
               </div>
 
               <div className="space-y-3 border border-border/40 rounded-md p-3">
-                <button
-                  type="button"
-                  aria-label="AI 路由配置（高级）"
-                  aria-expanded={isAiRoutingExpanded}
-                  onClick={() => setIsAiRoutingExpanded((prev) => !prev)}
-                  className="flex w-full items-start justify-between gap-3 rounded-md text-left hover:bg-muted/30 px-1 py-1 transition-colors"
-                >
-                  <div>
-                    <div className="text-sm font-medium">AI 路由配置（高级）</div>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      在此覆盖该任务中不同阶段的模型配置。如果留空，则继承全局默认设置。
-                      {aiRoutingDefaults?.profile_name ? `（当前为 ${aiRoutingDefaults.profile_name}）` : ""}
-                    </p>
-                  </div>
-                  {isAiRoutingExpanded ? (
-                    <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  )}
-                </button>
-                {isAiRoutingExpanded && (
-                  <>
-                    {unconfiguredAiProviders.length > 0 && (
-                      <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
-                        以下 provider 尚未在模型配置中启用：{unconfiguredAiProviders.join(", ")}。你仍然可以保存任务，但运行时可能失败。
-                      </div>
-                    )}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-filter-provider" className="text-xs font-medium text-muted-foreground">过滤阶段提供商</label>
-                    <select
-                      id="monitor-ai-filter-provider"
-                      aria-label="Filter stage provider"
-                      value={aiRouting.stages?.filter?.primary ?? ""}
-                      onChange={(e) => handleAiStageProviderChange("filter", e.target.value)}
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
-                    >
-                      <option value="">{aiRoutingInheritLabel("filter")}</option>
-                      {STAGE_PROVIDER_OPTIONS.filter.map((provider) => (
-                        <option key={provider} value={provider}>{provider}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-keywords-provider" className="text-xs font-medium text-muted-foreground">提取关键字阶段提供商</label>
-                    <select
-                      id="monitor-ai-keywords-provider"
-                      aria-label="Keywords stage provider"
-                      value={aiRouting.stages?.keywords?.primary ?? ""}
-                      onChange={(e) => handleAiStageProviderChange("keywords", e.target.value)}
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
-                    >
-                      <option value="">{aiRoutingInheritLabel("keywords")}</option>
-                      {STAGE_PROVIDER_OPTIONS.keywords.map((provider) => (
-                        <option key={provider} value={provider}>{provider}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-global-summary-provider" className="text-xs font-medium text-muted-foreground">全局摘要阶段提供商</label>
-                    <select
-                      id="monitor-ai-global-summary-provider"
-                      aria-label="Global summary stage provider"
-                      value={aiRouting.stages?.global_summary?.primary ?? ""}
-                      onChange={(e) => handleAiStageProviderChange("global_summary", e.target.value)}
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
-                    >
-                      <option value="">{aiRoutingInheritLabel("global_summary")}</option>
-                      {STAGE_PROVIDER_OPTIONS.global_summary.map((provider) => (
-                        <option key={provider} value={provider}>{provider}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="monitor-ai-report-provider" className="text-xs font-medium text-muted-foreground">生成报告阶段提供商</label>
-                    <select
-                      id="monitor-ai-report-provider"
-                      aria-label="Report stage provider"
-                      value={aiRouting.stages?.report?.primary ?? ""}
-                      onChange={(e) => handleAiStageProviderChange("report", e.target.value)}
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs"
-                    >
-                      <option value="">{aiRoutingInheritLabel("report")}</option>
-                      {STAGE_PROVIDER_OPTIONS.report.map((provider) => (
-                        <option key={provider} value={provider}>{provider}</option>
-                      ))}
-                    </select>
-                  </div>
+                <div>
+                  <div className="text-sm font-medium">AI 提供商</div>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    监控任务全链路统一使用一个 AI 提供商，不再分别配置过滤、关键词、摘要和报告阶段。
+                  </p>
                 </div>
-                    {selectedAiProviders.length > 0 && (
-                      <div className="space-y-3 pt-1">
-                        {MODEL_PROVIDER_OPTIONS.filter((provider) => selectedAiProviders.includes(provider)).map((provider) => (
-                          <div key={provider} className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                        <div className="space-y-1.5">
-                          <label htmlFor={`monitor-ai-model-${provider}`} className="text-xs font-medium text-muted-foreground">{`模型 (${provider})`}</label>
-                          <input
-                            id={`monitor-ai-model-${provider}`}
-                            aria-label={`Model for ${provider}`}
-                            value={aiRouting.providers?.[provider]?.model ?? ""}
-                            onChange={(e) => handleAiProviderConfigChange(provider, "model", e.target.value)}
-                            placeholder="gpt-4o-mini"
-                            className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label htmlFor={`monitor-ai-timeout-${provider}`} className="text-xs font-medium text-muted-foreground">超时（秒）</label>
-                          <input
-                            id={`monitor-ai-timeout-${provider}`}
-                            aria-label={`Timeout for ${provider}`}
-                            type="number"
-                            min={1}
-                            value={typeof aiRouting.providers?.[provider]?.timeout_sec === "number" ? aiRouting.providers?.[provider]?.timeout_sec : ""}
-                            onChange={(e) => handleAiProviderConfigChange(provider, "timeout_sec", e.target.value)}
-                            placeholder="30"
-                            className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label htmlFor={`monitor-ai-retry-${provider}`} className="text-xs font-medium text-muted-foreground">最大重试次数</label>
-                          <input
-                            id={`monitor-ai-retry-${provider}`}
-                            aria-label={`Max retry for ${provider}`}
-                            type="number"
-                            min={0}
-                            value={typeof aiRouting.providers?.[provider]?.max_retry === "number" ? aiRouting.providers?.[provider]?.max_retry : ""}
-                            onChange={(e) => handleAiProviderConfigChange(provider, "max_retry", e.target.value)}
-                            placeholder="2"
-                            className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
-                          />
-                        </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
+                {selectedProviderUnavailable && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+                    当前选择的 provider 尚未启用，任务可以保存，但运行时可能失败。
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  <label htmlFor="monitor-ai-provider" className="text-xs font-medium text-muted-foreground">AI 提供商</label>
+                  <select
+                    id="monitor-ai-provider"
+                    aria-label="AI 提供商"
+                    value={aiProvider}
+                    onChange={(e) => setAiProvider(e.target.value as Exclude<MonitorAIProviderName, "rule">)}
+                    className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  >
+                    {AI_PROVIDER_OPTIONS.map((provider) => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                </div>
+                {selectedProviderConfig && (
+                  <div>
+                    <div className="text-[11px] font-medium text-muted-foreground">当前默认模型</div>
+                    <div className="mt-1 text-sm text-foreground/80">{selectedProviderConfig.config.model || "未配置"}</div>
+                  </div>
                 )}
               </div>
 
@@ -1815,17 +1575,27 @@ export default function MonitorsPage() {
                 {editingMonitorId ? submitting ? "保存中..." : "保存" : submitting ? "创建中..." : "创建"}
               </button>
             </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
 
-      {isLogsModalOpen && logsMonitor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeLogsModal} />
-          <div
-            data-testid="monitor-logs-modal"
-            className="relative bg-card border border-border rounded-xl shadow-lg z-50 flex flex-col w-[96vw] max-w-[1800px] h-[90vh]"
-          >
+      <AnimatePresence>
+        {isLogsModalOpen && logsMonitor && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-md" 
+              onClick={closeLogsModal} 
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 10 }}
+              transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              data-testid="monitor-logs-modal"
+              className="relative bg-card/95 backdrop-blur-2xl border border-border/50 rounded-2xl shadow-2xl z-50 flex flex-col w-[96vw] max-w-[1800px] h-[90vh] overflow-hidden"
+            >
             <div className="px-6 py-4 border-b border-border/40 flex items-center justify-between shrink-0">
               <h2 className="text-xl font-semibold tracking-tight">Run History: {logsMonitor.name}</h2>
               <button
@@ -1897,8 +1667,8 @@ export default function MonitorsPage() {
                               )}
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-xs font-mono text-muted-foreground break-all">
-                                {run.run_id.slice(0, 8)}... {run.articles_count} articles
+                              <span className="text-xs font-mono text-muted-foreground break-all" title={run.run_id}>
+                                {run.run_id} {run.articles_count} articles
                               </span>
                               {isActiveRunStatus(run.status) && (
                                 <button
@@ -1952,13 +1722,23 @@ export default function MonitorsPage() {
                                         level === "warning" && "bg-yellow-950/20"
                                       )}
                                     >
-                                      <div className="flex items-start gap-2">
-                                        <span className="text-neutral-500 shrink-0">{ts}</span>
-                                        <span className={cn("uppercase text-[10px] font-bold shrink-0 mt-px", levelColor)}>
-                                          {level.padEnd(5)}
-                                        </span>
-                                        <span className="text-emerald-400 shrink-0">[{stage}]</span>
-                                        <span className="text-neutral-300">{eventType}</span>
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="flex items-start gap-2 min-w-0">
+                                          <span className="text-neutral-500 shrink-0">{ts}</span>
+                                          <span className={cn("uppercase text-[10px] font-bold shrink-0 mt-px", levelColor)}>
+                                            {level.padEnd(5)}
+                                          </span>
+                                          <span className="text-emerald-400 shrink-0">[{stage}]</span>
+                                          <span className="text-neutral-300 break-all">{eventType}</span>
+                                        </div>
+                                        {event.id && (
+                                          <span
+                                            className="text-[11px] text-neutral-500 shrink-0 break-all text-right"
+                                            title={event.id}
+                                          >
+                                            {formatLogEventId(event.id)}
+                                          </span>
+                                        )}
                                       </div>
                                       {event.message && (
                                         <div className="text-neutral-400 pl-[calc(8ch+10ch+2rem)] whitespace-pre-wrap break-all">
@@ -1981,14 +1761,24 @@ export default function MonitorsPage() {
                 </div>
               )}
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
       <div className="mt-8 text-xs text-muted-foreground flex items-center gap-2">
         <Activity className="w-3.5 h-3.5" />
         Monitor runs create task records and feed the daily pipeline.
       </div>
+
+      <ConfirmModal
+        open={confirmDeleteId !== null}
+        title="删除任务"
+        description="此操作无法撤销，确认删除这个任务及其所有关联数据吗？"
+        confirmLabel="删除"
+        onCancel={() => setConfirmDeleteId(null)}
+        onConfirm={() => { void handleConfirmDelete(); }}
+      />
     </div>
   );
 }

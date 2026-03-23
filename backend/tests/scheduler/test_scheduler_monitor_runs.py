@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from app.models import CollectTask
 from sqlalchemy import select
 
 from app.models import Monitor
@@ -192,9 +193,23 @@ async def test_run_scheduled_monitor_skips_custom_interval_until_due(db_session_
     async with session_factory() as session:
         monitor = await session.get(Monitor, uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
         assert monitor is not None
+        recent_scheduled_run = datetime.now(timezone.utc)
         monitor.time_period = "custom"
         monitor.custom_schedule = "interval:3@06:30"
-        monitor.last_run = datetime.now(timezone.utc)
+        monitor.last_run = recent_scheduled_run
+        session.add(
+            CollectTask(
+                id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+                monitor_id=monitor.id,
+                source_id=None,
+                trigger_type="scheduled",
+                status="success",
+                started_at=recent_scheduled_run,
+                finished_at=recent_scheduled_run,
+                created_at=recent_scheduled_run,
+            )
+        )
         await session.commit()
 
     await scheduler_module.run_scheduled_monitor("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -218,9 +233,80 @@ async def test_run_scheduled_monitor_executes_monitor_once(db_session_factory, m
     async with session_factory() as session:
         monitor = await session.get(Monitor, uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
         assert monitor is not None
+        old_scheduled_run = datetime.now(timezone.utc) - timedelta(days=3)
         monitor.time_period = "custom"
         monitor.custom_schedule = "interval:2@06:30"
-        monitor.last_run = datetime.now(timezone.utc) - timedelta(days=3)
+        monitor.last_run = old_scheduled_run
+        session.add(
+            CollectTask(
+                id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+                monitor_id=monitor.id,
+                source_id=None,
+                trigger_type="scheduled",
+                status="success",
+                started_at=old_scheduled_run,
+                finished_at=old_scheduled_run,
+                created_at=old_scheduled_run,
+            )
+        )
+        await session.commit()
+
+    await scheduler_module.run_scheduled_monitor("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    assert calls == [("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "scheduled")]
+
+
+@pytest.mark.asyncio
+async def test_run_scheduled_monitor_ignores_recent_manual_run_for_custom_interval(
+    db_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, _ = db_session_factory
+
+    monkeypatch.setattr("app.scheduler.scheduler.async_session", session_factory)
+
+    calls: list[tuple[str, str]] = []
+
+    async def _fake_run_monitor_once(*, db, monitor, trigger_type: str):
+        calls.append((str(monitor.id), trigger_type))
+
+    monkeypatch.setattr("app.scheduler.scheduler.run_monitor_once", _fake_run_monitor_once, raising=False)
+
+    async with session_factory() as session:
+        monitor = await session.get(Monitor, uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+        assert monitor is not None
+        old_scheduled_run = datetime.now(timezone.utc) - timedelta(days=2)
+        recent_manual_run = datetime.now(timezone.utc)
+        monitor.time_period = "custom"
+        monitor.custom_schedule = "interval:1@06:30"
+        monitor.last_run = recent_manual_run
+        session.add(
+            CollectTask(
+                id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+                monitor_id=monitor.id,
+                source_id=None,
+                trigger_type="scheduled",
+                status="success",
+                started_at=old_scheduled_run,
+                finished_at=old_scheduled_run,
+                created_at=old_scheduled_run,
+            )
+        )
+        session.add(
+            CollectTask(
+                id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+                monitor_id=monitor.id,
+                source_id=None,
+                trigger_type="manual",
+                status="success",
+                started_at=recent_manual_run,
+                finished_at=recent_manual_run,
+                created_at=recent_manual_run,
+            )
+        )
         await session.commit()
 
     await scheduler_module.run_scheduled_monitor("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")

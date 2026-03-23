@@ -1,4 +1,4 @@
-# LexDeepResearch — Coding Standards
+# Coding Standards
 
 ## Docs & Planning Files
 
@@ -6,6 +6,7 @@
   - `README.md` — repo overview and local development entry points
   - `docs/development/architecture.mdx` — current architecture and module boundaries
   - `docs/plans/` — per-feature design and implementation records
+- Only implement **P0 features fully**. P1+ only warrant schema/interface stubs.
 
 ---
 

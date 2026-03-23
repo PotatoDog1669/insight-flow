@@ -23,38 +23,21 @@
     </a>
   </p>
   <p>
-    <a href="https://insight-flow.potatodog.cc/en/introduction">English</a>
+    <a href="README.en.md">English</a>
     |
-    <a href="https://insight-flow.potatodog.cc/zh/introduction">简体中文</a>
+    <a href="README.md">简体中文</a>
   </p>
 </div>
 
-Insight Flow 是一个面向研究与信息监控场景的工作台，用来持续采集信息源、生成日报、周报和研究报告，并把结果同步到你配置的输出渠道。
+Insight Flow 是一个面向研究监控、持续情报收集和内容沉淀的工作台。
 
-## 文档入口
+Insight Flow 支持两种使用方式：你可以手动配置 monitor，也可以先告诉 Agent 想关注什么主题、对象或方向，由它帮你生成可编辑的 monitor 草案；随后系统会基于你配置的信息源、模型和输出目标，持续完成采集、筛选、总结、报告生成与同步发布。
 
-- [文档首页](https://insight-flow.potatodog.cc/zh/introduction)：产品简介、能力说明与使用场景
-- [快速开始](https://insight-flow.potatodog.cc/zh/quickstart)：首次启动、基础配置与本地访问方式
-- [功能说明](https://insight-flow.potatodog.cc/zh/features/sources)：信息源、监控任务、AI 路由、输出配置与归档
-- [架构设计](https://insight-flow.potatodog.cc/zh/development/architecture)：系统模块、运行链路与开发视角
-- [API Reference](https://insight-flow.potatodog.cc/zh/api-reference/introduction)：资源模型与接口入口
-- [贡献指南](https://insight-flow.potatodog.cc/zh/development/contributing)：开发约定与协作方式
+当前项目已经覆盖一条完整链路：信息源侧支持 RSS、网站抓取、GitHub Trending、Hugging Face，以及面向学术和社区场景的 OpenAlex、PubMed、Europe PMC、Reddit、X 等来源；任务侧支持按计划运行 monitor，生成日报、周报、调研报告 和 论文推荐 等报告类型；模型侧可以配置 openai 接口的 LLM，也可以使用 codex，并为不同处理阶段设置 AI routing；输出侧可以将结果同步到 Notion、Obsidian 或 RSS，同时保留运行记录、报告归档和手动补发布能力。
 
-## 核心能力
+## 演示
 
-- 统一管理信息源，支持 RSS、站点抓取、GitHub Trending、Hugging Face 等采集方式
-- 创建监控任务，按 `daily`、`weekly`、`research` 生成报告
-- 为 `filter`、`keywords`、`global_summary`、`report` 阶段配置 AI 路由
-- 配置 `llm_openai` 与 `llm_codex` 模型连接参数并在线测试
-- 将生成结果输出到 Notion、Obsidian 或 RSS
-- 查看任务运行历史、事件日志和报告归档
-
-## 仓库结构
-
-- `backend/`：FastAPI API、调度器、采集器、报告生成与落盘逻辑
-- `frontend/`：Next.js 管理界面，覆盖报告、任务、信息源、模型配置和输出配置
-- `agents/`：浏览器采集相关能力
-- `docs/`：文档站内容、开发文档与设计记录
+insight-flow.mp4
 
 ## 环境要求
 
@@ -90,13 +73,13 @@ make dev-local
 - 后端 API 文档：`http://localhost:8000/docs`
 - 健康检查：`http://localhost:8000/health`
 
-## 使用方式
+如果你会用到浏览器采集能力，再额外执行：
 
-1. 在“模型配置”页面填写 `llm_openai` 或 `llm_codex` 的连接信息。
-2. 在“输出配置”页面启用 Notion、Obsidian 或 RSS。
-3. 在“信息源”页面检查预置源，或添加你自己的源。
-4. 在“任务”页面创建 monitor，选择信息源、报告类型、输出渠道和 AI 路由。
-5. 手动运行任务后，在“报告”与“归档”页面查看生成结果。
+```bash
+make backend-browser-deps
+```
+
+首次启动后端时，系统会自动初始化默认用户，并把 `backend/app/collectors/source_presets.yaml` 中的预置信息源同步到数据库。
 
 ## 本地文档预览
 
@@ -108,23 +91,3 @@ npx mint dev
 ```
 
 如果你需要查看完整的后端 OpenAPI 文档，请单独启动后端服务后访问 `http://localhost:8000/docs`。
-
-如果你会用到浏览器采集能力，再额外执行：
-
-```bash
-make backend-browser-deps
-```
-
-首次启动后端时，系统会自动初始化默认用户，并把 `backend/app/collectors/source_presets.yaml` 中的预置信息源同步到数据库。
-
-## 常用命令
-
-```bash
-make infra-up        # 启动 postgres + redis
-make migrate         # 执行数据库迁移
-make backend         # 启动后端开发服务
-make frontend        # 启动前端开发服务
-make sync-sources    # 同步预置信息源到数据库
-make test-all        # 运行后端测试 + 前端 lint/build
-make infra-down      # 停止本地基础服务
-```

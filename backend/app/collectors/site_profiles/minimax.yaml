@@ -1,0 +1,19 @@
+site_key: minimax
+profile_version: v1
+start_urls:
+  - https://www.minimax.io/news
+list_page:
+  item_selector: a[href^='/news/']
+  url_attr: href
+detail_page:
+  content_selector: main
+  remove_selectors:
+    - script
+    - style
+    - nav
+    - footer
+    - header
+  title_selector: h1
+normalization:
+  url_prefix: https://www.minimax.io
+  min_content_chars: 300

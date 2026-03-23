@@ -1,0 +1,634 @@
+---
+title: 代码架构导读
+---
+# 代码架构导读
+
+这份文档面向准备进入 Insight Flow 进行开发的工程师，目标不是重复 README，而是帮助你快速回答下面几个问题：
+
+- 代码主要分几层，各层职责是什么？
+- 后端一次 monitor 执行时，代码实际会经过哪些模块？
+- 数据在数据库里如何建模，哪些表是“配置”，哪些表是“运行产物”？
+- 前端和后端是如何对接的，修改接口时需要同步哪些地方？
+
+如果你是第一次进入仓库，建议按下面顺序阅读：
+
+1. `README.md`
+2. `backend/app/main.py`
+3. `backend/app/api/router.py`
+4. `backend/app/scheduler/monitor_runner.py`
+5. `backend/app/scheduler/orchestrator.py`
+6. `backend/app/processors/pipeline.py`
+7. `backend/app/models/`
+8. `frontend/src/lib/api.ts`
+
+## 1. 项目整体结构
+
+仓库可以先粗分成 3 个区域：
+
+- `backend/`: FastAPI 后端、调度器、采集器、AI 加工流水线、报告生成与目标投递
+- `frontend/`: Next.js 管理界面，负责 monitor / source / report / provider / destination 管理
+- `docs/`: 产品文档、开发文档，以及每次较大改动的设计/实现记录
+
+从运行职责看，系统核心是一个“配置驱动的异步流水线”：
+
+```text
+用户配置 Source / Monitor / Provider / Destination
+    -> FastAPI 接口写入数据库
+    -> APScheduler 按 monitor 维度触发运行
+    -> Orchestrator 并发采集 Source
+    -> ProcessingPipeline 做筛选和信息提炼
+    -> Renderer / paper reporting 生成报告
+    -> Sink 投递到 database / notion / obsidian / rss
+    -> Report / Task / TaskEvent 落库供前端查询
+```
+
+## 2. 后端分层图
+
+后端代码主要在 `backend/app/`，可以按职责拆成下面几层：
+
+### 2.1 入口与运行时
+
+- `main.py`: FastAPI 应用入口，注册 CORS、API Router、健康检查和 lifespan
+- `bootstrap.py`: 启动时同步默认用户、预置信息源、站点 profile 衍生配置
+- `config.py`: 配置中心，读取 `.env` / `config.yaml` / 默认值
+
+关键点：
+
+- 应用启动后会先执行 `bootstrap_runtime_data()`，再启动 APScheduler。
+- 测试环境通过 `PYTEST_CURRENT_TEST` 跳过调度器，避免后台任务污染测试。
+- 系统使用固定默认用户 `99999999-9999-9999-9999-999999999999` 作为当前 P0 单用户运行主体。
+
+### 2.2 API 层
+
+- `api/router.py`: 汇总 `/api/v1/*` 路由
+- `api/v1/`: 资源级接口
+  - `sources.py`: 信息源 CRUD、连通性测试
+  - `monitors.py`: 监控任务 CRUD、手动运行、运行日志和事件查询
+  - `reports.py`: 报告列表、详情、补发布
+  - `tasks.py`: 任务记录查询
+  - `providers.py`: 模型配置
+  - `destinations.py`: 输出目标配置
+
+API 层本身比较薄，主要职责是：
+
+- 校验请求
+- 读取/写入数据库
+- 调用调度器或运行器
+- 返回 `schemas/` 中定义的响应结构
+
+### 2.3 调度与执行编排
+
+- `scheduler/scheduler.py`: APScheduler 管理，每个 monitor 一个 job
+- `scheduler/monitor_runner.py`: monitor run 的准备、执行、状态收尾
+- `scheduler/orchestrator.py`: 真正的主流水线编排器
+- `scheduler/task_events.py`: 运行事件流记录
+
+这是后端最关键的一层。API 不直接实现业务流程，而是把执行交给 `monitor_runner` 和 `orchestrator`。
+
+### 2.4 采集层
+
+- `collectors/base.py`: `BaseCollector` 与 `RawArticle`
+- `collectors/registry.py`: collector 插件注册表
+- `collectors/*.py`: 具体采集实现，如 `rss`、`blog_scraper`、`github_trending`、`openalex`、`pubmed`
+- `collectors/site_profiles/`: 站点 profile，驱动 scraper 型采集器
+
+设计上，采集层只负责“拿到原始条目”，统一输出 `RawArticle`，不负责报告生成。
+
+### 2.5 加工层
+
+- `processors/pipeline.py`: 加工总入口
+- `processors/window_filter.py`: 时间窗口过滤
+- `processors/candidate_cluster.py`: 候选事件聚类
+- `processors/event_extract.py`: 事件提炼
+- `processors/global_summary.py`: 全局摘要
+- `processors/paper_review_stage.py` / `paper_note_stage.py`: 论文模式专用 AI stage
+
+这层负责把 `RawArticle` 转成可渲染、可聚合的结构化结果。
+
+### 2.6 AI Provider 与 Routing 层
+
+- `providers/base.py`: stage provider 抽象接口
+- `providers/registry.py`: 按 stage + provider 名称注册
+- `providers/filter.py`, `keywords.py`, `report.py` 等：不同 stage 的 provider 实现
+- `providers/llm_chat.py`, `codex_transport.py`: 实际模型调用封装
+- `routing/schema.py`, `routing/loader.py`: routing profile 定义与加载
+
+这一层的作用是把“业务 stage”与“具体模型/规则执行器”解耦。也就是说，filter / keywords / report 这些阶段不直接绑定某个模型，而是通过 routing profile 选择 provider。
+
+### 2.7 渲染与模板层
+
+- `renderers/base.py`: 渲染器接口与 `RenderContext`
+- `renderers/daily.py`, `weekly.py`, `paper.py`, `deep_report.py`
+- `template_engine/`: Jinja2 模板查找与渲染
+- `templates/`: 报告模板和 sink 专用模板
+
+渲染层负责把结构化加工结果变成 Markdown/HTML 报告文本。
+
+### 2.8 投递层
+
+- `sinks/base.py`: sink 接口
+- `sinks/registry.py`: sink 注册
+- `sinks/database.py`, `notion.py`, `obsidian.py`, `rss.py`
+- `destinations/instances.py`: 用户目标实例的持久化和解析
+
+报告先生成，再由 sink 投递。`database` sink 是最基础的“内部落盘”，Notion / Obsidian / RSS 属于外部发布目标。
+
+### 2.9 数据模型层
+
+- `models/`: SQLAlchemy 模型
+- `schemas/`: Pydantic 请求/响应模型
+
+可以把模型再分成 3 组：
+
+- 配置类：`Source`, `Monitor`, `DestinationInstance`, `User`
+- 运行类：`CollectTask`, `TaskEvent`
+- 产出类：`Article`, `Report`, `Paper*`
+
+## 3. 一次后端启动会发生什么
+
+从 `backend/app/main.py` 看，启动流程是：
+
+1. 构建 FastAPI 实例
+2. 注册 CORS 和 `/api` 路由
+3. 进入 lifespan
+4. 执行 `bootstrap_runtime_data()`
+5. 执行 `init_scheduler()`
+
+`bootstrap.py` 做的事情比名字重要，主要包括：
+
+- 确保默认用户存在
+- 读取 `collectors/source_presets.yaml`
+- 为每个预置信息源推导 `collect_method` 和 `config`
+- 把预置信息源同步到 `sources` 表
+- 对部分历史配置做兼容性修正
+
+这意味着：
+
+- 新增预置信息源时，除了改 YAML，还要理解 `_infer_collect_method()` 如何把策略转成 collector 配置。
+- 应用重启后，预置源会重新同步，所以它们不是一次性 seed，而是“启动时对齐”。
+
+## 4. Monitor 执行主链路
+
+这条链路是理解后端的核心。
+
+### 4.1 入口一：手动触发
+
+前端调用：
+
+- `POST /api/v1/monitors/{monitor_id}/run`
+
+后端在 `api/v1/monitors.py` 里做两步：
+
+1. `prepare_monitor_run()` 创建 monitor 级 task，生成 `run_id`
+2. 使用 `BackgroundTasks` 异步调用 `execute_monitor_pipeline()`
+
+这里的设计意图是：
+
+- API 快速返回，不阻塞 HTTP 请求
+- 真实执行在后台异步进行
+- 前端通过 runs / events 接口轮询状态
+
+### 4.2 入口二：定时触发
+
+`scheduler/scheduler.py` 把每个启用的 monitor 注册成一个 APScheduler job：
+
+- job id 形式为 `monitor:<uuid>`
+- 启动时统一 `sync_all_monitor_schedules()`
+- create / update / delete / enable toggle 后立即 reconcile
+
+定时 job 执行时，会重新从 DB 读取最新 monitor，再调用：
+
+- `run_monitor_once(..., trigger_type="scheduled")`
+
+这保证了调度执行不会依赖过期内存状态。
+
+### 4.3 monitor_runner 做了什么
+
+`monitor_runner.py` 是 monitor 级控制器：
+
+- `prepare_monitor_run()`
+  - 清理过期 task events
+  - 更新 monitor 的 `last_run`
+  - 创建一条 source_id 为空的 monitor-level `CollectTask`
+  - 写入 `run_started` 事件
+- `execute_monitor_pipeline()`
+  - 解析 `source_ids`
+  - 解析 destination 列表，默认确保 `database` 总在目标中
+  - 计算 `window_hours`
+  - 根据 `time_period` 设置默认 `max_items`
+  - 过滤 `source_overrides`
+  - 实例化 `Orchestrator`
+  - 调用 `run_daily_pipeline()`
+  - 根据结果把 monitor-level task 置为 `success` / `partial_success` / `cancelled` / `failed`
+
+注意：
+
+- “daily pipeline” 这个名字已经不只服务 daily report，它实际上是 monitor 主执行入口。
+- `run_id` 是同一轮 monitor 执行的聚合键，一次 run 下会生成一条 monitor task 和多条 source task。
+
+## 5. Orchestrator 如何驱动整条流水线
+
+`scheduler/orchestrator.py` 是系统最复杂、最值得反复阅读的文件。
+
+可以把它拆成 7 个阶段：
+
+### 5.1 加载运行上下文
+
+- 加载订阅的信息源
+- 计算本次时间窗口
+- 读取用户 destination 配置
+- 解析 monitor 级 AI routing
+- 合并用户 provider 配置和 monitor provider override
+
+这里决定了本次 run 到底使用哪个 provider、哪个模型、发布到哪些目标。
+
+### 5.2 为每个 source 创建任务行
+
+对每个 source 先创建一条 `CollectTask`，状态设为 `pending`，这样前端一开始就能看到完整 source 列表，而不是等采集完才出现。
+
+### 5.3 并发采集
+
+`collect_source()` 的行为是：
+
+- 受 `Semaphore` 控制并发度
+- 按 `fallback_chain` 尝试 collector
+- 每次尝试都记录 trace
+- 成功即返回，失败则继续 fallback
+
+采集层的关键抽象是：
+
+- 输入：`source.collect_method + source.config`
+- 输出：`list[RawArticle]`
+
+`RawArticle` 非常轻，只包含：
+
+- `external_id`
+- `title`
+- `url`
+- `content`
+- `published_at`
+- `metadata`
+
+所以 collector 的任务是“归一化原始信息”，而不是生成领域对象。
+
+### 5.4 时间窗口与加工
+
+采集完成后，orchestrator 会继续：
+
+- 给 raw article 补充 `source_id` / `source_name` / `source_category`
+- 执行窗口过滤
+- 调用 `_process_source_articles()`
+
+`_process_source_articles()` 内部会新建 `ProcessingPipeline`，然后按 routing profile 依次执行：
+
+1. `filter`
+2. `candidate_cluster`
+3. `keywords`
+
+如果是空输入，pipeline 会生成“skipped” trace，避免前端日志缺口。
+
+### 5.5 文章持久化与论文映射
+
+加工后，orchestrator 会把结果落到 `articles` 表，并在 academic source 下调用：
+
+- `papers/service.py::sync_article_paper_link()`
+
+这一步会：
+
+- 从 article metadata 推断 DOI / arXiv / PMID 等标识
+- 做标题规范化和弱去重
+- 把 source-scoped article 关联到 canonical `Paper`
+- 补充 `PaperIdentifier`
+
+因此项目的数据模型不是“所有东西都以 article 为中心”，而是：
+
+- 日常资讯链路以 `Article` 为主
+- 学术链路在 `Article` 之上额外叠一层 canonical `Paper`
+
+### 5.6 报告生成
+
+按 report type 不同，后续路径不同：
+
+- `daily` / `weekly` / `research`
+  - 走 renderer + template 路线
+- `paper`
+  - 走 `papers/reporting.py` 的 digest / note 组装逻辑
+
+论文模式是当前后端里最明显的“专用子系统”：
+
+- `build_paper_digest_report()` 生成论文综述列表
+- `build_paper_note_report()` 为重点论文生成详细笔记
+
+所以如果你在开发 paper report，不要只盯着 `renderers/paper.py`，更要看 `papers/reporting.py`、`papers/*` 和相关 processor stage。
+
+### 5.7 发布与收尾
+
+报告生成后，orchestrator 会：
+
+- 写入 `reports` 表
+- 按 destination 解析对应 sink
+- 构造 sink config
+- 调用 `get_sink(...).publish(...)`
+- 记录 `publish_trace`
+- 写回 `published_to` 与 `published_destination_instance_ids`
+
+发布失败不会简单丢日志，而是进入 run trace，供前端展示。
+
+## 6. ProcessingPipeline 的职责边界
+
+`processors/pipeline.py` 是“采集后、渲染前”的标准加工层。
+
+它目前最重要的接口是：
+
+- `process(articles: list[RawArticle]) -> list[ProcessedArticle]`
+
+标准执行顺序是：
+
+1. `run_filter_stage()`
+2. `run_candidate_cluster_stage()`
+3. `run_keywords_stage()`
+
+输出的 `ProcessedArticle` 比 `RawArticle` 多了很多面向报告生成的字段：
+
+- `summary`
+- `keywords`
+- `importance`
+- `detail`
+- `category`
+- `event_title`
+- `who / what / when`
+- `metrics`
+- `availability`
+- `unknowns`
+- `evidence`
+
+这里要注意两个设计点：
+
+- pipeline 不是纯规则引擎，它依赖 provider routing，可切换 rule / llm_openai / llm_codex
+- stage trace 是一等公民，每个阶段都会记录 provider、输入输出条数、模型等元信息
+
+这也是为什么前端运行日志能展示比较细的阶段轨迹。
+
+## 7. 插件化设计：Collector / Provider / Sink / Renderer
+
+项目后端大量使用“基类 + registry”模式，这是一条很重要的扩展规则。
+
+### 7.1 Collector
+
+- 基类：`collectors/base.py::BaseCollector`
+- 注册：`collectors/registry.py::register`
+- 获取：`get_collector(name)`
+
+新 collector 必须：
+
+- 继承 `BaseCollector`
+- 实现 `name` / `category` / `collect`
+- 使用 `@register("xxx")`
+
+### 7.2 Provider
+
+- 基类：`providers/base.py::BaseStageProvider`
+- 注册：`providers/registry.py::register(stage, name)`
+- 获取：`get_provider(stage, name)`
+
+Provider 是“某个 stage 的执行器”，例如：
+
+- `filter: rule`
+- `filter: llm_openai`
+- `keywords: llm_codex`
+
+### 7.3 Sink
+
+- 基类：`sinks/base.py::BaseSink`
+- 注册：`sinks/registry.py`
+- 获取：`get_sink(name)`
+
+Sink 只关心一件事：把已经生成好的 `Report` 投递出去。
+
+### 7.4 Renderer
+
+- 基类：`renderers/base.py::BaseRenderer`
+- 输入：`ProcessedArticle` 或 `ProcessedEvent`
+- 输出：`renderers.base.Report`
+
+Renderer 不直接访问数据库，也不做采集。它只负责“把结构化结果转成可发布文本”。
+
+## 8. Routing Profile 与 AI 配置是如何生效的
+
+项目的 AI 行为不是硬编码在 pipeline 里的，而是由两层配置叠加：
+
+1. 全局 routing profile
+2. monitor 级 AI routing override
+
+### 8.1 全局 profile
+
+`routing/loader.py` 会从配置中加载 profile，例如：
+
+- collect 用哪个默认 collector/fallback
+- filter 默认是 `rule` 还是 `llm_openai`
+- report 默认走哪个 provider
+
+### 8.2 monitor 级 override
+
+`Monitor.ai_routing` 存储每个 stage 的 provider 选择，以及 provider 自身参数，例如：
+
+- `model`
+- `timeout_sec`
+- `max_retry`
+
+Orchestrator 在运行时把：
+
+- 用户 settings 中的 provider 配置
+- monitor 指定的 provider override
+
+合并成 `runtime_provider_overrides`，再注入 pipeline。
+
+这意味着你在改 AI 行为时，要区分 3 层：
+
+- provider 能力实现
+- routing 默认值
+- monitor 运行时 override
+
+## 9. 数据库模型应该如何理解
+
+理解表结构时，不建议按文件顺序看，建议按“生命周期”看。
+
+### 9.1 配置对象
+
+- `Source`: 信息源定义，决定用什么 collector 和 config
+- `Monitor`: 任务配置，绑定 source、destination、schedule、AI routing
+- `DestinationInstance`: 用户的目标实例，如某个具体 Notion 库或 Obsidian vault
+- `User`: 当前主要承载默认配置和 destination/provider settings
+
+### 9.2 运行对象
+
+- `CollectTask`: 一次 monitor run 或 source collect 的任务记录
+- `TaskEvent`: 更细粒度的事件流日志
+
+这两者一起提供“运行可观测性”。
+
+### 9.3 内容对象
+
+- `Article`: 某个 source 发现的一条内容，source-scoped
+- `Report`: 一次渲染产出的报告
+
+### 9.4 学术对象
+
+- `Paper`: 全局去重后的 canonical paper
+- `PaperIdentifier`: DOI / arXiv / PMID 等外部标识
+- `PaperAsset`: PDF / XML / HTML 等原始资产
+- `PaperContent`: 转换后的结构化正文
+
+这套学术模型的设计思想，在 `docs/plans/2026-03-19-academic-paper-data-model-design.md` 里写得比较清楚：保留 `Article` 作为 source discovery 记录，再叠加 `Paper` 层做跨源去重和全文处理。
+
+## 10. 前端结构与后端的耦合点
+
+前端主要在 `frontend/src/`，可以按下面理解：
+
+- `app/`: Next.js App Router 页面
+- `components/`: 页面级和通用组件
+- `lib/api.ts`: 所有后端 API 调用和 TS 类型定义
+- `lib/*`: 内容解析、paper metadata 等前端纯逻辑工具
+
+当前页面主要对应：
+
+- `/`: 报告首页
+- `/monitors`: 监控任务管理
+- `/library`: 报告归档
+- `/sources`: 信息源管理
+- `/providers`: 模型配置
+- `/destinations`: 输出配置
+
+最重要的约束是：
+
+- `frontend/src/lib/api.ts` 是前端唯一的 API 调用入口
+
+所以后端接口改动时，至少同步检查两处：
+
+1. `backend/app/schemas/*.py`
+2. `frontend/src/lib/api.ts`
+
+尤其是以下资源：
+
+- `Monitor`
+- `Source`
+- `Report`
+- `Destination`
+- `Provider`
+
+前端大量页面直接依赖这些 TS interface，一旦后端响应 shape 变更，页面和测试都可能跟着坏。
+
+## 11. docs/plans 在这个仓库里的作用
+
+`docs/plans/` 不是可有可无的归档，而是理解当前代码演进的重要入口。
+
+它通常成对出现：
+
+- `*-design.md`: 设计意图、范围、约束
+- `*-implementation.md`: 实际实现计划或落地记录
+
+如果你在看某块代码但不知道“为什么要这么做”，先搜对应计划文件通常比直接猜实现意图更快。例如：
+
+- monitor 调度为什么改成 per-job：看 `2026-03-19-monitor-per-job-scheduling-design.md`
+- 学术 canonical paper 层为什么存在：看 `2026-03-19-academic-paper-data-model-design.md`
+
+## 12. 开发时最值得先建立的心智模型
+
+### 12.1 这是配置驱动系统，不是单次脚本
+
+很多逻辑不是通过函数参数硬编码，而是来自：
+
+- source config
+- monitor config
+- routing profile
+- user settings
+- destination instance config
+
+所以排查问题时，先看“配置是怎么被解析和合并的”，再看业务函数本身。
+
+### 12.2 Orchestrator 是流程核心，Model 是状态载体
+
+后端不是 DDD 风格的复杂领域对象系统。大部分业务编排集中在 orchestrator / runner / processor，model 主要承担持久化和状态载体职责。
+
+### 12.3 Article 与 Paper 是两层实体，不要混用
+
+- `Article` 表示“某来源发现了一条内容”
+- `Paper` 表示“系统确认这是一篇全局 canonical 学术论文”
+
+如果把两者混成一个概念，学术链路的很多行为会看不懂。
+
+### 12.4 前端主要是资源管理台
+
+前端不是很重的 BFF 或 SSR 业务层，它更多是一个直接消费后端 REST API 的管理台。大多数业务决策仍在后端。
+
+## 13. 建议的源码阅读顺序
+
+如果你要继续做后端开发，建议按下面顺序深读源码：
+
+1. `backend/app/main.py`
+2. `backend/app/bootstrap.py`
+3. `backend/app/api/v1/monitors.py`
+4. `backend/app/scheduler/monitor_runner.py`
+5. `backend/app/scheduler/orchestrator.py`
+6. `backend/app/processors/pipeline.py`
+7. `backend/app/providers/`
+8. `backend/app/models/`
+9. `backend/app/papers/`
+10. `backend/app/sinks/` 和 `backend/app/renderers/`
+
+如果你要继续做前端联调，建议补读：
+
+1. `frontend/src/lib/api.ts`
+2. `frontend/src/app/monitors/page.tsx`
+3. `frontend/src/app/reports/[id]/page.tsx`
+4. `frontend/src/app/destinations/page.tsx`
+
+## 14. 常见修改场景与落点
+
+### 14.1 新增一种信息源采集方式
+
+主要会改：
+
+- `backend/app/collectors/*.py`
+- `backend/app/collectors/registry.py`
+- `backend/app/collectors/source_presets.yaml` 或 source config
+
+### 14.2 调整某个 AI stage 的模型行为
+
+主要会改：
+
+- `backend/app/providers/<stage>.py`
+- `backend/app/prompts/`
+- `backend/app/routing/loader.py` 或 monitor `ai_routing`
+
+### 14.3 新增一种报告输出目标
+
+主要会改：
+
+- `backend/app/sinks/*.py`
+- `backend/app/destinations/`
+- `backend/app/api/v1/destinations.py`
+- `frontend/src/app/destinations/*`
+- `frontend/src/lib/api.ts`
+
+### 14.4 调整论文报告链路
+
+主要会改：
+
+- `backend/app/papers/*`
+- `backend/app/processors/paper_*`
+- `backend/app/models/paper.py`
+- `backend/app/templates/reports/paper/*`
+- `frontend/src/lib/paper-metadata.ts`
+
+## 15. 总结
+
+Insight Flow 的后端可以概括成一句话：
+
+一个以 monitor 为调度单位、以 source 为采集单位、以 provider routing 为 AI 执行策略、以 report/sink 为输出终点的异步内容处理系统。
+
+真正需要你反复读的不是某个 model，而是下面这条主线：
+
+`main.py -> monitors API / scheduler -> monitor_runner -> orchestrator -> processing pipeline -> report rendering -> sink publish`
+
+只要这条主线建立起来，再去看单个 collector、单个 provider、单个 report type，就不会迷路。

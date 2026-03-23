@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import UTC, datetime
+from html import unescape
+from urllib.parse import urljoin
 
 import httpx
 
 from app.collectors.base import BaseCollector, RawArticle
 from app.collectors.registry import register
+from app.config import settings
+from app.papers.figures import extract_first_figure_candidate, select_primary_figure_url
+from app.papers.pdf_figures import extract_pdf_figure_public_url
 
 
 @register("huggingface")
@@ -39,10 +45,14 @@ class HuggingFaceCollector(BaseCollector):
             "sort": config.get("sort"),
         }
         params = {k: v for k, v in params.items() if v is not None}
-        snapshot_at = datetime.now(timezone.utc)
+        snapshot_at = datetime.now(UTC)
         snapshot_date = snapshot_at.date().isoformat()
 
-        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True, headers={"User-Agent": user_agent}) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout_seconds,
+            follow_redirects=True,
+            headers={"User-Agent": user_agent},
+        ) as client:
             daily_resp = await client.get("https://huggingface.co/api/daily_papers", params=params)
             daily_resp.raise_for_status()
             daily_json = daily_resp.json() or []
@@ -51,11 +61,18 @@ class HuggingFaceCollector(BaseCollector):
             for paper in list(papers)[:limit]:
                 if not isinstance(paper, dict):
                     continue
+                paper_payload = paper.get("paper") if isinstance(paper.get("paper"), dict) else {}
                 paper_id = _paper_id(paper)
                 if not paper_id:
                     continue
-                title = str(paper.get("title") or paper_id)
-                summary = str(paper.get("summary") or paper.get("abstract") or "")
+                title = str(paper.get("title") or paper_payload.get("title") or paper_id)
+                summary = str(
+                    paper.get("summary")
+                    or paper.get("abstract")
+                    or paper_payload.get("summary")
+                    or paper_payload.get("abstract")
+                    or ""
+                )
                 detail_payload: dict = {}
                 if include_paper_detail:
                     detail_payload = await _safe_json_get(client, f"https://huggingface.co/api/papers/{paper_id}")
@@ -67,6 +84,32 @@ class HuggingFaceCollector(BaseCollector):
                     arxiv_payload = await _safe_json_get(client, f"https://huggingface.co/api/arxiv/{paper_id}/repos")
                     if isinstance(arxiv_payload, dict):
                         arxiv_repos = arxiv_payload
+                organization = (
+                    paper.get("organization")
+                    or paper_payload.get("organization")
+                    or detail_payload.get("organization")
+                )
+                project_url = _project_url(paper, paper_payload, detail_payload)
+                arxiv_html = ""
+                if include_paper_detail:
+                    arxiv_html = await _safe_text_get(client, f"https://arxiv.org/html/{paper_id}")
+                project_teaser_url = ""
+                if project_url:
+                    project_html = await _safe_text_get(client, project_url)
+                    project_teaser_url = _extract_project_teaser(project_html, base_url=project_url)
+                arxiv_figure_url, figure_caption = await select_primary_figure_url(
+                    client,
+                    html=arxiv_html,
+                    base_url=f"https://arxiv.org/html/{paper_id}",
+                    project_teaser_url=project_teaser_url,
+                )
+                if not arxiv_figure_url:
+                    arxiv_figure_url = await extract_pdf_figure_public_url(
+                        client,
+                        pdf_url=f"https://arxiv.org/pdf/{paper_id}.pdf",
+                        paper_key=paper_id,
+                        public_api_base=settings.app_public_api_url,
+                    )
                 metadata = {
                     "collector": "huggingface_daily_papers",
                     "paper_id": paper_id,
@@ -74,7 +117,14 @@ class HuggingFaceCollector(BaseCollector):
                     "snapshot_at": snapshot_at.isoformat(),
                     "snapshot_date": snapshot_date,
                     "source_endpoint": "/api/daily_papers",
-                    "authors": paper.get("authors") or detail_payload.get("authors") or [],
+                    "authors": (
+                        paper.get("authors") or paper_payload.get("authors") or detail_payload.get("authors") or []
+                    ),
+                    "organization": organization,
+                    "project_url": project_url,
+                    "figure_url": arxiv_figure_url,
+                    "figure_caption": figure_caption,
+                    "project_teaser_url": project_teaser_url,
                     "summary_source": "hf_paper_detail" if detail_payload else "daily_papers",
                     "arxiv_repos": arxiv_repos,
                     "fetched_at": snapshot_at.isoformat(),
@@ -106,6 +156,41 @@ def _paper_id(payload: dict) -> str:
     return ""
 
 
+def _project_url(*sources: dict) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("projectPage", "project_page", "projectUrl", "project_url"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _extract_first_figure(html: str, *, base_url: str) -> tuple[str, str]:
+    figure_url, caption = extract_first_figure_candidate(html, base_url=base_url)
+    return figure_url, _clean_html_text(caption) if caption else ""
+
+
+def _extract_project_teaser(html: str, *, base_url: str) -> str:
+    if not html:
+        return ""
+    match = re.search(
+        r'<meta\b[^>]*(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]*content=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return urljoin(base_url, match.group(1).strip())
+
+
+def _clean_html_text(value: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", value or "")
+    text = unescape(re.sub(r"\s+", " ", text)).strip()
+    return text
+
+
 async def _safe_json_get(client: httpx.AsyncClient, url: str) -> dict:
     try:
         response = await client.get(url)
@@ -116,3 +201,12 @@ async def _safe_json_get(client: httpx.AsyncClient, url: str) -> dict:
     except Exception:
         pass
     return {}
+
+
+async def _safe_text_get(client: httpx.AsyncClient, url: str) -> str:
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        return str(response.text or "")
+    except Exception:
+        return ""

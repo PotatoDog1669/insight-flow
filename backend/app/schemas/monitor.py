@@ -11,6 +11,7 @@ from pydantic import field_validator
 
 ProviderName = Literal["rule", "llm_codex", "llm_openai"]
 ReportProviderName = Literal["llm_codex", "llm_openai"]
+MonitorAIProviderName = Literal["llm_codex", "llm_openai"]
 
 
 class MonitorStageRoute(BaseModel):
@@ -25,6 +26,8 @@ class MonitorAIRoutingStages(BaseModel):
     filter: MonitorStageRoute | None = None
     keywords: MonitorStageRoute | None = None
     global_summary: MonitorReportStageRoute | None = None
+    paper_review: MonitorReportStageRoute | None = None
+    paper_note: MonitorReportStageRoute | None = None
     report: MonitorReportStageRoute | None = None
 
 
@@ -53,6 +56,8 @@ class MonitorAIRoutingDefaultsStages(BaseModel):
     filter: ProviderName
     keywords: ProviderName
     global_summary: ReportProviderName
+    paper_review: ReportProviderName
+    paper_note: ReportProviderName
     report: ReportProviderName
 
 
@@ -64,9 +69,10 @@ class MonitorAIRoutingDefaultsResponse(BaseModel):
 class MonitorBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     time_period: Literal["daily", "weekly", "custom"]
-    report_type: Literal["daily", "weekly", "research"] | None = None
+    report_type: Literal["daily", "weekly", "research", "paper"] | None = None
     source_ids: list[uuid.UUID] = Field(default_factory=list)
     source_overrides: dict[str, dict] = Field(default_factory=dict)  # dict can contain max_items, limit, max_results, keywords, usernames, subreddits
+    ai_provider: MonitorAIProviderName | None = None
     ai_routing: MonitorAIRouting = Field(default_factory=MonitorAIRouting)
     destination_ids: list[str] = Field(default_factory=list)
     destination_instance_ids: list[uuid.UUID] = Field(default_factory=list)
@@ -82,9 +88,10 @@ class MonitorCreate(MonitorBase):
 class MonitorUpdate(BaseModel):
     name: str | None = None
     time_period: Literal["daily", "weekly", "custom"] | None = None
-    report_type: Literal["daily", "weekly", "research"] | None = None
+    report_type: Literal["daily", "weekly", "research", "paper"] | None = None
     source_ids: list[uuid.UUID] | None = None
     source_overrides: dict[str, dict] | None = None
+    ai_provider: MonitorAIProviderName | None = None
     ai_routing: MonitorAIRouting | None = None
     destination_ids: list[str] | None = None
     destination_instance_ids: list[uuid.UUID] | None = None

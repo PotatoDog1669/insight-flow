@@ -21,6 +21,8 @@ from app.models.user import User
 logger = structlog.get_logger()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
+DEFAULT_USER_EMAIL = "admin@example.com"
+LEGACY_DEFAULT_USER_EMAIL = "admin@lexmount.com"
 PRESETS_PATH = Path(__file__).resolve().parent / "collectors" / "source_presets.yaml"
 SITE_PROFILE_DIR = Path(__file__).resolve().parent / "collectors" / "site_profiles"
 VALID_SOURCE_CATEGORIES = {"open_source", "blog", "academic", "social"}
@@ -194,10 +196,14 @@ async def seed_initial_data(db: AsyncSession) -> None:
         await db.commit()
 
     user = await db.get(User, DEFAULT_USER_ID)
+    if user is not None and user.email == LEGACY_DEFAULT_USER_EMAIL:
+        user.email = DEFAULT_USER_EMAIL
+        user.updated_at = now
+        db.add(user)
     if user is None:
         user = User(
             id=DEFAULT_USER_ID,
-            email="admin@lexmount.com",
+            email=DEFAULT_USER_EMAIL,
             name="Lex Researcher",
             settings={"default_time_period": "daily", "default_report_type": "daily", "default_sink": "database"},
             created_at=now,

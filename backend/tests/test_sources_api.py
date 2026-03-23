@@ -6,6 +6,8 @@ from app.collectors.base import RawArticle
 from app.api.v1.sources import _to_source_response
 from app.collectors.blog_scraper import _resolve_profile
 from app.models.source import Source
+from app.schemas.monitor import MonitorResponse
+from app.schemas.report import ReportResponse
 
 
 def test_to_source_response_resolves_target_url_from_site_key_profile() -> None:
@@ -228,6 +230,40 @@ def test_test_source_keeps_generic_connectivity_flow_for_non_arxiv_sources(clien
     assert payload["sample_articles"][0]["title"] == "Generic Item"
 
 
+def test_paper_report_type_is_accepted_in_response_shapes() -> None:
+    now = datetime.now(timezone.utc)
+
+    monitor = MonitorResponse(
+        id=uuid.uuid4(),
+        name="Paper Monitor",
+        time_period="daily",
+        report_type="paper",
+        source_ids=[],
+        source_overrides={},
+        destination_ids=[],
+        window_hours=24,
+        enabled=True,
+        status="active",
+        last_run=None,
+        created_at=now,
+        updated_at=now,
+    )
+    report = ReportResponse(
+        id=uuid.uuid4(),
+        user_id=None,
+        monitor_id=None,
+        monitor_name="Paper Monitor",
+        time_period="daily",
+        report_type="paper",
+        title="Paper Digest",
+        report_date=now.date(),
+        created_at=now,
+    )
+
+    assert monitor.report_type == "paper"
+    assert report.report_type == "paper"
+
+
 def test_test_source_builds_reddit_feed_url_from_subreddits(client, monkeypatch) -> None:
     collected_configs: list[dict] = []
 
@@ -276,3 +312,44 @@ def test_test_source_builds_reddit_feed_url_from_subreddits(client, monkeypatch)
     assert parsed.path == "/search.rss"
     assert params["sort"][0] == "new"
     assert params["q"][0] == "subreddit:LocalLLaMA OR subreddit:OpenAI OR subreddit:MachineLearning"
+
+
+def test_test_source_disables_rss_detail_fetch_for_connectivity_checks(client, monkeypatch) -> None:
+    collected_configs: list[dict] = []
+
+    class StubCollector:
+        async def collect(self, config: dict) -> list[RawArticle]:
+            collected_configs.append(dict(config))
+            return [
+                RawArticle(
+                    external_id="item-1",
+                    title="Feed Item",
+                    url="https://example.com/item-1",
+                )
+            ]
+
+    monkeypatch.setattr("app.api.v1.sources.get_collector", lambda _: StubCollector())
+
+    create_resp = client.post(
+        "/api/v1/sources",
+        json={
+            "name": "Qwen",
+            "category": "blog",
+            "collect_method": "rss",
+            "config": {
+                "feed_url": "https://qwenlm.github.io/blog/index.xml",
+                "max_items": 30,
+                "fetch_detail": True,
+                "reader_mode": "prefer",
+                "reader_fallback_enabled": True,
+            },
+            "enabled": True,
+        },
+    )
+    assert create_resp.status_code == 201
+    source_id = create_resp.json()["id"]
+
+    response = client.post(f"/api/v1/sources/{source_id}/test", json={})
+
+    assert response.status_code == 200
+    assert collected_configs[0]["fetch_detail"] is False

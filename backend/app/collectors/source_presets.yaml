@@ -181,11 +181,15 @@ sources:
     group: intl_vendors
     company: Cohere
     urls: ["https://cohere.com/blog"]
-    rss_url: null
-    rss_status: none
-    strategy: site_profile_scraper
+    rss_url: "https://cohere-ai.ghost.io/rss/"
+    rss_status: provided
+    strategy: rss_then_article_fulltext
+    collect_config:
+      reader_mode: prefer
+      reader_fallback_enabled: true
     priority: p0
     enabled: true
+    notes: "2026-03-22 验证官方页面背后可用 Ghost RSS，优先使用 feed 避免首页导航干扰"
 
   - key: ai21_labs
     group: intl_vendors

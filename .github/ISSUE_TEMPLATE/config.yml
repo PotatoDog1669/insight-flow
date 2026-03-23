@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Project documentation
+    url: https://insight-flow.potatodog.cc/zh/introduction
+    about: Read the product, architecture, and quickstart docs before filing an issue.
+  - name: Contribution guide
+    url: https://insight-flow.potatodog.cc/zh/development/contributing
+    about: Review development workflow and validation expectations for contributors.
+  - name: Security policy
+    url: https://github.com/PotatoDog1669/insight-flow/security/policy
+    about: Report vulnerabilities through the private security process instead of public issues.

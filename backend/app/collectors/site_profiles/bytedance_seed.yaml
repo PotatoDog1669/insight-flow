@@ -1,18 +1,12 @@
 site_key: bytedance_seed
 profile_version: v1
 start_urls:
-- https://seed.bytedance.com/zh/blog
+  - https://seed.bytedance.com/zh/research
 list_page:
-  item_selector: a[href*='/blog/'], a[href*='/news/'], a[href*='/research/'], a[href*='/posts/'],
-    a[href*='/article/'], a[href]
-  url_selector: ''
+  item_selector: a[href*='/zh/blog/']
   url_attr: href
-  title_selector: ''
-  published_selector: time
-  published_attr: datetime
 detail_page:
-  content_selector: article, main, [role='main'], .post-content, .article-content,
-    .content
+  content_selector: main
   remove_selectors:
   - script
   - style
@@ -21,8 +15,7 @@ detail_page:
   - header
   - .share
   - .social
-  published_selector: time
-  published_attr: datetime
+  title_selector: h1
 normalization:
   url_prefix: https://seed.bytedance.com
   min_content_chars: 300

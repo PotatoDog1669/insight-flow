@@ -13,7 +13,7 @@ import { ReportCover } from "./ReportCover";
 export interface Report {
     id: string;
     time_period: "daily" | "weekly" | "custom";
-    report_type: "daily" | "weekly" | "research";
+    report_type: "daily" | "weekly" | "research" | "paper";
     title: string;
     report_date: string;
     tldr: string[];
@@ -28,16 +28,19 @@ interface ReportCardProps {
     index: number;
     onDelete?: (reportId: string) => void;
     deleting?: boolean;
+    entrySource?: "home" | "library";
 }
 
 const reportTypeConfig = {
-    daily: { label: "Daily", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
-    weekly: { label: "Weekly", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
-    research: { label: "Research", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+    daily: { label: "日报", color: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
+    weekly: { label: "周报", color: "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
+    research: { label: "研究", color: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+    paper: { label: "论文", color: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
 };
 
-export function ReportCard({ report, index, onDelete, deleting = false }: ReportCardProps) {
+export function ReportCard({ report, index, onDelete, deleting = false, entrySource }: ReportCardProps) {
     const rConfig = reportTypeConfig[report.report_type];
+    const detailHref = entrySource ? `/reports/${report.id}?from=${entrySource}` : `/reports/${report.id}`;
 
     return (
         <motion.div
@@ -62,10 +65,10 @@ export function ReportCard({ report, index, onDelete, deleting = false }: Report
                     <Trash2 className="w-3.5 h-3.5" />
                 </button>
             ) : null}
-            <Link href={`/reports/${report.id}`} className="block h-full">
-                <Card className="group h-full flex flex-col md:flex-row relative overflow-hidden border-border/40 hover:border-border/80 hover:shadow-lg transition-all duration-300 transform-gpu hover:-translate-y-1">
-                    <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
-                    <div className="absolute top-0 left-0 w-full md:w-[2px] md:h-full h-[2px] bg-gradient-to-r md:bg-gradient-to-b from-blue-500/0 via-blue-500/40 to-blue-500/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+            <Link href={detailHref} className="block h-full">
+                <Card className="group h-full flex flex-col md:flex-row relative overflow-hidden border-border/50 hover:border-foreground/20 hover:shadow-2xl hover:shadow-blue-500/5 transition-all duration-500 transform-gpu hover:-translate-y-1.5 bg-card/60 backdrop-blur-md">
+                    <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-background/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+                    <div className="absolute top-0 left-0 w-full md:w-[2px] md:h-full h-[2px] bg-gradient-to-r md:bg-gradient-to-b from-blue-500/0 via-blue-500/60 to-blue-500/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
                     {/* Report cover */}
                     <div className="md:w-[32%] lg:w-[28%] shrink-0 flex flex-col items-stretch">
@@ -79,7 +82,7 @@ export function ReportCard({ report, index, onDelete, deleting = false }: Report
                             <div className="flex items-center justify-between">
                                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                                     <Badge variant="secondary" className={`${rConfig.color} border-none font-medium px-2 py-0.5 capitalize`}>
-                                        {report.report_type}
+                                        {rConfig.label}
                                     </Badge>
                                     <span className="flex items-center space-x-1 ml-2">
                                         <Calendar className="w-3.5 h-3.5" />

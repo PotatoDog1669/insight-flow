@@ -7,6 +7,8 @@ def test_runtime_routing_profile_applies_monitor_stage_overrides() -> None:
     orchestrator = Orchestrator(max_concurrency=1)
     base_filter = orchestrator.routing_profile.stages.filter.primary
     base_keywords = orchestrator.routing_profile.stages.keywords.primary
+    base_paper_review = orchestrator.routing_profile.stages.paper_review.primary if orchestrator.routing_profile.stages.paper_review else ""
+    base_paper_note = orchestrator.routing_profile.stages.paper_note.primary if orchestrator.routing_profile.stages.paper_note else ""
     overridden_filter = "rule" if base_filter != "rule" else "llm_openai"
 
     runtime_profile = orchestrator._build_runtime_routing_profile(
@@ -23,6 +25,10 @@ def test_runtime_routing_profile_applies_monitor_stage_overrides() -> None:
     assert runtime_profile.stages.report.primary == "llm_openai"
     assert runtime_profile.stages.global_summary is not None
     assert runtime_profile.stages.global_summary.primary == "llm_openai"
+    assert runtime_profile.stages.paper_review is not None
+    assert runtime_profile.stages.paper_review.primary == base_paper_review
+    assert runtime_profile.stages.paper_note is not None
+    assert runtime_profile.stages.paper_note.primary == base_paper_note
     assert runtime_profile.stages.keywords.primary == base_keywords
     assert base_filter != runtime_profile.stages.filter.primary
 
@@ -46,3 +52,41 @@ def test_provider_config_precedence_is_monitor_then_user_then_global() -> None:
 
     assert config["model"] == "monitor-model"
     assert config["timeout_sec"] == 55
+
+
+def test_runtime_routing_profile_applies_paper_stage_overrides_when_present() -> None:
+    orchestrator = Orchestrator(max_concurrency=1)
+
+    runtime_profile = orchestrator._build_runtime_routing_profile(
+        monitor_ai_routing={
+            "stages": {
+                "paper_review": {"primary": "llm_codex"},
+                "paper_note": {"primary": "llm_codex"},
+            }
+        }
+    )
+
+    assert runtime_profile.stages.paper_review is not None
+    assert runtime_profile.stages.paper_review.primary == "llm_codex"
+    assert runtime_profile.stages.paper_note is not None
+    assert runtime_profile.stages.paper_note.primary == "llm_codex"
+
+
+def test_runtime_routing_profile_backfills_legacy_paper_stage_overrides() -> None:
+    orchestrator = Orchestrator(max_concurrency=1)
+
+    runtime_profile = orchestrator._build_runtime_routing_profile(
+        monitor_ai_routing={
+            "stages": {
+                "filter": {"primary": "llm_codex"},
+                "keywords": {"primary": "llm_codex"},
+                "global_summary": {"primary": "llm_codex"},
+                "report": {"primary": "llm_codex"},
+            }
+        }
+    )
+
+    assert runtime_profile.stages.paper_review is not None
+    assert runtime_profile.stages.paper_review.primary == "llm_codex"
+    assert runtime_profile.stages.paper_note is not None
+    assert runtime_profile.stages.paper_note.primary == "llm_codex"

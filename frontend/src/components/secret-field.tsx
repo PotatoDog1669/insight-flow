@@ -14,6 +14,8 @@ type SecretFieldProps = {
   onBlur?: () => void;
   className?: string;
   inputClassName?: string;
+  readOnly?: boolean;
+  disabled?: boolean;
 };
 
 export function SecretField({
@@ -25,6 +27,8 @@ export function SecretField({
   onBlur,
   className,
   inputClassName,
+  readOnly,
+  disabled,
 }: SecretFieldProps) {
   const [visible, setVisible] = useState(false);
 
@@ -38,6 +42,8 @@ export function SecretField({
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
         placeholder={placeholder}
+        readOnly={readOnly}
+        disabled={disabled}
         className={cn(
           "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 pr-11 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           inputClassName,
@@ -48,6 +54,7 @@ export function SecretField({
         aria-label={visible ? `隐藏 ${label}` : `显示 ${label}`}
         title={visible ? `隐藏 ${label}` : `显示 ${label}`}
         onClick={() => setVisible((current) => !current)}
+        disabled={disabled}
         className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
       >
         {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

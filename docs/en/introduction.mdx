@@ -3,7 +3,11 @@ title: "Insight Flow Introduction"
 description: "A workspace for continuous research monitoring, processing, and publishing"
 ---
 
-Insight Flow is a workspace for research monitoring. It continuously collects from sources, generates daily, weekly, or research reports, and syncs the results to the destinations you configure.
+Insight Flow is a workspace for research monitoring, continuous intelligence collection, and knowledge capture.
+
+You can either configure monitors manually or start by telling the Agent what topics, people, or directions you want to track, then let it produce an editable monitor draft. From there, the system uses your configured sources, models, and destinations to continuously collect, filter, summarize, generate reports, and publish results.
+
+The current product already covers a full end-to-end workflow: on the source side it supports RSS, site scraping, GitHub Trending, Hugging Face, and community or academic sources such as OpenAlex, PubMed, Europe PMC, Reddit, and X; on the execution side it runs scheduled monitors and generates daily briefs, weekly digests, research reports, and paper recommendations; on the model side it supports OpenAI-compatible LLM endpoints as well as Codex, with AI routing for different processing stages; and on the output side it can publish to Notion, Obsidian, or RSS while keeping run history, report archives, and manual republish support.
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/en/quickstart">
@@ -13,7 +17,7 @@ Insight Flow is a workspace for research monitoring. It continuously collects fr
     Manage RSS, site scraping, GitHub Trending, Hugging Face, and more.
   </Card>
   <Card title="Monitors" icon="radar" href="/en/features/monitors">
-    Create daily, weekly, and research monitors and run them on demand.
+    Create monitors manually or with Agent-assisted drafts, then run them on demand.
   </Card>
   <Card title="API Reference" icon="code" href="/en/api-reference/introduction">
     Explore resource groups under `/api/v1/`.
@@ -22,11 +26,11 @@ Insight Flow is a workspace for research monitoring. It continuously collects fr
 
 ## Core Capabilities
 
-- Multi-source collection across RSS, site scraping, GitHub Trending, and Hugging Face
-- AI processing pipeline with `filter`, `keywords`, `global_summary`, and `report`
-- Per-stage routing with `rule`, `llm_openai`, and `llm_codex`
-- Multiple output targets including Notion, Obsidian, and RSS
-- Run observability through monitor runs, events, logs, archives, and feed output
+- Multi-source collection across RSS, site scraping, GitHub Trending, Hugging Face, OpenAlex, PubMed, Europe PMC, Reddit, and X
+- Manual monitor setup plus Agent-assisted monitor draft generation
+- Report generation for daily briefs, weekly digests, research reports, and paper recommendations
+- Per-stage AI routing with OpenAI-compatible LLM endpoints and `llm_codex`
+- Output targets including Notion, Obsidian, and RSS, with runs, archives, and manual republish support
 
 ## Typical Flow
 
@@ -41,7 +45,7 @@ Insight Flow is a workspace for research monitoring. It continuously collects fr
     Create or sync sources and confirm categories, strategy, and test results.
   </Step>
   <Step title="Create a Monitor">
-    Choose sources, report type, AI routing, and destinations.
+    Choose sources, report type, AI routing, and destinations, or start from an Agent-generated draft.
   </Step>
   <Step title="Review Results">
     Run the monitor and inspect reports, runs, logs, and feed output.

@@ -123,6 +123,9 @@ async def _run_ai_filter(articles: list, runner: JsonRunner, config: dict | None
             {
                 "index": idx,
                 "source_name": str(metadata.get("source_name") or "")[:80],
+                "source_category": str(metadata.get("source_category") or "")[:32],
+                "author_username": str(metadata.get("author_username") or metadata.get("query_username") or "")[:80],
+                "author_name": str(metadata.get("author_name") or "")[:80],
                 "title": title[:200],
                 "published_at": published_text[:40],
                 "description": str(metadata.get("description") or "")[:240],

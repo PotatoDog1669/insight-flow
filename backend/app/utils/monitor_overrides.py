@@ -5,6 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+ARXIV_INTENT_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "webagent": ("web agents", "web navigation", "browser agent", "gui agent", "computer use"),
+    "web agent": ("webagent", "web agents", "web navigation", "browser agent", "gui agent", "computer use"),
+    "web agents": ("webagent", "web agent", "web navigation", "browser agent", "gui agent", "computer use"),
+    "browser agent": ("webagent", "web agent", "web navigation", "gui agent", "computer use"),
+    "browser agents": ("webagent", "web agent", "web navigation", "gui agent", "computer use"),
+    "gui agent": ("webagent", "web agent", "web navigation", "browser agent", "computer use"),
+    "computer use": ("webagent", "web agent", "web navigation", "browser agent", "gui agent"),
+}
+
+
 @dataclass(slots=True)
 class SourceOverridesMigrationResult:
     migrated: dict
@@ -68,3 +79,30 @@ def _parse_positive_int(value: object) -> int | None:
     if isinstance(value, int) and 1 <= value <= 200:
         return value
     return None
+
+
+def expand_arxiv_intent_keywords(keywords: list[str], *, max_terms: int = 12) -> list[str]:
+    expanded: list[str] = []
+    seen: set[str] = set()
+
+    for raw_keyword in keywords:
+        keyword = str(raw_keyword).strip()
+        if not keyword:
+            continue
+        _append_keyword(expanded, seen, keyword)
+        for candidate in ARXIV_INTENT_EXPANSIONS.get(keyword.lower(), ()):
+            _append_keyword(expanded, seen, candidate)
+        if len(expanded) >= max_terms:
+            return expanded[:max_terms]
+    return expanded[:max_terms]
+
+
+def _append_keyword(expanded: list[str], seen: set[str], keyword: str) -> None:
+    normalized = keyword.strip()
+    if not normalized:
+        return
+    lookup_key = normalized.casefold()
+    if lookup_key in seen:
+        return
+    seen.add(lookup_key)
+    expanded.append(normalized)

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Source, updateSource, testSource, SourceTestResponse } from "@/lib/api";
 import { X, Globe, Play, Save, CheckCircle2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
 
 interface SourceDetailModalProps {
     source: Source;
@@ -218,7 +219,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
             startDate: testStartDate,
             endDate: testEndDate,
         }) : null;
-        if (isAcademicTestSource && !testPayload.success) {
+        if (isAcademicTestSource && testPayload && !testPayload.success) {
             setTestValidationError(testPayload.message);
             return;
         }
@@ -228,7 +229,8 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
         setTestValidationError(null);
         try {
             // URL edits still require save first, but arXiv test params are request-local only.
-            const res = await testSource(source.id, testPayload?.payload);
+            const payloadData = testPayload && 'payload' in testPayload ? testPayload.payload : undefined;
+            const res = await testSource(source.id, payloadData);
             setTestResult(res);
         } catch (err) {
             setTestResult({
@@ -242,10 +244,22 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={onClose} />
-            <div className="relative bg-card border border-border rounded-xl shadow-lg w-full max-w-2xl max-h-[90vh] overflow-hidden z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200">
-                <div className="bg-card/95 backdrop-blur-sm border-b border-border/40 px-6 py-4 flex items-center justify-between shrink-0">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-hidden">
+            <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-background/80 backdrop-blur-md" 
+                onClick={onClose} 
+            />
+            <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                className="relative bg-card/95 backdrop-blur-2xl border border-white/10 dark:border-white/5 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] z-50 flex flex-col overflow-hidden"
+            >
+                <div className="bg-card/50 px-6 py-4 flex items-center justify-between border-b border-border/30 shrink-0">
                     <div>
                         <h2 className="text-xl font-semibold tracking-tight">{source.name}</h2>
                         <p className="text-xs text-muted-foreground capitalize mt-0.5">{source.category.replace('_', ' ')} • {source.collect_method}</p>
@@ -601,7 +615,7 @@ export function SourceDetailModal({ source, onClose, onUpdated }: SourceDetailMo
                         )}
                     </div>
                 </div>
-            </div>
+            </motion.div>
         </div>
     );
 }

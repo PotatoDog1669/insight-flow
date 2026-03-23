@@ -1,7 +1,9 @@
 """监控任务（Monitors）API"""
 
+import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
@@ -9,14 +11,17 @@ from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.reddit_config import normalize_reddit_subreddits
 from app.config import settings
+from app.agents.monitor_agent.service import MonitorAgentService
 from app.models.database import async_session, get_db
 from app.models.monitor import Monitor
+from app.models.source import Source
 from app.models.task import CollectTask
 from app.models.task_event import TaskEvent
 from app.routing.loader import load_routing_profile
@@ -33,6 +38,12 @@ from app.schemas.monitor import MonitorRunRequest
 from app.schemas.monitor import MonitorResponse
 from app.schemas.monitor import MonitorRunResponse
 from app.schemas.monitor import MonitorUpdate
+from app.schemas.monitor_agent import MonitorAgentClarifyResponse
+from app.schemas.monitor_agent import MonitorAgentDraftResponse
+from app.schemas.monitor_agent import MonitorAgentRequest
+from app.utils.monitor_ai_routing import backfill_monitor_ai_routing
+from app.utils.monitor_ai_routing import infer_monitor_ai_provider
+from app.utils.monitor_overrides import expand_arxiv_intent_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +80,8 @@ async def list_monitors(db: AsyncSession = Depends(get_db)):
     """获取当前用户监控任务列表（P0）"""
     result = await db.execute(select(Monitor).where(Monitor.user_id == DEFAULT_USER_ID).order_by(Monitor.created_at.desc()))
     monitors = result.scalars().all()
-    return [_to_monitor_response(monitor) for monitor in monitors]
+    source_lookup = await _load_source_lookup(db, [source_id for monitor in monitors for source_id in (monitor.source_ids or [])])
+    return [_to_monitor_response(monitor, source_lookup=source_lookup) for monitor in monitors]
 
 
 @router.post("", response_model=MonitorResponse, status_code=status.HTTP_201_CREATED)
@@ -77,6 +89,7 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
     """创建监控任务（P0）"""
     now = datetime.now(timezone.utc)
     normalized_source_ids = [str(item) for item in payload.source_ids]
+    source_lookup = await _load_source_lookup(db, normalized_source_ids)
     monitor = Monitor(
         id=uuid.uuid4(),
         user_id=DEFAULT_USER_ID,
@@ -88,10 +101,10 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
         ),
         source_ids=normalized_source_ids,
         source_overrides=_filter_source_overrides_by_source_ids(
-            _normalize_source_overrides(payload.source_overrides),
+            _normalize_source_overrides(payload.source_overrides, source_lookup=source_lookup),
             normalized_source_ids,
         ),
-        ai_routing=_normalize_ai_routing(payload.ai_routing),
+        ai_routing=_normalize_monitor_ai_routing(ai_provider=payload.ai_provider, ai_routing=payload.ai_routing),
         destination_ids=payload.destination_ids or [],
         destination_instance_ids=[str(item) for item in (payload.destination_instance_ids or [])],
         window_hours=payload.window_hours,
@@ -105,7 +118,35 @@ async def create_monitor(payload: MonitorCreate, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(monitor)
     await upsert_monitor_schedule(monitor.id)
-    return _to_monitor_response(monitor)
+    return _to_monitor_response(monitor, source_lookup=source_lookup)
+
+
+@router.post(
+    "/agent",
+    response_model=MonitorAgentClarifyResponse | MonitorAgentDraftResponse,
+)
+async def create_monitor_from_agent(
+    payload: MonitorAgentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """会话式 monitor 草案生成入口（P0）"""
+    service = MonitorAgentService()
+    return await service.handle_message(request=payload, db=db)
+
+
+@router.post("/agent/stream")
+async def stream_monitor_from_agent(
+    payload: MonitorAgentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """会话式 monitor 草案生成流式入口。"""
+    service = MonitorAgentService()
+
+    async def _event_stream() -> AsyncIterator[bytes]:
+        async for event in service.stream_message_events(request=payload, db=db):
+            yield json.dumps(event.model_dump(mode="json"), ensure_ascii=False).encode("utf-8") + b"\n"
+
+    return StreamingResponse(_event_stream(), media_type="application/x-ndjson")
 
 
 @router.get("/ai-routing/defaults", response_model=MonitorAIRoutingDefaultsResponse)
@@ -128,6 +169,24 @@ async def get_monitor_ai_routing_defaults():
                 candidate=(
                     profile.stages.global_summary.primary
                     if profile.stages.global_summary is not None
+                    else profile.stages.report.primary
+                ),
+                allowed={"llm_openai", "llm_codex"},
+                fallback="llm_openai",
+            ),
+            "paper_review": _resolve_default_stage_provider(
+                candidate=(
+                    profile.stages.paper_review.primary
+                    if profile.stages.paper_review is not None
+                    else profile.stages.report.primary
+                ),
+                allowed={"llm_openai", "llm_codex"},
+                fallback="llm_openai",
+            ),
+            "paper_note": _resolve_default_stage_provider(
+                candidate=(
+                    profile.stages.paper_note.primary
+                    if profile.stages.paper_note is not None
                     else profile.stages.report.primary
                 ),
                 allowed={"llm_openai", "llm_codex"},
@@ -374,18 +433,22 @@ async def update_monitor(monitor_id: str, payload: MonitorUpdate, db: AsyncSessi
         monitor.time_period = payload.time_period
     if payload.source_ids is not None:
         monitor.source_ids = [str(item) for item in payload.source_ids]
+        source_lookup = await _load_source_lookup(db, monitor.source_ids or [])
         monitor.source_overrides = _filter_source_overrides_by_source_ids(
-            _normalize_source_overrides(monitor.source_overrides),
+            _normalize_source_overrides(monitor.source_overrides, source_lookup=source_lookup),
             monitor.source_ids or [],
         )
     if payload.source_overrides is not None:
         active_source_ids = monitor.source_ids or []
+        source_lookup = await _load_source_lookup(db, active_source_ids)
         monitor.source_overrides = _filter_source_overrides_by_source_ids(
-            _normalize_source_overrides(payload.source_overrides),
+            _normalize_source_overrides(payload.source_overrides, source_lookup=source_lookup),
             active_source_ids,
         )
-    if "ai_routing" in payload.model_fields_set:
-        monitor.ai_routing = _normalize_ai_routing(payload.ai_routing)
+    if "ai_provider" in payload.model_fields_set:
+        monitor.ai_routing = _normalize_monitor_ai_routing(ai_provider=payload.ai_provider, ai_routing=None)
+    elif "ai_routing" in payload.model_fields_set:
+        monitor.ai_routing = _normalize_monitor_ai_routing(ai_provider=None, ai_routing=payload.ai_routing)
     if payload.destination_ids is not None:
         monitor.destination_ids = payload.destination_ids
     if payload.destination_instance_ids is not None:
@@ -410,7 +473,8 @@ async def update_monitor(monitor_id: str, payload: MonitorUpdate, db: AsyncSessi
         await upsert_monitor_schedule(monitor.id)
     else:
         await remove_monitor_schedule(monitor.id)
-    return _to_monitor_response(monitor)
+    source_lookup = await _load_source_lookup(db, monitor.source_ids or [])
+    return _to_monitor_response(monitor, source_lookup=source_lookup)
 
 
 @router.delete("/{monitor_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -433,14 +497,29 @@ def _parse_uuid(raw_id: str) -> uuid.UUID:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid UUID") from exc
 
 
-def _to_monitor_response(monitor: Monitor) -> MonitorResponse:
+async def _load_source_lookup(db: AsyncSession, source_ids: list[str]) -> dict[str, Source]:
+    normalized_ids: list[uuid.UUID] = []
+    for raw_source_id in source_ids:
+        try:
+            normalized_ids.append(uuid.UUID(str(raw_source_id)))
+        except ValueError:
+            continue
+    if not normalized_ids:
+        return {}
+    result = await db.execute(select(Source).where(Source.id.in_(normalized_ids)))
+    sources = result.scalars().all()
+    return {str(source.id): source for source in sources}
+
+
+def _to_monitor_response(monitor: Monitor, *, source_lookup: dict[str, Source] | None = None) -> MonitorResponse:
     return MonitorResponse(
         id=monitor.id,
         name=monitor.name,
         time_period=monitor.time_period,  # type: ignore[arg-type]
         report_type=monitor.report_type,  # type: ignore[arg-type]
         source_ids=[uuid.UUID(item) for item in (monitor.source_ids or [])],
-        source_overrides=_normalize_source_overrides(monitor.source_overrides),
+        source_overrides=_normalize_source_overrides(monitor.source_overrides, source_lookup=source_lookup),
+        ai_provider=_resolve_monitor_ai_provider(monitor.ai_routing),
         ai_routing=_safe_ai_routing(monitor.ai_routing),
         destination_ids=[str(item) for item in (monitor.destination_ids or [])],
         destination_instance_ids=[uuid.UUID(item) for item in (monitor.destination_instance_ids or [])],
@@ -453,8 +532,7 @@ def _to_monitor_response(monitor: Monitor) -> MonitorResponse:
         updated_at=monitor.updated_at,
     )
 
-
-def _normalize_source_overrides(payload: dict | None) -> dict[str, dict]:
+def _normalize_source_overrides(payload: dict | None, *, source_lookup: dict[str, Source] | None = None) -> dict[str, dict]:
     if not isinstance(payload, dict):
         return {}
 
@@ -506,6 +584,10 @@ def _normalize_source_overrides(payload: dict | None) -> dict[str, dict]:
         if keywords:
             deduped = list(dict.fromkeys(keywords))
             cleaned["keywords"] = deduped[:20]
+            if _is_arxiv_source(source_lookup, source_id):
+                expanded_keywords = expand_arxiv_intent_keywords(deduped[:20])
+                if expanded_keywords:
+                    cleaned["expanded_keywords"] = expanded_keywords
 
         usernames: list[str] = []
         raw_usernames = raw_config.get("usernames")
@@ -525,6 +607,20 @@ def _normalize_source_overrides(payload: dict | None) -> dict[str, dict]:
         if subreddits:
             cleaned["subreddits"] = subreddits
 
+        raw_expanded_keywords = raw_config.get("expanded_keywords")
+        expanded_keywords: list[str] = []
+        if isinstance(raw_expanded_keywords, str):
+            expanded_keywords = [item.strip() for item in raw_expanded_keywords.split(",") if item.strip()]
+        elif isinstance(raw_expanded_keywords, list):
+            for item in raw_expanded_keywords:
+                if not isinstance(item, str):
+                    continue
+                value = item.strip()
+                if value:
+                    expanded_keywords.append(value)
+        if expanded_keywords and "expanded_keywords" not in cleaned:
+            cleaned["expanded_keywords"] = list(dict.fromkeys(expanded_keywords))[:20]
+
         if cleaned:
             normalized[source_id] = cleaned
     return normalized
@@ -541,20 +637,52 @@ def _normalize_ai_routing(payload: MonitorAIRouting | dict | None) -> dict:
     if payload is None:
         return {}
     if isinstance(payload, MonitorAIRouting):
-        return payload.model_dump(exclude_none=True)
+        return backfill_monitor_ai_routing(payload.model_dump(exclude_none=True))
     if not isinstance(payload, dict):
         return {}
     try:
-        return MonitorAIRouting.model_validate(payload).model_dump(exclude_none=True)
+        normalized = MonitorAIRouting.model_validate(payload).model_dump(exclude_none=True)
+        return backfill_monitor_ai_routing(normalized)
     except ValidationError:
         return {}
+
+
+def _normalize_monitor_ai_routing(*, ai_provider: str | None, ai_routing: MonitorAIRouting | dict | None) -> dict:
+    normalized_provider = str(ai_provider or "").strip()
+    if normalized_provider in {"llm_codex", "llm_openai"}:
+        return {
+            "stages": {
+                "filter": {"primary": normalized_provider},
+                "keywords": {"primary": normalized_provider},
+                "global_summary": {"primary": normalized_provider},
+                "paper_review": {"primary": normalized_provider},
+                "paper_note": {"primary": normalized_provider},
+                "report": {"primary": normalized_provider},
+            },
+            "providers": {},
+        }
+    return backfill_monitor_ai_routing(_normalize_ai_routing(ai_routing))
+
+
+def _resolve_monitor_ai_provider(payload: dict | None) -> str | None:
+    return infer_monitor_ai_provider(backfill_monitor_ai_routing(payload))
+
+
+def _is_arxiv_source(source_lookup: dict[str, Source] | None, source_id: str) -> bool:
+    if not source_lookup:
+        return False
+    source = source_lookup.get(source_id)
+    if source is None:
+        return False
+    config = source.config if isinstance(source.config, dict) else {}
+    return source.collect_method == "rss" and bool(config.get("arxiv_api"))
 
 
 def _safe_ai_routing(payload: dict | None) -> MonitorAIRouting:
     if not isinstance(payload, dict):
         return MonitorAIRouting()
     try:
-        return MonitorAIRouting.model_validate(payload)
+        return MonitorAIRouting.model_validate(backfill_monitor_ai_routing(payload))
     except ValidationError:
         return MonitorAIRouting()
 

@@ -1,0 +1,19 @@
+site_key: sensenova
+profile_version: v1
+start_urls:
+  - https://www.sensetime.com/cn/news-index
+list_page:
+  item_selector: a[href*='/cn/news-detail/']:not(.bg_cover)
+  url_attr: href
+detail_page:
+  content_selector: .news-detail
+  remove_selectors:
+    - script
+    - style
+    - nav
+    - footer
+    - header
+  title_selector: .news-detail h1, .news-detail .title
+normalization:
+  url_prefix: https://www.sensetime.com
+  min_content_chars: 300

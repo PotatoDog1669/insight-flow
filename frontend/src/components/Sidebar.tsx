@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { useState } from "react";
 
 const NAV_ITEMS = [
-    { href: "/", label: "报告", icon: Telescope },
+    { href: "/", label: "首页", icon: Telescope },
     { href: "/monitors", label: "任务", icon: Activity },
     { href: "/library", label: "归档", icon: Library },
     { href: "/sources", label: "信息源", icon: Globe },
@@ -45,14 +45,13 @@ export function Sidebar() {
 
             {/* Main Sidebar */}
             <aside className={cn(
-                "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-border/40 bg-background md:bg-transparent transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col",
+                "fixed md:sticky top-0 left-0 z-50 w-64 h-screen border-r border-slate-200/95 bg-slate-100/95 md:bg-[linear-gradient(180deg,rgba(237,242,248,0.99)_0%,rgba(229,236,245,0.99)_100%)] transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col shadow-[inset_-1px_0_0_rgba(255,255,255,0.52)]",
                 isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             )}>
                 <div className="relative flex h-full flex-col px-4 pb-6 pt-16 md:pt-6">
 
                     {/* Brand Logo */}
                     <Link href="/" className="flex items-center gap-3 px-3 mb-8 transition-opacity hover:opacity-80" onClick={() => setIsMobileMenuOpen(false)}>
-                        <img src="/icon.svg" alt="Insight Flow Logo" className="w-8 h-8 rounded-lg shadow-sm" />
                         <span className="font-bold text-lg tracking-tight">Insight Flow</span>
                     </Link>
 
@@ -97,7 +96,7 @@ export function Sidebar() {
                         {isLoggedIn ? (
                             <div className="space-y-1">
                                 <div className="px-3 py-2 text-xs text-muted-foreground border-b border-border/50 mb-1">
-                                    Signed in as <strong>admin@lexmount.com</strong>
+                                    Signed in as <strong>admin@example.com</strong>
                                 </div>
                                 <button className="w-full flex items-center gap-3 px-3 py-2 text-sm text-foreground rounded-md hover:bg-muted transition-colors">
                                     <User className="w-4 h-4 text-muted-foreground" />
@@ -150,7 +149,7 @@ export function Sidebar() {
                                     <User className="w-4 h-4 text-blue-700 dark:text-blue-300 group-hover:text-blue-800 dark:group-hover:text-blue-200 transition-colors" />
                                 </div>
                                 <div className="flex-1 overflow-hidden transition-transform duration-200 group-hover:translate-x-0.5">
-                                    <p className="font-semibold text-sm text-foreground truncate transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400">Lex Researcher</p>
+                                    <p className="font-semibold text-sm text-foreground truncate transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400">Researcher</p>
                                     <p className="text-xs text-muted-foreground truncate">Free Plan</p>
                                 </div>
                             </button>

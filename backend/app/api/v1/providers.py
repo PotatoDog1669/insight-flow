@@ -26,6 +26,8 @@ from app.schemas.provider import (
 router = APIRouter()
 
 DEFAULT_USER_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
+DEFAULT_USER_EMAIL = "admin@example.com"
+LEGACY_DEFAULT_USER_EMAIL = "admin@lexmount.com"
 
 PROVIDER_PRESETS: dict[ProviderId, dict] = {
     "llm_codex": {
@@ -207,12 +209,18 @@ def _to_provider_response(provider_id: ProviderId, providers_data: dict[str, dic
 async def _get_or_create_default_user(db: AsyncSession) -> User:
     user = await db.get(User, DEFAULT_USER_ID)
     if user:
+        if user.email == LEGACY_DEFAULT_USER_EMAIL:
+            user.email = DEFAULT_USER_EMAIL
+            user.updated_at = datetime.now(UTC)
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
         return user
 
     now = datetime.now(UTC)
     user = User(
         id=DEFAULT_USER_ID,
-        email="admin@lexmount.com",
+        email=DEFAULT_USER_EMAIL,
         name="Lex Researcher",
         settings={"default_time_period": "daily", "default_report_type": "daily", "default_sink": "notion"},
         created_at=now,
