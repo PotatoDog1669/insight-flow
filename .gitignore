@@ -75,6 +75,7 @@ docs/.mintlify/
 test_data/
 rss-sample/
 output/
+docs/plans/
 .skills-hub/
 .codex/
 .agent/
