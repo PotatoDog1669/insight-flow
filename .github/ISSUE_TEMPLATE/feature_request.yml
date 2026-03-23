@@ -1,0 +1,66 @@
+name: Feature request
+description: Propose a user-facing or developer-facing improvement
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea.
+
+        Strong requests focus on the user problem, expected impact, and a narrow first version.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement / 问题背景
+      description: What problem are you trying to solve?
+      placeholder: Describe the user pain, workflow gap, or maintenance cost.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution / 期望方案
+      description: What would you like to happen?
+      placeholder: Describe the preferred behavior, API, UI, or workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered / 替代方案
+      description: What other options did you consider?
+      placeholder: List workarounds, rejected ideas, or adjacent options.
+  - type: textarea
+    id: success
+    attributes:
+      label: Success Criteria / 验收标准
+      description: How would we know this request is done?
+      placeholder: List the observable outcomes that would make this request successful.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact Area / 影响面
+      description: Which area would this improve?
+      options:
+        - Research workflow
+        - Source collection
+        - Report generation
+        - Integrations / destinations
+        - Frontend UX
+        - API / backend
+        - Developer tooling
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks / 提交前检查
+      options:
+        - label: I searched existing issues and discussions before filing this request.
+          required: true
+        - label: This request describes one clear improvement rather than multiple unrelated changes.
+          required: true

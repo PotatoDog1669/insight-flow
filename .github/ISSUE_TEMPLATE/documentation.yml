@@ -1,0 +1,54 @@
+name: Documentation update
+description: Report missing, incorrect, or unclear documentation
+title: "[Docs]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation issues are valuable contributions.
+
+        Please point to the exact page or file when possible so maintainers can triage quickly.
+  - type: input
+    id: location
+    attributes:
+      label: Affected Page or File / 涉及页面或文件
+      description: Share the docs URL or repository path.
+      placeholder: https://insight-flow.potatodog.cc/... or docs/...
+    validations:
+      required: true
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Issue Type / 问题类型
+      options:
+        - Incorrect information
+        - Missing information
+        - Outdated information
+        - Unclear wording
+        - Broken example
+        - Broken link
+        - Translation issue
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: current_state
+    attributes:
+      label: Current State / 当前内容问题
+      description: What is confusing, missing, or incorrect?
+      placeholder: Describe the docs problem clearly.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_fix
+    attributes:
+      label: Suggested Fix / 建议修复
+      description: What should the docs say or show instead?
+      placeholder: Share the corrected wording, example, or structure if you have one.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks / 提交前检查
+      options:
+        - label: I searched existing issues and did not find the same docs problem already reported.
+          required: true

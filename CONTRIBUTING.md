@@ -7,6 +7,7 @@ Thanks for your interest in contributing to Insight Flow.
 - Read [README.md](README.md) for the repository overview and local setup
 - Read [AGENTS.md](AGENTS.md) for the repository coding standards
 - Read the development docs at https://insight-flow.potatodog.cc/zh/development/contributing
+- Use the GitHub issue forms for bug reports, feature requests, and documentation changes
 - Keep API contracts, database schema, and frontend types in sync when making changes
 
 ## Development Workflow
@@ -64,4 +65,5 @@ make backend
 ## Need Help?
 
 If you want to discuss a change before implementing it, open an issue or start
-with a draft pull request so maintainers can give feedback early.
+with a draft pull request so maintainers can give feedback early. Use the
+security policy instead of public issues for vulnerability reports.
