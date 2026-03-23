@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import httpx
 import pytest
 
-from app.collectors.blog_scraper import BlogScraperCollector
+from app.collectors.blog_scraper import BlogScraperCollector, _extract_detail
 
 
 class DummyResponse:
@@ -272,3 +274,54 @@ async def test_blog_scraper_prefers_meaningful_duplicate_title(
 
     assert len(items) == 1
     assert items[0].title == "Real article title"
+
+
+def test_extract_detail_falls_back_to_visible_publish_date_without_selector() -> None:
+    content, published_at, detail_title = _extract_detail(
+        """
+        <html><body>
+          <main>
+            <h1>Seed2.0 正式发布</h1>
+            <div class="meta">发布日期 2026-02-14 分类 模型发布</div>
+            <article>
+              <p>Seed2.0 在真实任务评测中进入第一梯队。</p>
+              <p>文章正文足够长，可以模拟真实详情页。</p>
+            </article>
+          </main>
+        </body></html>
+        """,
+        {"content_selector": "main", "title_selector": "h1"},
+    )
+
+    assert detail_title == "Seed2.0 正式发布"
+    assert content
+    assert published_at == datetime(2026, 2, 14, tzinfo=timezone.utc)
+
+
+def test_extract_detail_prefers_visible_header_date_over_json_ld_schema_date() -> None:
+    _content, published_at, _detail_title = _extract_detail(
+        """
+        <html><head>
+          <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "NewsArticle",
+              "datePublished": "2026-03-23T03:08:53.884Z"
+            }
+          </script>
+        </head><body>
+          <main>
+            <section class="article-header">
+              <h1>MiniMax M2.1</h1>
+              <div>2025.12.23</div>
+            </section>
+            <article>
+              <p>MiniMax M2.1 正式发布。</p>
+            </article>
+          </main>
+        </body></html>
+        """,
+        {"content_selector": "main", "title_selector": "h1"},
+    )
+
+    assert published_at == datetime(2025, 12, 23, tzinfo=timezone.utc)

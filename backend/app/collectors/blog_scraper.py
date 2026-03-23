@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from datetime import timezone
+import json
 import re
 from typing import Any
 from urllib.parse import urljoin
@@ -15,6 +16,22 @@ import httpx
 from app.collectors.base import BaseCollector, RawArticle
 from app.collectors.registry import register
 from app.collectors.site_profile_loader import load_site_profile, validate_site_profile
+
+_TEXT_DATETIME_PATTERNS = (
+    re.compile(r"\b\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?(?:Z|[+-]\d{2}:\d{2})?\b"),
+    re.compile(r"\b\d{4}/\d{1,2}/\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\b"),
+    re.compile(r"\b\d{4}\.\d{1,2}\.\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\b"),
+    re.compile(r"\b\d{4}年\d{1,2}月\d{1,2}日(?:\s*\d{1,2}:\d{2}(?::\d{2})?)?\b"),
+)
+_GENERIC_PUBLISHED_SELECTORS = (
+    ("time[datetime]", "datetime"),
+    ("time[dateTime]", "datetime"),
+    ("meta[property='article:published_time']", "content"),
+    ("meta[name='publish_date']", "content"),
+    ("meta[name='publishdate']", "content"),
+    ("meta[name='pubdate']", "content"),
+)
+_STRUCTURED_DATA_DATE_KEYS = ("datePublished", "dateCreated", "uploadDate")
 
 
 @register("blog_scraper")
@@ -166,14 +183,7 @@ def _extract_detail(html: str, detail_page: dict) -> tuple[str, datetime | None,
     container = soup.select_one(content_selector) or soup.select_one("main") or soup.body or soup
     content = container.get_text("\n", strip=True) if container else ""
     detail_title = _extract_detail_title(soup, detail_page)
-    published_at = None
-    published_selector = detail_page.get("published_selector")
-    if published_selector:
-        published_node = soup.select_one(published_selector)
-        if published_node:
-            published_attr = detail_page.get("published_attr")
-            raw_published = published_node.get(published_attr) if published_attr else published_node.get_text(" ", strip=True)
-            published_at = _parse_datetime(raw_published)
+    published_at = _extract_detail_published_at(soup, detail_page, container)
     return content.strip(), published_at, detail_title
 
 
@@ -188,12 +198,122 @@ def _normalize_url(raw_url: str, base_url: str, url_prefix: str | None) -> str:
 def _parse_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
-    text = raw.strip().replace("Z", "+00:00")
+    text = str(raw).strip()
+    if not text:
+        return None
+    normalized_text = re.sub(r"\s+", " ", text).strip()
+    text = normalized_text.replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(text)
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
+        pass
+
+    normalized = normalized_text.replace("年", "-").replace("月", "-").replace("日", "")
+    normalized = normalized.replace("/", "-").replace(".", "-")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _extract_detail_published_at(soup: BeautifulSoup, detail_page: dict, container: Any) -> datetime | None:
+    published_selector = detail_page.get("published_selector")
+    if isinstance(published_selector, str) and published_selector.strip():
+        published_node = soup.select_one(published_selector)
+        if published_node:
+            published_attr = detail_page.get("published_attr")
+            raw_published = published_node.get(published_attr) if published_attr else published_node.get_text(" ", strip=True)
+            published_at = _parse_datetime(raw_published)
+            if published_at is not None:
+                return published_at
+
+    for selector, attr in _GENERIC_PUBLISHED_SELECTORS:
+        published_node = soup.select_one(selector)
+        if published_node is None:
+            continue
+        raw_published = published_node.get(attr) if attr else published_node.get_text(" ", strip=True)
+        published_at = _parse_datetime(raw_published)
+        if published_at is not None:
+            return published_at
+
+    for candidate_text in _build_published_text_candidates(soup, container):
+        published_at = _find_datetime_in_text(candidate_text)
+        if published_at is not None:
+            return published_at
+
+    return _extract_structured_data_published_at(soup)
+
+
+def _build_published_text_candidates(soup: BeautifulSoup, container: Any) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _push(text: str | None, *, limit: int | None = None) -> None:
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not normalized:
+            return
+        if limit is not None:
+            normalized = normalized[:limit]
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    h1 = soup.select_one("h1")
+    if h1 is not None and getattr(h1, "parent", None) is not None:
+        _push(h1.parent.get_text(" ", strip=True), limit=600)
+    if container is not None and hasattr(container, "get_text"):
+        _push(container.get_text(" ", strip=True), limit=1200)
+    return candidates
+
+
+def _find_datetime_in_text(text: str | None) -> datetime | None:
+    if not text:
         return None
+    matches: list[tuple[int, str]] = []
+    for pattern in _TEXT_DATETIME_PATTERNS:
+        for match in pattern.finditer(text):
+            matches.append((match.start(), match.group(0)))
+    for _, candidate in sorted(matches, key=lambda item: item[0]):
+        parsed = _parse_datetime(candidate)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _extract_structured_data_published_at(soup: BeautifulSoup) -> datetime | None:
+    for script in soup.select("script[type='application/ld+json']"):
+        raw_payload = script.string or script.get_text(" ", strip=True)
+        if not raw_payload:
+            continue
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            continue
+        for candidate in _iter_structured_data_dates(payload):
+            published_at = _parse_datetime(candidate)
+            if published_at is not None:
+                return published_at
+    return None
+
+
+def _iter_structured_data_dates(payload: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in _STRUCTURED_DATA_DATE_KEYS and isinstance(value, str):
+                values.append(value)
+            else:
+                values.extend(_iter_structured_data_dates(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            values.extend(_iter_structured_data_dates(item))
+    return values
 
 
 def _extract_detail_title(soup: BeautifulSoup, detail_page: dict) -> str | None:
