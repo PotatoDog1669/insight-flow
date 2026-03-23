@@ -34,6 +34,10 @@ import type { Destination } from "@/lib/api";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
 const AI_PROVIDER_OPTIONS: Array<Exclude<MonitorAIProviderName, "rule">> = ["llm_codex", "llm_openai"];
+const isSelectableAIProvider = (
+  value: MonitorAIProviderName | undefined,
+): value is Exclude<MonitorAIProviderName, "rule"> =>
+  value === "llm_codex" || value === "llm_openai";
 const ACTIVE_RUN_STATUSES = ["pending", "running", "cancelling"] as const;
 const isActiveRunStatus = (status: string) =>
   ACTIVE_RUN_STATUSES.includes(status as (typeof ACTIVE_RUN_STATUSES)[number]);
@@ -514,9 +518,7 @@ export default function MonitorsPage() {
     setSelectedDestinationInstances(resolveMonitorDestinationSelections(monitor, destinations));
     const primaryAi = monitor.ai_routing?.stages?.filter?.primary;
     setAiProvider(
-      primaryAi && AI_PROVIDER_OPTIONS.includes(primaryAi as any)
-        ? primaryAi as Exclude<MonitorAIProviderName, "rule">
-        : resolveDefaultAiProvider()
+      isSelectableAIProvider(primaryAi) ? primaryAi : resolveDefaultAiProvider()
     );
     setIsModalOpen(true);
   };

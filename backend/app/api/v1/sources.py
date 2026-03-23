@@ -234,6 +234,7 @@ async def _latest_tasks_by_source(
 
 
 def _to_source_response(source: Source, latest_task: CollectTask | None) -> SourceResponse:
+    source_status = source.status if source.status in {"healthy", "error", "running"} else _status_from_task(latest_task)
     return SourceResponse(
         id=source.id,
         name=source.name,
@@ -242,7 +243,7 @@ def _to_source_response(source: Source, latest_task: CollectTask | None) -> Sour
         config=source.config or {},
         target_url=_resolve_target_url(source.collect_method, source.config or {}),
         enabled=source.enabled,
-        status=getattr(source, "status", _status_from_task(latest_task)),  # type: ignore[arg-type]
+        status=source_status,
         last_run=(
             latest_task.started_at
             if latest_task and latest_task.started_at
