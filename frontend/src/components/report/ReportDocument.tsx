@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, isValidElement, useMemo, useState } from "react";
+import { Children, isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -33,6 +33,14 @@ const RUNTIME_META_RE =
 const SECTION_META_LINE_RE = /^(关键词|关键指标)\s*[:：]/i;
 const PAPER_META_LABELS = ["作者", "机构", "链接", "来源"] as const;
 const PAPER_BODY_LABELS = ["核心方法", "对比方法 / Baselines", "借鉴意义"] as const;
+
+function isElementWithChildren(node: ReactNode): node is ReactElement<{ children?: ReactNode }> {
+  return isValidElement<{ children?: ReactNode }>(node);
+}
+
+function isElementWithSrc(node: ReactNode): node is ReactElement<{ src?: string }> {
+  return isValidElement<{ src?: string }>(node);
+}
 
 function normalizeRenderableImageUrl(src: string): string {
   const value = src.trim();
@@ -129,20 +137,20 @@ function sectionMarkdown(section: ParsedSection): string {
   return removeDuplicatedIntroCallout(filteredLines).join("\n");
 }
 
-function childText(children: React.ReactNode): string {
+function childText(children: ReactNode): string {
   return Children.toArray(children)
     .map((child) => {
       if (typeof child === "string") return child;
-      if (isValidElement(child)) return childText(child.props.children);
+      if (isElementWithChildren(child)) return childText(child.props.children);
       return "";
     })
     .join("")
     .trim();
 }
 
-function splitMetadataLabel(children: React.ReactNode): {
+function splitMetadataLabel(children: ReactNode): {
   label: string | null;
-  remainder: React.ReactNode[];
+  remainder: ReactNode[];
 } {
   const nodes = Children.toArray(children);
   if (nodes.length === 0) return { label: null, remainder: nodes };
@@ -166,16 +174,16 @@ function splitMetadataLabel(children: React.ReactNode): {
   return { label: null, remainder: nodes };
 }
 
-function splitBodyLabel(children: React.ReactNode): {
-  label: React.ReactNode | null;
+function splitBodyLabel(children: ReactNode): {
+  label: ReactNode | null;
   labelText: string;
-  remainder: React.ReactNode[];
+  remainder: ReactNode[];
 } {
   const nodes = Children.toArray(children).filter((child) => !(typeof child === "string" && !child.trim()));
   if (nodes.length === 0) return { label: null, labelText: "", remainder: nodes };
 
   const first = nodes[0];
-  if (!isValidElement(first)) {
+  if (!isElementWithChildren(first)) {
     return { label: null, labelText: "", remainder: nodes };
   }
 
@@ -196,7 +204,7 @@ function splitBodyLabel(children: React.ReactNode): {
   return { label: first, labelText, remainder };
 }
 
-function isImageOnlyParagraph(children: React.ReactNode): boolean {
+function isImageOnlyParagraph(children: ReactNode): boolean {
   const nodes = Children.toArray(children).filter((child) => {
     return !(typeof child === "string" && !child.trim());
   });
@@ -205,7 +213,7 @@ function isImageOnlyParagraph(children: React.ReactNode): boolean {
     isValidElement(nodes[0]) &&
     (nodes[0].type === MarkdownImage ||
       (typeof nodes[0].type === "string" && nodes[0].type === "img") ||
-      typeof nodes[0].props?.src === "string")
+      (isElementWithSrc(nodes[0]) && typeof nodes[0].props.src === "string"))
   );
 }
 
