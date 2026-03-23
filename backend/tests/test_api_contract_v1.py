@@ -2,9 +2,11 @@
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -472,6 +474,26 @@ def test_reports_contract_supports_filters_endpoint(client: TestClient) -> None:
     assert filters_data["monitors"] == [
         {"id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "name": "Seed Monitor"}
     ]
+
+
+def test_reports_contract_serves_paper_figure_assets(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.api.v1 import reports as reports_api
+
+    asset_root = tmp_path / "paper_figures"
+    asset_path = asset_root / "2603.18762v1" / "figure.png"
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    asset_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    monkeypatch.setattr(reports_api, "PAPER_FIGURE_ASSET_DIR", asset_root)
+
+    response = client.get("/api/v1/reports/paper-assets/2603.18762v1/figure.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
 
 
 def test_users_me_contract_supports_profile_and_settings_update(client: TestClient) -> None:

@@ -183,6 +183,25 @@ async def test_paper_renderer_prefers_review_payload_for_digest_structure() -> N
 
 
 @pytest.mark.asyncio
+async def test_paper_renderer_uses_project_teaser_when_primary_figure_missing() -> None:
+    renderer = PaperRenderer()
+    article = _article(
+        external_id="paper-1",
+        title="ClawTrap",
+        score=0.96,
+        importance="high",
+        paper_id="2603.18762",
+        authors=["Alice"],
+        affiliations="Example Lab",
+    )
+    article.raw.metadata["project_teaser_url"] = "https://demo.example.com/assets/teaser.png"
+
+    report = await renderer.render([article], RenderContext(date="2026-03-20"))
+
+    assert "![ClawTrap](https://demo.example.com/assets/teaser.png)" in report.content
+
+
+@pytest.mark.asyncio
 async def test_paper_renderer_prefers_explicit_digest_summary_and_exposes_it_in_metadata() -> None:
     renderer = PaperRenderer()
     articles = [

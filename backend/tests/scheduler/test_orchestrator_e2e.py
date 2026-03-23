@@ -16,7 +16,12 @@ from app.models.monitor import Monitor
 from app.processors.pipeline import ProcessedArticle, ProcessingPipeline
 from app.scheduler.monitor_runner import execute_monitor_pipeline, prepare_monitor_run
 from app.scheduler import orchestrator as orchestrator_module
-from app.scheduler.orchestrator import Orchestrator
+from app.scheduler.orchestrator import (
+    Orchestrator,
+    _hydrate_paper_figures_from_arxiv,
+    _paper_review_affiliations,
+    _paper_review_authors,
+)
 from app.sinks.base import PublishResult
 from app.schemas.monitor import MonitorCreate
 from app.schemas.report import ReportCustomRequest
@@ -45,6 +50,86 @@ class FakeCollector(BaseCollector):
                 published_at=datetime.now(timezone.utc) - timedelta(minutes=5),
             )
         ]
+
+
+@pytest.mark.asyncio
+async def test_hydrate_paper_figures_falls_back_to_pdf_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    article = ProcessedArticle(
+        raw=RawArticle(
+            external_id="paper-1",
+            title="Paper One",
+            url="https://arxiv.org/abs/2603.18762v1",
+            content="content",
+            published_at=datetime.now(timezone.utc),
+            metadata={"paper_id": "2603.18762v1"},
+        ),
+        summary="summary",
+        keywords=["paper"],
+    )
+
+    class _Response:
+        def __init__(self, text: str = ""):
+            self.text = text
+            self.headers = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str):
+            if url == "https://arxiv.org/html/2603.18762v1":
+                return _Response("<html><body>No figures</body></html>")
+            raise AssertionError(f"Unexpected URL: {url}")
+
+    async def fake_pdf_fallback(*args, **kwargs) -> str:  # noqa: ANN002, ANN003
+        return "http://127.0.0.1:8000/api/v1/reports/paper-assets/2603.18762v1/figure.png"
+
+    monkeypatch.setattr(orchestrator_module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(orchestrator_module, "extract_pdf_figure_public_url", fake_pdf_fallback)
+
+    await _hydrate_paper_figures_from_arxiv([article])
+
+    assert article.raw.metadata["figure_url"] == "http://127.0.0.1:8000/api/v1/reports/paper-assets/2603.18762v1/figure.png"
+
+
+def test_paper_review_helpers_extract_nested_authors_and_affiliations() -> None:
+    article = ProcessedArticle(
+        raw=RawArticle(
+            external_id="paper-nested-meta",
+            title="Nested Paper",
+            url="https://example.com/paper",
+            content="content",
+            published_at=datetime.now(timezone.utc),
+            metadata={
+                "paper": {
+                    "authors": [
+                        {
+                            "name": "Alice Zhang",
+                            "affiliations": ["Tsinghua University", "Institute A"],
+                        },
+                        {
+                            "display_name": "Bob Li",
+                            "organization": "Institute B",
+                        },
+                    ]
+                }
+            },
+        ),
+        summary="summary",
+        keywords=["paper"],
+    )
+
+    assert _paper_review_authors(article) == ["Alice Zhang", "Bob Li"]
+    assert _paper_review_affiliations(article) == ["Tsinghua University", "Institute A", "Institute B"]
 
 
 @pytest.mark.asyncio
@@ -2382,11 +2467,14 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
     monkeypatch.setattr(orchestrator_module, "get_sink", lambda target: _DatabaseSink())
 
     class _FigureResponse:
-        def __init__(self, text: str):
+        def __init__(self, text: str = "", status_code: int = 200, headers: dict[str, str] | None = None):
             self.text = text
+            self.status_code = status_code
+            self.headers = headers or {}
 
         def raise_for_status(self) -> None:
-            return None
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
 
     class _FigureClient:
         def __init__(self, *args, **kwargs):
@@ -2401,8 +2489,10 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
         async def get(self, url: str):
             if url == "https://arxiv.org/html/2602.23546":
                 return _FigureResponse(
-                    '<html><body><figure><img src="x1.png"/><figcaption>Figure 1: Overview</figcaption></figure></body></html>'
+                    '<html><body><figure><img src="2602.23546v1/2602.23546v1/x1.png"/><figcaption>Figure 1: Overview</figcaption></figure></body></html>'
                 )
+            if url == "https://arxiv.org/html/2602.23546v1/x1.png":
+                return _FigureResponse(headers={"content-type": "image/png"})
             return _FigureResponse("<html></html>")
 
     monkeypatch.setattr(orchestrator_module.httpx, "AsyncClient", _FigureClient)
@@ -2521,7 +2611,7 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
         assert isinstance(review_payload, dict)
         review_papers = review_payload.get("papers")
         assert isinstance(review_papers, list)
-        assert review_papers[0]["figure"] == "https://arxiv.org/html/2602.23546/x1.png"
+        assert review_papers[0]["figure"] == "https://arxiv.org/html/2602.23546v1/x1.png"
 
     async with session_factory() as session:
         reports = (
@@ -2550,7 +2640,7 @@ async def test_orchestrator_paper_pipeline_builds_digest_and_note_reports(
         )
         assert len((digest.metadata_ or {}).get("paper_note_links", [])) == 2
         assert all("report_id" in link for link in (digest.metadata_ or {}).get("paper_note_links", []))
-        assert "![MVISTA-4D](https://arxiv.org/html/2602.23546/x1.png)" in digest.content
+        assert "![MVISTA-4D](https://arxiv.org/html/2602.23546v1/x1.png)" in digest.content
         assert "## 总结" in digest.content
         assert "## Properties" not in digest.content
         assert (digest.metadata_ or {}).get("paper_recommendations") == [

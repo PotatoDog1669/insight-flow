@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from app.destinations.instances import (
 )
 from app.models.database import get_db
 from app.models.report import Report
+from app.papers.pdf_figures import DEFAULT_PAPER_FIGURE_ASSET_DIR
 from app.renderers.base import Report as RenderedReport
 from app.scheduler.orchestrator import Orchestrator
 from app.schemas.report import (
@@ -28,6 +30,7 @@ from app.schemas.report import (
 from app.sinks.registry import get_sink
 
 router = APIRouter()
+PAPER_FIGURE_ASSET_DIR = DEFAULT_PAPER_FIGURE_ASSET_DIR
 _PAPER_DIGEST_SUMMARY_RE = re.compile(
     r"^##\s*(?:本期导读|今日锐评|总结)\s*(?:\n+)(.+?)(?=\n##\s|\Z)",
     re.MULTILINE | re.DOTALL,
@@ -93,6 +96,18 @@ async def get_report_filters(db: AsyncSession = Depends(get_db)):
             for monitor_uuid, monitor_name in sorted(monitors.items(), key=lambda item: item[1])
         ],
     )
+
+
+@router.get("/paper-assets/{asset_path:path}")
+async def get_paper_figure_asset(asset_path: str):
+    """Serve extracted paper figure assets."""
+    root = PAPER_FIGURE_ASSET_DIR.resolve()
+    candidate = (root / asset_path).resolve()
+    if root not in candidate.parents and candidate != root:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    return FileResponse(path=candidate)
 
 
 @router.get("/{report_id}", response_model=ReportResponse)

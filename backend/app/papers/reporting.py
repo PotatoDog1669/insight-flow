@@ -859,7 +859,7 @@ def _organization_name(value: Any) -> str:
 
 def _figure_url(article: ProcessedArticle) -> str:
     metadata = _article_metadata(article)
-    for key in ("figure_url", "figure", "image", "cover"):
+    for key in ("figure_url", "figure", "image", "cover", "project_teaser_url"):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()

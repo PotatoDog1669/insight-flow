@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     app_name: str = Field(default=_yaml.get("app", {}).get("name", "Insight Flow"))
     app_debug: bool = Field(default=_yaml.get("app", {}).get("debug", False))
     app_log_level: str = Field(default=_yaml.get("app", {}).get("log_level", "INFO"))
+    app_public_api_url: str = Field(default=_yaml.get("app", {}).get("public_api_url", "http://127.0.0.1:8000"))
 
     # Database
     database_url: str = Field(

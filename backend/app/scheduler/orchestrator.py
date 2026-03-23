@@ -7,8 +7,6 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from urllib.parse import urljoin
-
 import httpx
 import structlog
 from sqlalchemy import and_, select
@@ -32,7 +30,14 @@ from app.models.task import CollectTask
 from app.models.user import User
 from app.papers.acquisition import acquire_paper_fulltext
 from app.papers.evidence import build_evidence_coverage
+from app.papers.figures import (
+    extract_first_figure_candidate,
+    is_reachable_image_url,
+    normalize_arxiv_figure_url,
+    select_primary_figure_url,
+)
 from app.papers.literature import build_literature_context
+from app.papers.pdf_figures import extract_pdf_figure_public_url
 from app.papers.service import sync_article_paper_link
 from app.papers.reporting import (
     build_paper_digest_report,
@@ -3331,6 +3336,17 @@ def _paper_review_affiliations(article: ProcessedArticle) -> list[str]:
     if isinstance(candidates, str) and candidates.strip():
         return [candidates.strip()]
     authors = metadata.get("authors")
+    if not authors:
+        nested_paper = metadata.get("paper")
+        if isinstance(nested_paper, dict):
+            nested_affiliations = nested_paper.get("affiliations")
+            if isinstance(nested_affiliations, list):
+                values = [str(item).strip() for item in nested_affiliations if str(item).strip()]
+                if values:
+                    return values[:6]
+            if isinstance(nested_affiliations, str) and nested_affiliations.strip():
+                return [nested_affiliations.strip()]
+            authors = nested_paper.get("authors")
     if isinstance(authors, list):
         collected: list[str] = []
         for author in authors:
@@ -3353,6 +3369,10 @@ def _paper_review_affiliations(article: ProcessedArticle) -> list[str]:
 def _paper_review_authors(article: ProcessedArticle) -> list[str]:
     metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
     authors = metadata.get("authors")
+    if not authors:
+        nested_paper = metadata.get("paper")
+        if isinstance(nested_paper, dict):
+            authors = nested_paper.get("authors")
     if isinstance(authors, list):
         output: list[str] = []
         for author in authors:
@@ -3391,7 +3411,7 @@ def _paper_review_links(article: ProcessedArticle) -> list[str]:
 
 def _paper_review_figure(article: ProcessedArticle) -> str:
     metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
-    for key in ("figure_url", "figure", "image", "cover"):
+    for key in ("figure_url", "figure", "image", "cover", "project_teaser_url"):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -3480,26 +3500,40 @@ def _coerce_uuid(value: uuid.UUID | str) -> uuid.UUID | None:
 
 
 async def _hydrate_paper_figures_from_arxiv(processed_articles: list[ProcessedArticle]) -> None:
-    pending: list[tuple[ProcessedArticle, str]] = []
-    for article in processed_articles:
-        html_url = _paper_arxiv_html_url(article)
-        if not html_url:
-            continue
-        metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
-        if _paper_review_figure(article):
-            continue
-        pending.append((article, html_url))
-
+    pending = [(article, _paper_arxiv_html_url(article)) for article in processed_articles]
+    pending = [(article, html_url) for article, html_url in pending if html_url]
     if not pending:
         return
 
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         for article, html_url in pending:
-            html = await _safe_text_get(client, html_url)
-            figure_url, caption = _extract_first_figure_from_html(html, base_url=html_url)
-            if not figure_url:
-                continue
             metadata = dict(article.raw.metadata or {})
+            existing_figure = normalize_arxiv_figure_url(_paper_review_figure(article))
+            if existing_figure:
+                metadata["figure_url"] = existing_figure
+                if await is_reachable_image_url(client, existing_figure):
+                    article.raw.metadata = metadata
+                    continue
+                metadata.pop("figure_url", None)
+
+            html = await _safe_text_get(client, html_url)
+            figure_url, caption = await select_primary_figure_url(
+                client,
+                html=html,
+                base_url=html_url,
+                project_teaser_url=str(metadata.get("project_teaser_url") or ""),
+            )
+            if not figure_url:
+                figure_url = await extract_pdf_figure_public_url(
+                    client,
+                    pdf_url=_paper_pdf_url(article),
+                    paper_key=build_paper_identity(article),
+                    public_api_base=settings.app_public_api_url,
+                )
+            if not figure_url:
+                article.raw.metadata = metadata
+                continue
+
             metadata["figure_url"] = figure_url
             if caption and not str(metadata.get("figure_caption") or "").strip():
                 metadata["figure_caption"] = caption
@@ -3523,23 +3557,25 @@ def _paper_arxiv_html_url(article: ProcessedArticle) -> str:
     return ""
 
 
+def _paper_pdf_url(article: ProcessedArticle) -> str:
+    metadata = article.raw.metadata if isinstance(article.raw.metadata, dict) else {}
+    for key in ("pdf_url", "best_pdf_url", "paper_pdf_url"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    paper_id = str(metadata.get("paper_id") or metadata.get("arxiv_id") or "").strip()
+    if paper_id:
+        return f"https://arxiv.org/pdf/{paper_id}.pdf"
+
+    for candidate in (str(metadata.get("arxiv_url") or "").strip(), str(article.raw.url or "").strip()):
+        if "arxiv.org/abs/" in candidate:
+            return f"{candidate.replace('/abs/', '/pdf/')}.pdf"
+    return ""
+
+
 def _extract_first_figure_from_html(html: str, *, base_url: str) -> tuple[str, str]:
-    if not html:
-        return "", ""
-    figure_match = re.search(r"<figure\b[^>]*>(.*?)</figure>", html, flags=re.IGNORECASE | re.DOTALL)
-    if not figure_match:
-        return "", ""
-    figure_block = figure_match.group(1)
-    image_match = re.search(r'<img\b[^>]*src=["\']([^"\']+)["\']', figure_block, flags=re.IGNORECASE)
-    if not image_match:
-        return "", ""
-    caption_match = re.search(r"<figcaption\b[^>]*>(.*?)</figcaption>", figure_block, flags=re.IGNORECASE | re.DOTALL)
-    caption = ""
-    if caption_match:
-        caption = re.sub(r"<[^>]+>", " ", caption_match.group(1))
-        caption = re.sub(r"\s+", " ", caption).strip()
-    normalized_base = base_url if base_url.endswith("/") else f"{base_url}/"
-    return urljoin(normalized_base, image_match.group(1).strip()), caption
+    return extract_first_figure_candidate(html, base_url=base_url)
 
 
 async def _safe_text_get(client: httpx.AsyncClient, url: str) -> str:
