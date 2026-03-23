@@ -59,6 +59,11 @@ const destinationFixtures = [
   },
 ] as const;
 
+async function waitForDestinationButtons() {
+  await screen.findByRole("button", { name: "Notion 落盘点" });
+  return screen.findByRole("button", { name: "Obsidian 落盘点" });
+}
+
 describe("DestinationsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,7 +115,7 @@ describe("DestinationsPage", () => {
   it("renders a destination list and a separate detail panel", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     expect(screen.getByText("落盘点列表")).toBeInTheDocument();
     expect(screen.getByText("连接详情")).toBeInTheDocument();
@@ -129,7 +134,7 @@ describe("DestinationsPage", () => {
   it("renders localized destination detail copy without english helper text", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
 
@@ -140,7 +145,7 @@ describe("DestinationsPage", () => {
   it("uses a compact action area instead of the old status card", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
 
@@ -154,7 +159,7 @@ describe("DestinationsPage", () => {
   it("renders target position under the compact action buttons", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
 
@@ -165,7 +170,7 @@ describe("DestinationsPage", () => {
   it("shows destination details in readonly mode until entering edit mode", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     const notionNameInput = screen.getByLabelText("实例名称");
     expect(notionNameInput).toHaveAttribute("readonly");
@@ -188,7 +193,7 @@ describe("DestinationsPage", () => {
   it("keeps editable secret inputs hidden by default and reveals them on demand", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
 
@@ -219,7 +224,7 @@ describe("DestinationsPage", () => {
   it("tests obsidian connectivity with the current edit config", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
@@ -250,7 +255,7 @@ describe("DestinationsPage", () => {
   it("switches obsidian editor to file mode and only shows file fields", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
@@ -265,7 +270,7 @@ describe("DestinationsPage", () => {
   it("detects the local obsidian vault path in file mode", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
@@ -295,7 +300,7 @@ describe("DestinationsPage", () => {
 
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
 
@@ -315,7 +320,7 @@ describe("DestinationsPage", () => {
   it("allows renaming a destination instance and saves the new name", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
@@ -342,7 +347,7 @@ describe("DestinationsPage", () => {
   it("cancels unsaved edits and restores the saved destination state", async () => {
     render(<DestinationsPage />);
 
-    await screen.findByRole("heading", { name: "输出配置" });
+    await waitForDestinationButtons();
 
     fireEvent.click(screen.getByRole("button", { name: "Obsidian 落盘点" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
@@ -360,5 +365,24 @@ describe("DestinationsPage", () => {
     expect(screen.getByLabelText("实例名称")).toHaveAttribute("readonly");
     expect(screen.queryByRole("button", { name: "保存并启用" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "测试连接" })).not.toBeInTheDocument();
+  });
+
+  it("waits for destination instance buttons after async loading", async () => {
+    let resolveDestinations: ((value: typeof destinationFixtures) => void) | null = null;
+    mockedGetDestinations.mockImplementationOnce(
+      () =>
+        new Promise<typeof destinationFixtures>((resolve) => {
+          resolveDestinations = resolve;
+        }) as never,
+    );
+
+    render(<DestinationsPage />);
+
+    await screen.findByRole("heading", { name: "输出配置" });
+    expect(screen.queryByRole("button", { name: "Obsidian 落盘点" })).not.toBeInTheDocument();
+
+    resolveDestinations?.(destinationFixtures);
+
+    expect(await waitForDestinationButtons()).toBeInTheDocument();
   });
 });
