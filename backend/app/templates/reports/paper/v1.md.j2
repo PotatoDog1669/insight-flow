@@ -49,42 +49,29 @@ tags:
 ---
 ### {{ loop.index }}. {{ paper.title | default("未命名论文") }}
 
-{% if paper.figure | default("", true) | trim -%}
-![{{ paper.title | default("Paper figure") }}]({{ paper.figure | trim }})
-
-{% endif -%}
 {% if paper.authors | default("", true) | trim and paper.authors != "N/A" %}- 作者：{{ paper.authors | trim }}
 {% endif %}{% if paper.affiliations | default("", true) | trim and paper.affiliations != "N/A" %}- 机构：{{ paper.affiliations | trim }}
-{% endif %}{% if paper.source_label | default("", true) | trim %}- 来源：{{ paper.source_label | trim }}
 {% endif %}{% if paper.links | default([]) %}
 - 链接：{% for link in paper.links %}[{{ link.label | default("Link") }}]({{ link.url }}){% if not loop.last %} / {% endif %}{% endfor %}
+{% endif %}{% if paper.source_label | default("", true) | trim %}- 来源：{{ paper.source_label | trim }}
 {% endif %}
+{% if paper.figure | default("", true) | trim %}
 
-**核心方法**
-
-{% set core_problem = paper.core_problem | default(paper.problem) | default("") | trim -%}
+![{{ paper.title | default("Paper figure") }}]({{ paper.figure | trim }})
+{% endif %}
 {% set core_method = paper.core_method | default(paper.method) | default("") | trim -%}
-{% if core_problem %}{{ core_problem }}
+{% set baselines = paper.baselines | default(paper.key_result) | default(paper.result) | default("") | trim -%}
+{% set why_it_matters = paper.why_it_matters | default(paper.importance) | default("") | trim -%}
+{% if core_method %}
 
-{% endif -%}
-{{ core_method }}
-
-**对比方法 / Baselines**
-
-{{ paper.key_result | default(paper.result) | default("") }}
-
-**借鉴意义**
-
-{{ paper.why_it_matters | default(paper.importance) | default("") }}
-
-**阅读建议**
-
-{% set one_line_judgment = paper.one_line_judgment | default(paper.one_line) | default("") | trim -%}
-{% set reading_advice = paper.reading_advice | default("") | trim -%}
-{% if one_line_judgment %}{{ one_line_judgment }}
-
-{% endif -%}
-{{ reading_advice }}
+- **核心方法**：{{ core_method }}
+{% endif %}
+{% if baselines %}
+- **对比方法 / Baselines**：{{ baselines }}
+{% endif %}
+{% if why_it_matters %}
+- **借鉴意义**：{{ why_it_matters }}
+{% endif %}
 
 {% endfor %}
 {% endfor -%}

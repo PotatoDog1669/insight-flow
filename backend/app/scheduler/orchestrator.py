@@ -3451,10 +3451,8 @@ def _build_paper_note_payload(
     paper_identity = str(review_paper.get("paper_identity") or build_paper_identity(article)).strip()
     title = str(review_paper.get("title") or article.raw.title or "").strip()
     detail_parts = [
-        str(review_paper.get("one_line_judgment") or "").strip(),
-        str(review_paper.get("core_problem") or "").strip(),
         str(review_paper.get("core_method") or "").strip(),
-        str(review_paper.get("key_result") or "").strip(),
+        str(review_paper.get("baselines") or review_paper.get("key_result") or "").strip(),
         str(review_paper.get("why_it_matters") or "").strip(),
         str(article.detail or "").strip(),
         str(article.evidence or "").strip(),
@@ -3471,7 +3469,6 @@ def _build_paper_note_payload(
             "affiliations": review_paper.get("affiliations") or _paper_review_affiliations(article),
             "links": review_paper.get("links") or _paper_review_links(article),
             "recommendation": str(review_paper.get("recommendation") or "").strip(),
-            "reading_advice": str(review_paper.get("reading_advice") or "").strip(),
         }
     }
 

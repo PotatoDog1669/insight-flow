@@ -19,12 +19,9 @@ async def test_llm_paper_review_provider_uses_llm_transport(monkeypatch: pytest.
                     "paper_identity": "2603.12345",
                     "title": "World Model Policy",
                     "recommendation": "必读",
-                    "one_line_judgment": "值得精读。",
-                    "core_problem": "问题明确。",
                     "core_method": "方法扎实。",
-                    "key_result": "结果有效。",
+                    "baselines": "对比设置清晰。",
                     "why_it_matters": "有迁移价值。",
-                    "reading_advice": "先看方法。",
                     "note_candidate": True,
                 }
             ],
@@ -37,7 +34,7 @@ async def test_llm_paper_review_provider_uses_llm_transport(monkeypatch: pytest.
         config={"model": "gpt-4o-mini", "api_key": "sk-demo"},
     )
 
-    assert output["digest_title"] == "LLM Paper Digest"
+    assert output["digest_title"] == "Paper Digest"
     assert calls["llm"] == 1
 
 
@@ -55,12 +52,9 @@ async def test_codex_paper_review_provider_uses_codex_transport(monkeypatch: pyt
                     "paper_identity": "2603.12345",
                     "title": "World Model Policy",
                     "recommendation": "值得看",
-                    "one_line_judgment": "值得看。",
-                    "core_problem": "问题明确。",
                     "core_method": "方法扎实。",
-                    "key_result": "结果有效。",
+                    "baselines": "对比设置清晰。",
                     "why_it_matters": "有迁移价值。",
-                    "reading_advice": "先看方法。",
                     "note_candidate": False,
                 }
             ],
@@ -73,6 +67,6 @@ async def test_codex_paper_review_provider_uses_codex_transport(monkeypatch: pyt
         config={"model": "gpt-5-codex", "api_key": "sk-demo"},
     )
 
-    assert output["digest_title"] == "Codex Paper Digest"
+    assert output["digest_title"] == "Paper Digest"
     assert output["papers"][0]["recommendation"] == "值得看"
     assert calls["codex"] == 1

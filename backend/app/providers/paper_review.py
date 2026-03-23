@@ -63,6 +63,17 @@ def _normalize_topic_label(raw: object) -> str:
     return _normalize_text(raw, max_len=48)
 
 
+def _strip_digest_label_prefix(raw: object, *labels: str, max_len: int) -> str:
+    text = _normalize_text(raw, max_len=max_len)
+    if not text:
+        return ""
+    escaped = "|".join(re.escape(label) for label in labels if label)
+    if not escaped:
+        return text
+    pattern = re.compile(rf"^(?:[-*]\s*)?(?:\*\*)?(?:{escaped})(?:\*\*)?\s*[:：]\s*", re.IGNORECASE)
+    return pattern.sub("", text, count=1).strip()
+
+
 def _normalize_note_candidate(raw: object) -> bool:
     if isinstance(raw, bool):
         return raw
@@ -116,12 +127,15 @@ def _normalize_paper_entry(raw: object) -> dict[str, object]:
     paper_identity = _normalize_text(raw.get("paper_identity"), max_len=96)
     title = _normalize_text(raw.get("title"), max_len=240)
     digest_fields = {
-        "one_line_judgment": _normalize_text(raw.get("one_line_judgment"), max_len=220),
-        "core_problem": _normalize_text(raw.get("core_problem"), max_len=320),
-        "core_method": _normalize_text(raw.get("core_method"), max_len=700),
-        "key_result": _normalize_text(raw.get("key_result"), max_len=700),
-        "why_it_matters": _normalize_text(raw.get("why_it_matters"), max_len=520),
-        "reading_advice": _normalize_text(raw.get("reading_advice"), max_len=520),
+        "core_method": _strip_digest_label_prefix(raw.get("core_method"), "核心方法", max_len=700),
+        "baselines": _strip_digest_label_prefix(
+            raw.get("baselines") or raw.get("key_result"),
+            "对比方法 / Baselines",
+            "对比方法/Baselines",
+            "Baselines",
+            max_len=700,
+        ),
+        "why_it_matters": _strip_digest_label_prefix(raw.get("why_it_matters"), "借鉴意义", max_len=520),
     }
     if not paper_identity:
         raise ValueError("Missing paper_identity in paper_review output")
@@ -142,12 +156,9 @@ def _normalize_paper_entry(raw: object) -> dict[str, object]:
         "links": _normalize_links(raw.get("links")),
         "figure": _normalize_text(raw.get("figure"), max_len=400),
         "recommendation": _normalize_recommendation(raw.get("recommendation")),
-        "one_line_judgment": digest_fields["one_line_judgment"],
-        "core_problem": digest_fields["core_problem"],
         "core_method": digest_fields["core_method"],
-        "key_result": digest_fields["key_result"],
+        "baselines": digest_fields["baselines"],
         "why_it_matters": digest_fields["why_it_matters"],
-        "reading_advice": digest_fields["reading_advice"],
         "note_candidate": _normalize_note_candidate(raw.get("note_candidate")),
     }
 

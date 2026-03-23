@@ -67,10 +67,8 @@ def build_paper_digest_entries(
             "affiliations": _affiliations_text(article),
             "links": _link_items(links),
             "figure": _figure_url(article),
-            "one_line_judgment": _one_line_summary(article),
-            "core_problem": _problem_text(article),
-            "core_method": _method_text(article),
-            "key_result": _result_text(article),
+            "core_method": _merge_digest_parts(_problem_text(article), _method_text(article)),
+            "baselines": _result_text(article),
             "why_it_matters": _importance_text(article),
             "recommendation": _reading_level(article, selected=selected),
             "detail_link": detail_link,
@@ -78,10 +76,9 @@ def build_paper_digest_entries(
             "topic_label": _infer_paper_topic(
                 title=_paper_title(article),
                 text_parts=[
-                    _one_line_summary(article),
-                    _problem_text(article),
-                    _method_text(article),
+                    _merge_digest_parts(_problem_text(article), _method_text(article)),
                     _result_text(article),
+                    _importance_text(article),
                     " ".join(str(item) for item in (article.keywords or [])),
                 ],
             ),
@@ -395,13 +392,10 @@ def _paper_digest_entries_from_review_payload(
             if detail_report_id
             else str(raw.get("detail_link") or "").strip()
         )
-        one_line = str(raw.get("one_line_judgment") or raw.get("one_line") or "").strip()
-        problem = str(raw.get("core_problem") or raw.get("problem") or "").strip()
         method = str(raw.get("core_method") or raw.get("method") or "").strip()
-        result = str(raw.get("key_result") or raw.get("result") or "").strip()
+        baselines = str(raw.get("baselines") or raw.get("key_result") or raw.get("result") or "").strip()
         why = str(raw.get("why_it_matters") or raw.get("importance") or "").strip()
         recommendation = str(raw.get("recommendation") or "").strip()
-        reading_advice = str(raw.get("reading_advice") or raw.get("reading_level") or "").strip()
         raw_links = raw.get("links")
         link_items = _link_items(raw_links)
         entry = {
@@ -414,22 +408,17 @@ def _paper_digest_entries_from_review_payload(
             "links": link_items,
             "figure": str(raw.get("figure") or "").strip(),
             "recommendation": recommendation,
-            "one_line_judgment": one_line,
-            "core_problem": problem,
             "core_method": method,
-            "key_result": result,
+            "baselines": baselines,
             "why_it_matters": why,
-            "reading_advice": reading_advice,
             "note_candidate": bool(raw.get("note_candidate")),
             "detail_link": detail_link,
             "source_label": _paper_source_label(_link_urls(link_items)),
             # Backward-compatible aliases for fallback templates and metadata readers.
-            "one_line": one_line,
-            "problem": problem,
             "method": method,
-            "result": result,
+            "result": baselines,
             "importance": why,
-            "reading_level": reading_advice or recommendation,
+            "reading_level": recommendation,
         }
         entries.append(entry)
     return entries
@@ -444,7 +433,7 @@ def _build_triage_groups(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if str(paper.get("recommendation") or "").strip() != label:
                 continue
             title = str(paper.get("title") or "").strip()
-            reason = str(paper.get("one_line_judgment") or "").strip()
+            reason = str(paper.get("why_it_matters") or paper.get("importance") or "").strip()
             if not title:
                 continue
             items.append({"title": title, "reason": reason})
@@ -460,10 +449,9 @@ def _build_theme_groups(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         theme = str(paper.get("topic_label") or "").strip() or _infer_paper_topic(
             title=title,
             text_parts=[
-                str(paper.get("one_line_judgment") or paper.get("one_line") or "").strip(),
-                str(paper.get("core_problem") or paper.get("problem") or "").strip(),
                 str(paper.get("core_method") or paper.get("method") or "").strip(),
-                str(paper.get("key_result") or paper.get("result") or "").strip(),
+                str(paper.get("baselines") or paper.get("key_result") or paper.get("result") or "").strip(),
+                str(paper.get("why_it_matters") or paper.get("importance") or "").strip(),
             ],
         )
         paper["topic_label"] = theme
@@ -877,6 +865,18 @@ def _clean_digest_sentence(text: str) -> str:
     sentence = re.sub(r"\s+", " ", sentence)
     sentence = sentence.rstrip("。！？!?；;，, ")
     return f"{sentence}。"
+
+
+def _merge_digest_parts(*parts: str) -> str:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        text = str(part or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(text)
+    return " ".join(merged)
 
 
 def _problem_text(article: ProcessedArticle) -> str:

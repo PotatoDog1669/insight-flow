@@ -62,12 +62,12 @@ async def test_obsidian_rewrites_paper_digest_detail_links_to_obsidian_wikilinks
             "本期重点观察 GUI 奖励建模。\n\n"
             "## Training & Evaluation\n\n"
             "### 1. OS-Themis\n\n"
-            "![OS-Themis](https://example.com/os-themis.png)\n\n"
             "- 作者：Alice\n"
+            "- 机构：Example Lab\n"
+            "- 链接：[Abs](https://arxiv.org/abs/2603.19191)\n"
             "- 来源：arXiv\n"
-            "- 链接：[Abs](https://arxiv.org/abs/2603.19191)\n\n"
-            "**核心方法**\n\n"
-            "通过多智能体 critic 建模奖励。\n\n"
+            "\n![OS-Themis](https://example.com/os-themis.png)\n\n"
+            "- 核心方法：通过多智能体 critic 建模奖励。\n\n"
         ),
         metadata={
             "paper_mode": "digest",
@@ -85,6 +85,8 @@ async def test_obsidian_rewrites_paper_digest_detail_links_to_obsidian_wikilinks
     assert "date: 2026-03-19" in content
     assert "## Properties" not in content
     assert "- 详细笔记：" not in content
+    assert content.index("- 来源：arXiv") < content.index("![OS-Themis](https://example.com/os-themis.png)")
+    assert "- 核心方法：通过多智能体 critic 建模奖励。" in content
     assert "![OS-Themis](https://example.com/os-themis.png)" in content
 
 

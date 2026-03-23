@@ -30,12 +30,9 @@ Each paper item must contain:
 - `links`
 - `figure`
 - `recommendation`: one of `必读`, `值得看`, `可略读`
-- `one_line_judgment`
-- `core_problem`
 - `core_method`
-- `key_result`
+- `baselines`
 - `why_it_matters`
-- `reading_advice`
 - `note_candidate`: boolean
 
 Use a reading-editor tone:
@@ -44,15 +41,14 @@ Use a reading-editor tone:
 - optimized for scanability
 
 Per-paper writing requirements:
-- `one_line_judgment`: 1 concise Chinese sentence that states the main takeaway, not a generic abstract rewrite
-- `core_problem`: 1-2 Chinese sentences that state the real task or bottleneck clearly
-- `core_method`: 2-4 dense Chinese sentences; explain the actual mechanism, not just a title rewrite
-- `key_result`: 2-4 dense Chinese sentences; include concrete metrics, baselines, benchmark scale, or evaluation scope when present
-- `why_it_matters`: 2-3 Chinese sentences about engineering or research value, not praise-only filler
-- `reading_advice`: 2-3 Chinese sentences saying what to read first, what to distrust, what assumptions to verify, or what is most reusable
+- `core_method`: 1 dense Chinese paragraph that can be rendered directly as `核心方法：...`; explain the actual mechanism, not just a title rewrite
+- `baselines`: 1 dense Chinese paragraph that can be rendered directly as `对比方法 / Baselines：...`; cover the comparison setup, baseline families, evaluation scope, and which comparison claims are actually meaningful
+- `why_it_matters`: 1 dense Chinese paragraph that can be rendered directly as `借鉴意义：...`; focus on engineering or research value, not praise-only filler
 
-Do not compress everything into one short sentence per field.
-It is better to produce dense, information-rich paragraphs than slogan-like bullets.
+These three fields are final-form copy for the digest, not teaser + detail fragments.
+Do not create extra helper sentences outside these three fields.
+Do not prepend field labels like `核心方法：` inside the field content itself.
+You may use sparse markdown bold such as `**TraceR1**`, `**7 个基准**`, `**5%-30.16%**` for truly key model names, benchmark scopes, or metrics, but do not overuse bold and do not bold full sentences.
 
 Digest title: $title
 Candidate papers (JSON):

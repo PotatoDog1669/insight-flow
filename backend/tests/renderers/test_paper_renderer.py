@@ -101,10 +101,14 @@ async def test_paper_renderer_builds_digest_and_marks_note_candidates() -> None:
     assert "## 总结" in report.content
     assert report.content.count("## 总结") == 1
     assert "## Paper Picks" in report.content
-    assert "**核心方法**" in report.content
-    assert "**对比方法 / Baselines**" in report.content
-    assert "**借鉴意义**" in report.content
-    assert "**阅读建议**" in report.content
+    assert "- **核心方法**：" in report.content
+    assert "- **对比方法 / Baselines**：" in report.content
+    assert "- **借鉴意义**：" in report.content
+    assert "- **阅读建议**：" not in report.content
+    assert "\n**核心方法**\n" not in report.content
+    assert "\n**对比方法 / Baselines**\n" not in report.content
+    assert "\n**借鉴意义**\n" not in report.content
+    assert "\n**阅读建议**\n" not in report.content
 
     paper_note_links = metadata["paper_note_links"]
     assert len(paper_note_links) == 2
@@ -117,6 +121,8 @@ async def test_paper_renderer_builds_digest_and_marks_note_candidates() -> None:
     assert "paper_parent_link" not in metadata
     assert report.article_ids == ["paper-1", "paper-2", "paper-3"]
     assert "![MVISTA-4D](https://example.com/figure-1.png)" in report.content
+    assert "- 来源：" in report.content
+    assert report.content.index("- 来源：") < report.content.index("![MVISTA-4D](https://example.com/figure-1.png)")
     assert "- 核心图：" not in report.content
     assert "详细笔记" not in report.content
 
@@ -142,22 +148,19 @@ async def test_paper_renderer_prefers_review_payload_for_digest_structure() -> N
                 "paper_review_payload": {
                     "digest_title": "GUI 智能体的评测、安全与长程记忆",
                     "digest_summary": "本期重点不只是新论文数量，而是方法接口开始明显收敛。",
-                    "papers": [
-                        {
-                            "paper_identity": "2603.12345",
-                            "paper_slug": "world-model-policy",
-                    "title": "World Model Policy",
-                    "authors": ["Alice"],
-                    "affiliations": ["Example Lab"],
-                    "links": ["https://arxiv.org/abs/2603.12345"],
-                    "topic_label": "World Model",
-                    "recommendation": "必读",
-                    "one_line_judgment": "这篇工作终于把方法边界说清楚了。",
-                    "core_problem": "现有方法接口割裂。",
-                            "core_method": "统一 world model 与 policy 表达。",
-                            "key_result": "多任务上超过 baseline。",
-                            "why_it_matters": "更接近可复用框架。",
-                            "reading_advice": "先看方法定义再看实验。",
+                "papers": [
+                    {
+                        "paper_identity": "2603.12345",
+                        "paper_slug": "world-model-policy",
+                            "title": "World Model Policy",
+                            "authors": ["Alice"],
+                            "affiliations": ["Example Lab"],
+                            "links": ["https://arxiv.org/abs/2603.12345"],
+                            "topic_label": "World Model",
+                            "recommendation": "必读",
+                            "core_method": "统一 world model 与 policy 表达，把训练接口和规划接口放在同一个 latent 空间里。",
+                            "baselines": "对比覆盖 Dreamer 类与 planning-heavy 路线，重点看统一表达是否在多任务上减少了额外规划成本。",
+                            "why_it_matters": "这让 world model 不再只是分析工具，而更接近可复用的控制框架。",
                             "note_candidate": True,
                         }
                     ],
@@ -175,9 +178,13 @@ async def test_paper_renderer_prefers_review_payload_for_digest_structure() -> N
     assert "## 今日锐评" not in report.content
     assert "## World Model" in report.content
     assert "- 详细笔记：" not in report.content
-    assert "**核心方法**" in report.content
+    assert "- **核心方法**：" in report.content
+    assert "- **对比方法 / Baselines**：" in report.content
+    assert "- **借鉴意义**：" in report.content
+    assert "- **阅读建议**：" not in report.content
+    assert "\n**核心方法**\n" not in report.content
     assert "**锐评**" not in report.content
-    assert "**阅读建议**" in report.content
+    assert "\n**阅读建议**\n" not in report.content
     assert metadata["selected_paper_identities"] == ["2603.12345"]
     assert metadata["paper_recommendations"] == [{"paper_identity": "2603.12345", "recommendation": "必读"}]
 
@@ -289,10 +296,10 @@ async def test_paper_renderer_cleans_blockquote_style_digest_fields() -> None:
 
     report = await renderer.render([article], RenderContext(date="2026-03-20"))
 
-    assert "核心方法：> " not in report.content
-    assert "**核心方法**" in report.content
+    assert "- **核心方法**：> " not in report.content
+    assert "- **核心方法**：" in report.content
     assert "OS-Themis 通过多智能体评审与里程碑分解，提升 GUI 奖励建模质量。" in report.content
-    assert "**对比方法 / Baselines**" in report.content
+    assert "- **对比方法 / Baselines**：" in report.content
     assert "AndroidWorld 在线 RL 提升 10.3%" in report.content
 
 

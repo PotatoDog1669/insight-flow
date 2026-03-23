@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from app.template_engine.renderer import render_report_template, render_sink_report_template
 
 
@@ -27,19 +25,15 @@ def test_render_paper_digest_template() -> None:
                             "title": "MVISTA-4D",
                             "authors": "Jiaxu Wang et al.",
                             "affiliations": "The Chinese University of Hong Kong",
-                            "figure": "https://example.com/figure.png",
-                            "one_line_judgment": "值得优先精读的 world model 工作。",
-                            "core_problem": "这篇先把多视角时空建模里最难的对齐问题讲清楚了。",
-                            "core_method": "方法概述",
-                            "key_result": "关键结果",
-                            "why_it_matters": "为什么重要",
-                            "reading_advice": "建议先看问题设定，再看实验里的泛化边界。",
-                            "recommendation": "必读",
+                            "core_method": "输入单视角 RGBD，输出多视角一致的未来 RGBD 预测与可执行动作，用跨视角与跨模态融合把几何一致性直接写进 world model。",
+                            "baselines": "对比对象覆盖现有 video diffusion 与 manipulation world model 路线，重点看它是否真的在多视角一致性而不是单视角预测上建立优势。",
+                            "why_it_matters": "这类工作对 world model to manipulation 很关键，因为它把预测对象从 2D 视频推进到带几何约束的 4D 表达，更接近真实机器人控制需求。",
                             "source_label": "arXiv",
                             "links": [
                                 {"label": "Abs", "url": "https://arxiv.org/abs/2603.12345"},
                                 {"label": "HTML", "url": "https://arxiv.org/html/2603.12345"},
                             ],
+                            "figure": "https://example.com/figure.png",
                         }
                     ],
                 }
@@ -64,18 +58,22 @@ def test_render_paper_digest_template() -> None:
     assert "- 详细笔记：" not in content
     assert "- 推荐级别：" not in content
     assert "- 作者：Jiaxu Wang et al." in content
+    assert "- 机构：The Chinese University of Hong Kong" in content
+    assert "- 链接：[Abs](https://arxiv.org/abs/2603.12345) / [HTML](https://arxiv.org/html/2603.12345)" in content
     assert "- 来源：arXiv" in content
-    assert re.search(r"- 链接：\[Abs\]\(https://arxiv\.org/abs/2603\.12345\) / \[HTML\]\(https://arxiv\.org/html/2603\.12345\)", content)
-    assert "**核心方法**" in content
-    assert "这篇先把多视角时空建模里最难的对齐问题讲清楚了。" in content
-    assert "方法概述" in content
-    assert "**对比方法 / Baselines**" in content
-    assert "关键结果" in content
-    assert "**借鉴意义**" in content
-    assert "为什么重要" in content
-    assert "**阅读建议**" in content
-    assert "值得优先精读的 world model 工作。" in content
-    assert "建议先看问题设定，再看实验里的泛化边界。" in content
+    assert content.index("- 来源：arXiv") < content.index("![MVISTA-4D](https://example.com/figure.png)")
+    assert content.index("![MVISTA-4D](https://example.com/figure.png)") < content.index("- **核心方法**：")
+    assert "- **核心方法**：" in content
+    assert "输入单视角 RGBD，输出多视角一致的未来 RGBD 预测与可执行动作" in content
+    assert "- **对比方法 / Baselines**：" in content
+    assert "对比对象覆盖现有 video diffusion 与 manipulation world model 路线" in content
+    assert "- **借鉴意义**：" in content
+    assert "这类工作对 world model to manipulation 很关键" in content
+    assert "- **阅读建议**：" not in content
+    assert "\n**核心方法**\n" not in content
+    assert "\n**对比方法 / Baselines**\n" not in content
+    assert "\n**借鉴意义**\n" not in content
+    assert "\n**阅读建议**\n" not in content
 
 
 def test_render_paper_digest_template_falls_back_to_date_title() -> None:
